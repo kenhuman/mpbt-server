@@ -1,0 +1,69 @@
+name: Research Finding
+description: Document a reverse engineering finding or protocol discovery.
+labels: ["type: research", "status: needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template to record findings from Ghidra, packet captures, or behavioral analysis.
+        Follow the canonical naming convention in `symbols.json`: `Module_VerbNoun` for functions,
+        `g_module_description` for data globals.
+
+  - type: dropdown
+    id: module
+    attributes:
+      label: Module
+      options:
+        - MPBTWIN.EXE
+        - COMMEG32.DLL
+        - INITAR.DLL
+        - WAIL32.DLL
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: address
+    attributes:
+      label: Binary Address
+      placeholder: "e.g. FUN_00402e30 or DAT_00470198"
+
+  - type: input
+    id: canonical_name
+    attributes:
+      label: Proposed Canonical Name
+      placeholder: "e.g. Frame_VerifyCRC or g_lobby_DispatchTable"
+
+  - type: textarea
+    id: finding
+    attributes:
+      label: Finding
+      description: Describe what you found and how it works.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Ghidra decompilation, packet captures, behavioral observations, etc.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: confidence
+    attributes:
+      label: Confidence Level
+      options:
+        - "Confirmed — verified against live traffic"
+        - "High — consistent with all observations"
+        - "Medium — plausible, needs more verification"
+        - "Low — speculative"
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact / Next Steps
+      description: How does this affect the server implementation or RESEARCH.md?

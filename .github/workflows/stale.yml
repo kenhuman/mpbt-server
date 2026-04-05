@@ -1,0 +1,39 @@
+name: Mark Stale Issues and PRs
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # Every Monday at 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          stale-issue-message: >
+            This issue has been open for 90 days with no activity.
+            It will be closed in 14 days unless there is further activity.
+            If this is still relevant, please comment or remove the `status: stale` label.
+          close-issue-message: >
+            Closed due to inactivity. If still relevant, please open a new issue using the
+            appropriate template.
+          stale-pr-message: >
+            This PR has been open for 30 days with no activity.
+            It will be closed in 7 days unless there is further activity.
+          close-pr-message: >
+            Closed due to inactivity. Please reopen or submit a new PR if you'd like to continue.
+          stale-issue-label: 'status: stale'
+          close-issue-label: 'status: stale'
+          exempt-issue-labels: 'status: accepted,status: in-progress,status: blocked'
+          stale-pr-label: 'status: stale'
+          close-pr-label: 'status: stale'
+          exempt-pr-labels: 'status: in-progress'
+          days-before-issue-stale: 90
+          days-before-issue-close: 14
+          days-before-pr-stale: 30
+          days-before-pr-close: 7

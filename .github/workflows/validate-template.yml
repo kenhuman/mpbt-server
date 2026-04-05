@@ -1,0 +1,124 @@
+name: Validate Template
+
+on:
+  issues:
+    types: [opened]
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  # ── Issues ────────────────────────────────────────────────────────────────
+  validate-issue:
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.issue.body ?? '';
+            const num  = context.payload.issue.number;
+
+            // All four templates require multiple "### Heading" sections.
+            // A bare/blank issue won't have these.
+            const hasStructure = /###\s+\S/.test(body);
+            const hasContent   = body.trim().length >= 100;
+
+            if (hasStructure && hasContent) return;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: num,
+              body: [
+                '## Issue Closed — Template Not Followed',
+                '',
+                'Thank you for opening an issue! This one has been closed because it does not use one of the required templates.',
+                '',
+                '**Please resubmit using one of the available templates:**',
+                '- ��� **Bug Report** — something broken or behaving unexpectedly',
+                '- ✨ **Feature Request** — a new feature or enhancement',
+                '- ��� **Research Finding** — a reverse engineering discovery',
+                '- ��� **Documentation** — missing or incorrect documentation',
+                '',
+                `Open a new issue: https://github.com/${context.repo.owner}/${context.repo.repo}/issues/new/choose`,
+                '',
+                'If you believe this was closed in error, please comment and a maintainer will review.',
+              ].join('\n'),
+            });
+
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: num,
+              state: 'closed',
+              state_reason: 'not_planned',
+            });
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: num,
+              labels: ['status: needs-template'],
+            });
+
+  # ── Pull Requests ──────────────────────────────────────────────────────────
+  # Uses pull_request_target so GITHUB_TOKEN has write access even for fork PRs.
+  # IMPORTANT: never check out PR code in this job — only the event payload is used.
+  validate-pr:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.pull_request.body ?? '';
+            const num  = context.payload.pull_request.number;
+
+            const hasIssueRef  = /closes?\s+#\d+|fixes?\s+#\d+|resolves?\s+#\d+/i.test(body);
+            const hasChecklist = /- \[[ x]\]/.test(body);
+            const hasContent   = body.trim().length >= 100;
+
+            if (hasIssueRef && hasChecklist && hasContent) return;
+
+            const missing = [];
+            if (!hasIssueRef)  missing.push('a **Related Issue** link (`Closes #N`)');
+            if (!hasChecklist) missing.push('the **Checklist** section');
+            if (!hasContent)   missing.push('sufficient description (at least 100 characters)');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: num,
+              body: [
+                '## PR Closed — Template Not Followed',
+                '',
+                'This pull request has been closed because it is missing:',
+                '',
+                ...missing.map(m => `- ${m}`),
+                '',
+                'All PRs must use the [PR template](' +
+                  `https://github.com/${context.repo.owner}/${context.repo.repo}` +
+                  '/blob/main/.github/PULL_REQUEST_TEMPLATE.md).',
+                'Please open a new PR with the template filled out completely.',
+                '',
+                'If you believe this was closed in error, please comment and a maintainer will review.',
+              ].join('\n'),
+            });
+
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              pull_number: num,
+              state: 'closed',
+            });
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: num,
+              labels: ['status: needs-template'],
+            });

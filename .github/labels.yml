@@ -1,0 +1,91 @@
+# ── Type ──────────────────────────────────────────────────────────────────────
+- name: "type: bug"
+  color: "d73a4a"
+  description: "Something isn't working"
+
+- name: "type: feature"
+  color: "a2eeef"
+  description: "New feature or enhancement"
+
+- name: "type: research"
+  color: "7057ff"
+  description: "Reverse engineering finding or protocol work"
+
+- name: "type: docs"
+  color: "0075ca"
+  description: "Documentation improvement"
+
+- name: "type: chore"
+  color: "e4e669"
+  description: "Maintenance, dependencies, CI"
+
+# ── Priority ──────────────────────────────────────────────────────────────────
+- name: "priority: critical"
+  color: "b60205"
+  description: "Crash, data loss, or blocking other work"
+
+- name: "priority: high"
+  color: "e11d48"
+  description: "Major functionality broken"
+
+- name: "priority: medium"
+  color: "f97316"
+  description: "Impaired but workaround exists"
+
+- name: "priority: low"
+  color: "fbbf24"
+  description: "Minor or cosmetic"
+
+# ── Status ────────────────────────────────────────────────────────────────────
+- name: "status: needs-triage"
+  color: "ededed"
+  description: "Awaiting triage"
+
+- name: "status: accepted"
+  color: "0e8a16"
+  description: "Confirmed valid; added to backlog"
+
+- name: "status: in-progress"
+  color: "1d76db"
+  description: "Being actively worked on"
+
+- name: "status: blocked"
+  color: "e11d48"
+  description: "Blocked by another issue or external dependency"
+
+- name: "status: needs-info"
+  color: "d4c5f9"
+  description: "Waiting on more information from the reporter"
+
+- name: "status: wont-fix"
+  color: "ffffff"
+  description: "This will not be worked on"
+
+- name: "status: stale"
+  color: "cccccc"
+  description: "No activity for an extended period"
+
+- name: "status: needs-template"
+  color: "f9d0c4"
+  description: "Closed — did not follow the issue or PR template"
+
+# ── Size (PRs) ────────────────────────────────────────────────────────────────
+- name: "size: xs"
+  color: "3cbf00"
+  description: "Diff <= 9 lines"
+
+- name: "size: s"
+  color: "5d9801"
+  description: "Diff 10-49 lines"
+
+- name: "size: m"
+  color: "7f7203"
+  description: "Diff 50-149 lines"
+
+- name: "size: l"
+  color: "a04c04"
+  description: "Diff 150-299 lines"
+
+- name: "size: xl"
+  color: "c12605"
+  description: "Diff 300+ lines"

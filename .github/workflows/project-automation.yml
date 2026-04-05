@@ -1,0 +1,53 @@
+name: Add Accepted Issues to Project
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  add-to-backlog:
+    # Fires only when the 'status: accepted' label is applied.
+    # Requires:
+    #   - PROJECT_PAT secret: classic PAT with 'project' scope
+    #   - PROJECT_NUMBER variable: the number from the project's URL
+    if: |
+      github.event.label.name == 'status: accepted' &&
+      vars.PROJECT_NUMBER != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECT_PAT }}
+          script: |
+            const owner         = context.repo.owner;
+            const projectNumber = parseInt(process.env.PROJECT_NUMBER, 10);
+
+            // Resolve the project node ID
+            const projectData = await github.graphql(
+              `query($owner: String!, $number: Int!) {
+                 user(login: $owner) {
+                   projectV2(number: $number) { id }
+                 }
+               }`,
+              { owner, number: projectNumber }
+            );
+
+            const projectId = projectData.user.projectV2.id;
+
+            // Add the issue — lands in the project's default view
+            const result = await github.graphql(
+              `mutation($projectId: ID!, $contentId: ID!) {
+                 addProjectV2ItemById(input: {
+                   projectId: $projectId
+                   contentId: $contentId
+                 }) { item { id } }
+               }`,
+              { projectId, contentId: context.payload.issue.node_id }
+            );
+
+            core.info(
+              `Issue #${context.payload.issue.number} added to project ${projectNumber} ` +
+              `(item ${result.addProjectV2ItemById.item.id})`
+            );
+        env:
+          PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
