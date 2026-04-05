@@ -1,0 +1,69 @@
+name: Test Plan
+description: A structured manual or automated test pass to verify milestone completeness.
+labels: ["type: testing", "status: needs-triage"]
+body:
+  - type: input
+    id: milestone
+    attributes:
+      label: Milestone / Scope
+      description: Which milestone or feature set does this test plan cover?
+      placeholder: "e.g. M1 — Lobby Completeness"
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment Setup
+      description: Steps required to prepare the test environment before running cases.
+      placeholder: |
+        1. Copy mechdata/ (161 .MEC files) to mpbt-server/
+        2. Copy MPBT.MSG to mpbt-server/
+        3. `npm run build`
+        4. `node dist/server.js`
+        5. Run `npm run gen-pcgi`, then launch MPBTWIN.EXE via MPBT.bat
+    validations:
+      required: true
+
+  - type: textarea
+    id: test_cases
+    attributes:
+      label: Test Cases
+      description: |
+        One checkbox per test case. Format each line as:
+        `- [ ] **T#** — description: expected result`
+      placeholder: |
+        - [ ] **T1** — Server loads correctly: log shows "Loaded 161 mechs"
+        - [ ] **T2** — Auth handshake: mech selection window renders
+    validations:
+      required: true
+
+  - type: textarea
+    id: skipped
+    attributes:
+      label: Known Skipped / Out-of-Scope Tests
+      description: List any tests that are intentionally skipped and why (link issues where applicable).
+      placeholder: |
+        - **T7b** Cmd 20 examine stats (X key) — server noop, tracked in #3 and #4
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - "Low — nice to have"
+        - "Medium — would meaningfully improve the project"
+        - "High — important for core functionality"
+        - "Critical — blocking other work"
+    validations:
+      required: true
+
+  - type: textarea
+    id: results
+    attributes:
+      label: Test Results
+      description: Fill this in after running the tests. Leave blank when opening.
+      placeholder: |
+        | # | Test | Result | Notes |
+        |---|------|--------|-------|
+        | T1 | Server loads | PASS | |
