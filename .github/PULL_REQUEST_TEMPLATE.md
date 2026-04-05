@@ -27,7 +27,7 @@ Closes #<!-- issue number — every PR must link to an open issue -->
 
 ## Checklist
 
-- [ ] Branch is based on `main`
+- [ ] Branch is based on `master`
 - [ ] Commit messages follow `type: description` convention (e.g. `fix: correct CRC seed`)
 - [ ] TypeScript builds cleanly (`npm run build`)
 - [ ] No debug `console.log` left in production code paths

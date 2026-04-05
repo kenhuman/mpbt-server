@@ -7,10 +7,10 @@ All code changes go through a **branch → pull request → merge** workflow, re
 ## Workflow Overview
 
 1. **Find or open an issue** — every PR must link to an open issue.
-2. **Create a branch** off `main` using the naming convention below.
+2. **Create a branch** off `master` using the naming convention below.
 3. **Implement, test, build** — `npm run build` must pass with zero errors.
 4. **Open a PR** — fill out the PR template completely.
-5. **Review and merge** — address any feedback; squash-merge into `main`.
+5. **Review and merge** — address any feedback; squash-merge into `master`.
 
 ---
 
@@ -94,7 +94,7 @@ chore: upgrade typescript to 5.5
 
 Every PR must:
 - Link to an open issue with `Closes #N`
-- Be based on `main` (not `master` — rename with `git branch -m master main` locally)
+- Be based on `master`
 - Fill the PR template out completely — PRs that don't are automatically closed
 - Pass `npm run build` with zero errors (enforced by CI)
 
@@ -109,7 +109,7 @@ These steps are required once to activate the full automation.
 
 ### 1. Sync Labels
 
-After the first push to `main`, go to **Actions → Sync Labels → Run workflow**.
+After the first push to `master`, go to **Actions → Sync Labels → Run workflow**.
 
 This creates all 20 labels (`type:`, `priority:`, `status:`, `size:`) in the repo.
 **Run this before any other workflows need to apply labels.**
@@ -131,11 +131,13 @@ In **Settings → Secrets and variables → Actions**:
 | Variable | `PROJECT_NUMBER` | The number `N` from the project URL |
 | Secret | `PROJECT_PAT` | A classic PAT with **`project`** scope<br>(Settings → Developer settings → Personal access tokens → Tokens (classic)) |
 
-### 4. Enable Branch Protection for `main`
+### 4. Enable Branch Protection for `master`
 
-In **Settings → Branches → Add rule** (branch name pattern: `main`):
+In **Settings → Branches → Add rule** (branch name pattern: `master`):
 
 - ✅ Require a pull request before merging
 - ✅ Require status checks to pass before merging
   - Search for and add **`TypeScript build`** (appears after CI has run once)
 - ✅ Require branches to be up to date before merging
+
+> **Note:** The default branch is `master`.

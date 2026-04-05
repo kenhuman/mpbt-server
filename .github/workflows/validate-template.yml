@@ -39,10 +39,10 @@ jobs:
                 'Thank you for opening an issue! This one has been closed because it does not use one of the required templates.',
                 '',
                 '**Please resubmit using one of the available templates:**',
-                '- Ì∞õ **Bug Report** ‚Äî something broken or behaving unexpectedly',
+                '- ÔøΩÔøΩÔøΩ **Bug Report** ‚Äî something broken or behaving unexpectedly',
                 '- ‚ú® **Feature Request** ‚Äî a new feature or enhancement',
-                '- Ì¥¨ **Research Finding** ‚Äî a reverse engineering discovery',
-                '- Ì≥ù **Documentation** ‚Äî missing or incorrect documentation',
+                '- ÔøΩÔøΩÔøΩ **Research Finding** ‚Äî a reverse engineering discovery',
+                '- ÔøΩÔøΩÔøΩ **Documentation** ‚Äî missing or incorrect documentation',
                 '',
                 `Open a new issue: https://github.com/${context.repo.owner}/${context.repo.repo}/issues/new/choose`,
                 '',
@@ -102,7 +102,7 @@ jobs:
                 '',
                 'All PRs must use the [PR template](' +
                   `https://github.com/${context.repo.owner}/${context.repo.repo}` +
-                  '/blob/main/.github/PULL_REQUEST_TEMPLATE.md).',
+                  '/blob/master/.github/PULL_REQUEST_TEMPLATE.md).',
                 'Please open a new PR with the template filled out completely.',
                 '',
                 'If you believe this was closed in error, please comment and a maintainer will review.',
