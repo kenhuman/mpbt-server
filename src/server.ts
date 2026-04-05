@@ -271,8 +271,15 @@ function handleGameData(
   if (cmdIdx === 3 && !session.mechListSent) {
     // cmd 3 = client-ready (FUN_0040d3c0): send mech list exactly once.
     // FUN_0043A370 reads it → FUN_00439f70 creates the mech-selection window.
-    connLog.info('[game] client-ready → sending MECH LIST (cmd 26) — %d mechs', MECHS.length);
-    const mechPkt = buildMechListPacket(MECHS, 0, '', nextSeq(session));
+    //
+    // The client stores mech entries in fixed-size static arrays. Confirmed that
+    // the real server sent a player's owned mechs (1–3 typically). Limit to 3
+    // until the array bounds are RE'd and paging is implemented (issue #TBD).
+    // TODO: load player-specific mech assignments rather than the global catalog.
+    const MECH_SEND_LIMIT = 3;
+    const mechsToSend = MECHS.slice(0, MECH_SEND_LIMIT);
+    connLog.info('[game] client-ready → sending MECH LIST (cmd 26) — %d mechs (capped at %d)', mechsToSend.length, MECH_SEND_LIMIT);
+    const mechPkt = buildMechListPacket(mechsToSend, 0, '', nextSeq(session));
     send(session.socket, mechPkt, capture, 'MECH_LIST');
     session.mechListSent = true;
 

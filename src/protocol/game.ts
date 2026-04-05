@@ -139,7 +139,9 @@ export function buildGamePacket(cmdIndex: number, args: Buffer, combat = false, 
 //
 // Wire layout (after the command byte 0x3B):
 //   [2 bytes: type_flag via FUN_00402b10(1) = encodeB85_1]
-//   [2 bytes: count   via FUN_00402b10(1) = encodeB85_1]   ← NOT 1-byte encodeAsByte
+//   [1 byte:  count    via FUN_00402f40    = encodeAsByte]  CONFIRMED by capture analysis:
+//              the working 1-mech session sent 0x22 here (count=1); b85_1 would have given
+//              count=85 and produced garbage — encodeAsByte is definitively correct.
 //   Per mech (repeat count times):
 //     [3 bytes: mech_id via FUN_00402b10(2) = encodeB85_2]
 //     [1 byte:  type via FUN_00402f40]
@@ -174,7 +176,7 @@ export function buildMechListArgs(
 ): Buffer {
   const parts: Buffer[] = [
     encodeB85_1(typeFlag),          // 2 bytes: type_flag
-    encodeB85_1(mechs.length),      // 2 bytes: count (b85_1 confirmed — encodeAsByte overflows at 95+)
+    encodeAsByte(mechs.length),     // 1 byte:  count (FUN_00402f40 confirmed by capture)
   ];
 
   for (const m of mechs) {
