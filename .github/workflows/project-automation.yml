@@ -2,7 +2,7 @@ name: Add Accepted Issues to Project
 
 on:
   issues:
-    types: [labeled, closed]
+    types: [labeled, unlabeled, closed]
 
 jobs:
   add-to-backlog:
@@ -131,5 +131,176 @@ jobs:
             );
 
             core.info(`Issue #${context.payload.issue.number} → Done`);
+        env:
+          PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
+
+  move-to-blocked:
+    # When 'status: blocked' is added to an issue whose project card is in
+    # Ready or In progress, transition it to Blocked.
+    if: |
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'status: blocked' &&
+      vars.PROJECT_NUMBER != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECT_PAT }}
+          script: |
+            const projectNumber = parseInt(process.env.PROJECT_NUMBER, 10);
+            const issueNodeId   = context.payload.issue.node_id;
+
+            const data = await github.graphql(
+              `query($issueId: ID!) {
+                 node(id: $issueId) {
+                   ... on Issue {
+                     projectItems(first: 10) {
+                       nodes {
+                         id
+                         project { id number }
+                         fieldValueByName(name: "Status") {
+                           ... on ProjectV2ItemFieldSingleSelectValue {
+                             name
+                             field {
+                               ... on ProjectV2SingleSelectField {
+                                 id
+                                 options { id name }
+                               }
+                             }
+                           }
+                         }
+                       }
+                     }
+                   }
+                 }
+               }`,
+              { issueId: issueNodeId }
+            );
+
+            const item = data.node.projectItems.nodes
+              .find(n => n.project.number === projectNumber);
+            if (!item) {
+              core.info(`Issue #${context.payload.issue.number} not in project — skipping`);
+              return;
+            }
+
+            const currentStatus = item.fieldValueByName?.name;
+            const moveable = ['Ready', 'In progress'];
+            if (!moveable.includes(currentStatus)) {
+              core.info(`Status is '${currentStatus}' — no move needed`);
+              return;
+            }
+
+            const field = item.fieldValueByName.field;
+            const blockedOption = field.options.find(o => o.name === 'Blocked');
+            if (!blockedOption) {
+              core.warning('No "Blocked" status option found in project');
+              return;
+            }
+
+            await github.graphql(
+              `mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                 updateProjectV2ItemFieldValue(input: {
+                   projectId: $projectId
+                   itemId: $itemId
+                   fieldId: $fieldId
+                   value: { singleSelectOptionId: $optionId }
+                 }) { projectV2Item { id } }
+               }`,
+              {
+                projectId: item.project.id,
+                itemId:    item.id,
+                fieldId:   field.id,
+                optionId:  blockedOption.id,
+              }
+            );
+
+            core.info(
+              `Issue #${context.payload.issue.number}: '${currentStatus}' → 'Blocked'`
+            );
+        env:
+          PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
+
+  move-to-ready:
+    # When 'status: blocked' is removed from an issue whose project card is
+    # Blocked, transition it back to Ready.
+    if: |
+      github.event.action == 'unlabeled' &&
+      github.event.label.name == 'status: blocked' &&
+      vars.PROJECT_NUMBER != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECT_PAT }}
+          script: |
+            const projectNumber = parseInt(process.env.PROJECT_NUMBER, 10);
+            const issueNodeId   = context.payload.issue.node_id;
+
+            const data = await github.graphql(
+              `query($issueId: ID!) {
+                 node(id: $issueId) {
+                   ... on Issue {
+                     projectItems(first: 10) {
+                       nodes {
+                         id
+                         project { id number }
+                         fieldValueByName(name: "Status") {
+                           ... on ProjectV2ItemFieldSingleSelectValue {
+                             name
+                             field {
+                               ... on ProjectV2SingleSelectField {
+                                 id
+                                 options { id name }
+                               }
+                             }
+                           }
+                         }
+                       }
+                     }
+                   }
+                 }
+               }`,
+              { issueId: issueNodeId }
+            );
+
+            const item = data.node.projectItems.nodes
+              .find(n => n.project.number === projectNumber);
+            if (!item) {
+              core.info(`Issue #${context.payload.issue.number} not in project — skipping`);
+              return;
+            }
+
+            const currentStatus = item.fieldValueByName?.name;
+            if (currentStatus !== 'Blocked') {
+              core.info(`Status is '${currentStatus}' — no move needed`);
+              return;
+            }
+
+            const field = item.fieldValueByName.field;
+            const readyOption = field.options.find(o => o.name === 'Ready');
+            if (!readyOption) {
+              core.warning('No "Ready" status option found in project');
+              return;
+            }
+
+            await github.graphql(
+              `mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                 updateProjectV2ItemFieldValue(input: {
+                   projectId: $projectId
+                   itemId: $itemId
+                   fieldId: $fieldId
+                   value: { singleSelectOptionId: $optionId }
+                 }) { projectV2Item { id } }
+               }`,
+              {
+                projectId: item.project.id,
+                itemId:    item.id,
+                fieldId:   field.id,
+                optionId:  readyOption.id,
+              }
+            );
+
+            core.info(`Issue #${context.payload.issue.number}: 'Blocked' → 'Ready'`);
         env:
           PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
