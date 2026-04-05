@@ -53,10 +53,12 @@ export class Logger {
   error(fmt: string, ...args: unknown[]): void { this.write('error', fmt, ...args); }
 
   child(subPrefix: string): Logger {
-    return new Logger(
+    const c = new Logger(
       this.prefix ? `${this.prefix}:${subPrefix}` : subPrefix,
       this.minLevel,
     );
+    c.stream = this.stream; // share the parent's write stream
+    return c;
   }
 
   close(): void {

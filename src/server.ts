@@ -220,6 +220,7 @@ const CONFIRM_DIALOG_ID = 2;
 // See src/data/mechs.ts — no names are hardcoded; the client resolves chassis
 // display names internally via MechWin_LookupMechName (FUN_00438280).
 const MECHS: MechEntry[] = loadMechs();
+log.info('Loaded %d mechs from mechdata/', MECHS.length);
 
 /**
  * Advance and return the server's outgoing sequence number.
@@ -329,6 +330,16 @@ function handleGameData(
 }
 
 // ── Server startup ────────────────────────────────────────────────────────────
+
+// Capture unhandled exceptions so they appear in logs/server.log.
+process.on('uncaughtException', (err: Error) => {
+  log.error('Uncaught exception: %s\n%s', err.message, err.stack ?? '');
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason: unknown) => {
+  log.error('Unhandled rejection: %s', String(reason));
+  process.exit(1);
+});
 
 const server = net.createServer(handleConnection);
 
