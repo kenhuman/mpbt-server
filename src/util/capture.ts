@@ -2,7 +2,7 @@
  * Packet capture logger.
  *
  * Every raw packet received from a client is written to:
- *   captures/<session-id>_<timestamp>.txt
+ *   captures/<timestamp>_<session-id>.txt
  *
  * Format per entry:
  *   === RECV offset=<N> len=<N> time=<ISO> ===
@@ -26,7 +26,7 @@ export class CaptureLogger {
 
   constructor(sessionId: string) {
     fs.mkdirSync(CAPTURE_DIR, { recursive: true });
-    const filename = `${sessionId}_${Date.now()}.txt`;
+    const filename = `${Date.now()}_${sessionId}.txt`;
     this.stream = fs.createWriteStream(path.join(CAPTURE_DIR, filename), {
       flags: 'w',
       encoding: 'utf8',
