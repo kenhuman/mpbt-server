@@ -24,6 +24,7 @@ import { ARIES_PORT, Msg } from './protocol/constants.js';
 import { PacketParser, buildPacket, hexDump } from './protocol/aries.js';
 import { parseLoginPayload, buildLoginRequest, buildSyncAck, buildWelcomePacket } from './protocol/auth.js';
 import { buildMechListPacket, buildMenuDialogPacket, buildRedirectPacket, parseClientCmd7, type MechEntry } from './protocol/game.js';
+import { loadMechs } from './data/mechs.js';
 import { PlayerRegistry, ClientSession } from './state/players.js';
 import { Logger } from './util/logger.js';
 import { CaptureLogger } from './util/capture.js';
@@ -215,16 +216,10 @@ function handleLogin(
 const CONFIRM_DIALOG_ID = 2;
 
 // Sample mech roster — one Shadowhawk entry so the UI has something to show.
-const SAMPLE_MECHS: MechEntry[] = [
-  {
-    id:         1,
-    mechType:   0,
-    slot:       0,
-    typeString: 'SHD-2H',
-    variant:    'Shadowhawk',
-    name:       '',   // empty → looked up by FUN_00438280
-  },
-];
+// Mech roster loaded from mechdata/*.MEC at startup.
+// See src/data/mechs.ts — no names are hardcoded; the client resolves chassis
+// display names internally via MechWin_LookupMechName (FUN_00438280).
+const MECHS: MechEntry[] = loadMechs();
 
 /**
  * Advance and return the server's outgoing sequence number.
@@ -275,8 +270,8 @@ function handleGameData(
   if (cmdIdx === 3 && !session.mechListSent) {
     // cmd 3 = client-ready (FUN_0040d3c0): send mech list exactly once.
     // FUN_0043A370 reads it → FUN_00439f70 creates the mech-selection window.
-    connLog.info('[game] client-ready → sending MECH LIST (cmd 26) — %d mechs', SAMPLE_MECHS.length);
-    const mechPkt = buildMechListPacket(SAMPLE_MECHS, 0, '', nextSeq(session));
+    connLog.info('[game] client-ready → sending MECH LIST (cmd 26) — %d mechs', MECHS.length);
+    const mechPkt = buildMechListPacket(MECHS, 0, '', nextSeq(session));
     send(session.socket, mechPkt, capture, 'MECH_LIST');
     session.mechListSent = true;
 
