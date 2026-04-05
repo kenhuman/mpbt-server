@@ -20,6 +20,25 @@ This project reverse-engineers the **ARIES** binary protocol used by `MPBTWIN.EX
 
 The client reaches the mech selection screen, allows browsing, and displays a confirmation dialog before issuing a REDIRECT. That's further than any known prior public attempt.
 
+## Game Data
+
+The server reads mech definitions from `mechdata/*.MEC` files at startup.
+**These files are not included in this repository** — they are proprietary assets
+of Kesmai Corporation / Electronic Arts and must not be redistributed.
+
+To run the server, copy the `mechdata/` directory from your own licensed copy of
+**Multiplayer BattleTech: Solaris** into the project root:
+
+```
+mpbt-server/
+  mechdata/
+    ANH-1A.MEC
+    ARC-2K.MEC
+    ... (161 files total)
+```
+
+---
+
 ## Background
 
 MPBT ran on Kesmai's proprietary **ARIES** engine — the same engine that powered Air Warrior and Legends of Kesmai. The client (`MPBTWIN.EXE`) and its companion DLLs (`COMMEG32.DLL`, `INITAR.DLL`) have been extensively analyzed with Ghidra to reconstruct the wire protocol from scratch.
