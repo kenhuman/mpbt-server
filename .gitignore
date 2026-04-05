@@ -12,6 +12,7 @@ play.pcgi
 # Game data — must be copied from an original MPBT installation.
 # These files are proprietary to Kesmai/EA and must NOT be distributed.
 mechdata/
+MPBT.MSG
 
 # environment / secrets
 .env

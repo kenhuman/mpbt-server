@@ -22,11 +22,11 @@ The client reaches the mech selection screen, allows browsing, and displays a co
 
 ## Game Data
 
-The server reads mech definitions from `mechdata/*.MEC` files at startup.
+The server reads mech definitions from `mechdata/*.MEC` files and `MPBT.MSG` at startup.
 **These files are not included in this repository** — they are proprietary assets
 of Kesmai Corporation / Electronic Arts and must not be redistributed.
 
-To run the server, copy the `mechdata/` directory from your own licensed copy of
+To run the server, copy the following from your own licensed copy of
 **Multiplayer BattleTech: Solaris** into the project root:
 
 ```
@@ -35,7 +35,11 @@ mpbt-server/
     ANH-1A.MEC
     ARC-2K.MEC
     ... (161 files total)
+  MPBT.MSG
 ```
+
+`MPBT.MSG` is the game's string table and is used to resolve the correct mech ID
+indices that the client expects in the cmd 26 mech list packet.
 
 ---
 
