@@ -139,7 +139,7 @@ export function buildGamePacket(cmdIndex: number, args: Buffer, combat = false, 
 //
 // Wire layout (after the command byte 0x3B):
 //   [2 bytes: type_flag via FUN_00402b10(1) = encodeB85_1]
-//   [1 byte:  count via FUN_00402f40 = encodeAsByte]
+//   [2 bytes: count   via FUN_00402b10(1) = encodeB85_1]   ← NOT 1-byte encodeAsByte
 //   Per mech (repeat count times):
 //     [3 bytes: mech_id via FUN_00402b10(2) = encodeB85_2]
 //     [1 byte:  type via FUN_00402f40]
@@ -164,7 +164,7 @@ export interface MechEntry {
 /**
  * Build command-26 (mech list) args buffer.
  * @param typeFlag  0 = normal, 0x20/'>' = show extended buttons.
- * @param mechs     Array of mech entries (≤ 84 entries).
+ * @param mechs     Array of mech entries.
  * @param footer    Optional footer string.
  */
 export function buildMechListArgs(
@@ -174,7 +174,7 @@ export function buildMechListArgs(
 ): Buffer {
   const parts: Buffer[] = [
     encodeB85_1(typeFlag),          // 2 bytes: type_flag
-    encodeAsByte(mechs.length),     // 1 byte:  count
+    encodeB85_1(mechs.length),      // 2 bytes: count (b85_1 confirmed — encodeAsByte overflows at 95+)
   ];
 
   for (const m of mechs) {
