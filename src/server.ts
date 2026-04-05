@@ -33,6 +33,7 @@ import { CaptureLogger } from './util/capture.js';
 
 const log = new Logger('server', 'debug', path.join('logs', 'server.log'));
 const players = new PlayerRegistry();
+const MECH_SEND_LIMIT = 4; // client UI shows 4 mech slots; cap until roster assignment is implemented.
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -281,9 +282,8 @@ function handleGameData(
     // FUN_0043A370 reads it → FUN_00439f70 creates the mech-selection window.
     //
     // The client stores mech entries in fixed-size static arrays; the UI shows
-    // 4 slots. Cap at 4 until player-specific roster assignment is implemented.
+    // 4 slots. Cap at MECH_SEND_LIMIT until player-specific roster assignment is implemented.
     // TODO: load player-specific mech assignments rather than the global catalog.
-    const MECH_SEND_LIMIT = 4;
     const mechsToSend = MECHS.slice(0, MECH_SEND_LIMIT);
     connLog.info('[game] client-ready → sending MECH LIST (cmd 26) — %d mechs (capped at %d)', mechsToSend.length, MECH_SEND_LIMIT);
     const mechPkt = buildMechListPacket(mechsToSend, 0, '', nextSeq(session));
@@ -304,8 +304,9 @@ function handleGameData(
     if (listId === 0 && selection > 0 && session.mechListSent && !session.awaitingMechConfirm) {
       // Mech-window selection: user picked a mech (selection = mech.slot + 1).
       // Send server cmd-7 confirmation dialog — FUN_004112b0 shows a numbered menu.
-      // Two options: 1=Launch! 2=Cancel. ESC alone sends no packet from inside this
-      // dialog type, so a Cancel item is required to allow the user to go back.
+      // Two options: 1=Launch! 2=Cancel. ESC from inside this dialog type sends
+      // cmd 0x1D (handled below); both ESC and the Cancel item re-send the mech
+      // list so the client returns to the mech selection screen.
       connLog.info('[game] mech selected (slot=%d) → sending CONFIRM dialog', selection - 1);
       const confirmPkt = buildMenuDialogPacket(CONFIRM_DIALOG_ID, 'CONFIRM', ['Launch!', 'Cancel'], nextSeq(session));
       send(session.socket, confirmPkt, capture, 'CONFIRM_DIALOG');
@@ -320,14 +321,16 @@ function handleGameData(
         const redir = buildRedirectPacket('127.0.0.1');
         send(session.socket, redir, capture, 'REDIRECT');
         session.phase = 'closing';
-      } else {
+      } else if (selection === 2) {
         // Item 2 = "Cancel" → dismiss dialog, re-send mech list so client returns
         // to mech selection screen.
         connLog.info('[game] cancelled → re-sending mech list');
         session.awaitingMechConfirm = false;
-        const mechsToSend = MECHS.slice(0, 4);
+        const mechsToSend = MECHS.slice(0, MECH_SEND_LIMIT);
         const mechPkt = buildMechListPacket(mechsToSend, 0, '', nextSeq(session));
         send(session.socket, mechPkt, capture, 'MECH_LIST');
+      } else {
+        connLog.warn('[game] CONFIRM dialog: unexpected selection=%d — ignoring', selection);
       }
 
     } else {
@@ -344,7 +347,7 @@ function handleGameData(
     const p1 = payload.length > 3 ? payload[3] - 0x21 : -1;
     connLog.info('[game] cmd 0x1D (cancel/ESC): p1=%d — re-sending mech list to dismiss dialog', p1);
     session.awaitingMechConfirm = false;
-    const mechsToSend = MECHS.slice(0, 4);
+    const mechsToSend = MECHS.slice(0, MECH_SEND_LIMIT);
     const mechPkt = buildMechListPacket(mechsToSend, 0, '', nextSeq(session));
     send(session.socket, mechPkt, capture, 'MECH_LIST');
 
