@@ -219,7 +219,15 @@ const CONFIRM_DIALOG_ID = 2;
 // Mech roster loaded from mechdata/*.MEC at startup.
 // See src/data/mechs.ts — no names are hardcoded; the client resolves chassis
 // display names internally via MechWin_LookupMechName (FUN_00438280).
-const MECHS: MechEntry[] = loadMechs();
+const MECHS: MechEntry[] = (() => {
+  try {
+    return loadMechs();
+  } catch (err) {
+    const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    log.error('Failed to load mechs: %s', message);
+    throw err;
+  }
+})();
 log.info('Loaded %d mechs from mechdata/', MECHS.length);
 
 /**
@@ -345,7 +353,8 @@ function handleGameData(
     // WARNING: sending no response locks the client (it waits indefinitely for
     // the reply). Tracked in issues #3 (RE) and #4 (implementation). SKIP for M1.
     // TODO: respond with mech detail data once format is understood.
-    // RE target: Cmd20_MouseHandler (FUN_00401c90)
+    // RE target: Cmd20_ParseTextDialog (FUN_00411D90) — see RESEARCH.md.
+    // (FUN_00401c90 is CombatTick_Mover, an unrelated function.)
     connLog.debug('[game] cmd 20 (examine mech) — noop (client will lock; see issues #3/#4)');
 
   } else {
@@ -356,13 +365,19 @@ function handleGameData(
 // ── Server startup ────────────────────────────────────────────────────────────
 
 // Capture unhandled exceptions so they appear in logs/server.log.
+// Set exitCode first, then flush the log stream before exiting so buffered
+// output is not dropped. Child loggers share the root stream, so closing
+// `log` is sufficient.
 process.on('uncaughtException', (err: Error) => {
   log.error('Uncaught exception: %s\n%s', err.message, err.stack ?? '');
-  process.exit(1);
+  process.exitCode = 1;
+  log.close(() => process.exit());
 });
 process.on('unhandledRejection', (reason: unknown) => {
-  log.error('Unhandled rejection: %s', String(reason));
-  process.exit(1);
+  const msg = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+  log.error('Unhandled rejection: %s', msg);
+  process.exitCode = 1;
+  log.close(() => process.exit());
 });
 
 const server = net.createServer(handleConnection);

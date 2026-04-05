@@ -17,6 +17,7 @@ const LEVEL_ORDER: Record<LogLevel, number> = {
 
 export class Logger {
   private stream: fs.WriteStream | null = null;
+  private ownsStream = false;
 
   constructor(
     private readonly prefix: string = '',
@@ -26,6 +27,7 @@ export class Logger {
     if (logFile) {
       fs.mkdirSync(path.dirname(logFile), { recursive: true });
       this.stream = fs.createWriteStream(logFile, { flags: 'a' });
+      this.ownsStream = true;
     }
   }
 
@@ -58,10 +60,17 @@ export class Logger {
       this.minLevel,
     );
     c.stream = this.stream; // share the parent's write stream
+    // ownsStream stays false — only the root logger that opened the stream closes it
     return c;
   }
 
-  close(): void {
-    this.stream?.end();
+  /** Flush and close the log file stream. No-op on child loggers (they don't own the stream). */
+  close(cb?: () => void): void {
+    if (this.ownsStream && this.stream) {
+      if (cb) this.stream.end(cb);
+      else this.stream.end();
+    } else {
+      cb?.();
+    }
   }
 }

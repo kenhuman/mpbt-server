@@ -49,11 +49,19 @@ function loadVariantIdMap(): Map<string, number> {
       'Copy MPBT.MSG from your licensed MPBT installation into the project root.',
     );
   }
-  const lines = fs.readFileSync(msgPath, 'latin1').split('\r\n');
+  const raw = fs.readFileSync(msgPath, 'latin1');
+  const lines = raw.split(/\r?\n/);
   const VARIANT_BASE_1 = 0x3AE; // 1-based line number of id=0 entry
+  const VARIANT_LAST_1  = VARIANT_BASE_1 + 0xA0; // last required line (id=0xA0)
+  if (lines.length < VARIANT_LAST_1) {
+    throw new Error(
+      `MPBT.MSG too short: need at least ${VARIANT_LAST_1} lines for the full variant table, ` +
+      `but only ${lines.length} found. Check file integrity / line endings.`,
+    );
+  }
   const map = new Map<string, number>();
   for (let id = 0; id <= 0xA0; id++) {
-    const line = lines[VARIANT_BASE_1 + id - 1];
+    const line = lines[VARIANT_BASE_1 + id - 1]?.trim().toUpperCase();
     if (line) map.set(line, id);
   }
   return map;
@@ -85,7 +93,7 @@ export function loadMechs(): MechEntry[] {
     .filter(f => f.toUpperCase().endsWith('.MEC'))
     .sort()
     .map<MechEntry>((filename, slot) => {
-      const typeString = filename.slice(0, -4);
+      const typeString = filename.slice(0, -4).trim().toUpperCase();
       const id = variantIdMap.get(typeString);
       if (id === undefined) {
         throw new Error(
