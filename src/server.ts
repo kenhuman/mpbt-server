@@ -272,11 +272,10 @@ function handleGameData(
     // cmd 3 = client-ready (FUN_0040d3c0): send mech list exactly once.
     // FUN_0043A370 reads it → FUN_00439f70 creates the mech-selection window.
     //
-    // The client stores mech entries in fixed-size static arrays. Confirmed that
-    // the real server sent a player's owned mechs (1–3 typically). Limit to 3
-    // until the array bounds are RE'd and paging is implemented (issue #TBD).
+    // The client stores mech entries in fixed-size static arrays; the UI shows
+    // 4 slots. Cap at 4 until player-specific roster assignment is implemented.
     // TODO: load player-specific mech assignments rather than the global catalog.
-    const MECH_SEND_LIMIT = 3;
+    const MECH_SEND_LIMIT = 4;
     const mechsToSend = MECHS.slice(0, MECH_SEND_LIMIT);
     connLog.info('[game] client-ready → sending MECH LIST (cmd 26) — %d mechs (capped at %d)', mechsToSend.length, MECH_SEND_LIMIT);
     const mechPkt = buildMechListPacket(mechsToSend, 0, '', nextSeq(session));
@@ -327,9 +326,11 @@ function handleGameData(
 
   } else if (cmdIdx === 20) {
     // cmd 20 = 'X' key — examine mech (requests mech stats from server).
+    // WARNING: sending no response locks the client (it waits indefinitely for
+    // the reply). Tracked in issues #3 (RE) and #4 (implementation). SKIP for M1.
     // TODO: respond with mech detail data once format is understood.
     // RE target: Cmd20_MouseHandler (FUN_00401c90)
-    connLog.debug('[game] cmd 20 (examine mech) — noop for now');
+    connLog.debug('[game] cmd 20 (examine mech) — noop (client will lock; see issues #3/#4)');
 
   } else {
     connLog.debug('[game] cmd=%d ignored (mechListSent=%s)', cmdIdx, session.mechListSent);
