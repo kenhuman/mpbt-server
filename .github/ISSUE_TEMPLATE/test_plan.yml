@@ -30,8 +30,10 @@ body:
     attributes:
       label: Test Cases
       description: |
-        One checkbox per test case. Format each line as:
-        `- [ ] **T#** — description: expected result`
+        List each test case here as a one-line summary (T# — description).
+        **After submitting this issue, open each T# as its own subissue** so
+        GitHub tracks progress automatically and shows a progress bar here.
+        Check each box as the subissue is closed (or close the subissue).
       placeholder: |
         - [ ] **T1** — Server loads correctly: log shows "Loaded 161 mechs"
         - [ ] **T2** — Auth handshake: mech selection window renders

@@ -40,6 +40,7 @@ message explaining how to resubmit.
 | **Feature Request** | You want a new feature or enhancement |
 | **Research Finding** | You've made a reverse engineering discovery |
 | **Documentation** | Something in the docs is wrong or missing |
+| **Test Plan** | Verifying milestone completeness with a manual test pass |
 
 ### Issue Lifecycle
 
@@ -48,6 +49,22 @@ message explaining how to resubmit.
 3. `status: accepted` → issue automatically added to project backlog
 4. Work begins → `status: in-progress`
 5. PR merged → issue closed via `Closes #N` in the PR
+
+### Test Plans
+
+When opening a **Test Plan** issue, file each individual test case (T1, T2, …)
+as its own **subissue** on the parent:
+
+1. Open the Test Plan issue and list all T# cases in the body.
+2. For each T#, click **Create sub-issue** (or use the sub-issues API) and open a
+   brief issue titled `T# — <description>` under the parent.
+3. GitHub will display a progress bar on the parent issue that advances
+   automatically as each subissue is closed.
+4. Close each subissue (or check the checkbox in the parent body) as the test
+   passes; close the parent Test Plan issue when all T# are resolved.
+
+Subissue title format: `T# — <one-line summary of expected result>`
+Example: `T3 — Mech selection window shows 4 mechs from roster`
 
 ---
 
