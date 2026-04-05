@@ -23,7 +23,7 @@ import * as os from 'os';
 import { ARIES_PORT, Msg } from './protocol/constants.js';
 import { PacketParser, buildPacket, hexDump } from './protocol/aries.js';
 import { parseLoginPayload, buildLoginRequest, buildSyncAck, buildWelcomePacket } from './protocol/auth.js';
-import { buildMechListPacket, buildMenuDialogPacket, buildRedirectPacket, parseClientCmd7, type MechEntry } from './protocol/game.js';
+import { buildMechListPacket, buildMenuDialogPacket, buildRedirectPacket, buildCmd20Packet, parseClientCmd7, type MechEntry } from './protocol/game.js';
 import { loadMechs } from './data/mechs.js';
 import { PlayerRegistry, ClientSession } from './state/players.js';
 import { Logger } from './util/logger.js';
@@ -353,12 +353,21 @@ function handleGameData(
 
   } else if (cmdIdx === 20) {
     // cmd 20 = 'X' key — examine mech (requests mech stats from server).
-    // WARNING: sending no response locks the client (it waits indefinitely for
-    // the reply). Tracked in issues #3 (RE) and #4 (implementation). SKIP for M1.
-    // TODO: respond with mech detail data once format is understood.
-    // RE target: Cmd20_ParseTextDialog (FUN_00411D90) — see RESEARCH.md.
-    // (FUN_00401c90 is CombatTick_Mover, an unrelated function.)
-    connLog.debug('[game] cmd 20 (examine mech) — noop (client will lock; see issues #3/#4)');
+    // Client payload (suspected, not capture-confirmed): [encodeAsByte(highlightIdx)]
+    // where highlightIdx (0-based) matches g_mechWin_HighlightIdx (DAT_004dbd80).
+    // Server responds with cmd-20 text-dialog frames (RESEARCH.md §14):
+    //   mode 0 = clear panel, mode 1 = append line, mode 2 = finalise/show.
+    const CMD20_DIALOG_ID = 5; // arbitrary; 8,12,34,37,52,1000 have special client behaviour
+    const highlightIdx = payload.length > 3 ? payload[3] - 0x21 : 0;
+    const mech = MECHS[highlightIdx] ?? MECHS[0];
+    if (!mech) {
+      connLog.warn('[game] cmd 20: no mech at slot %d (MECHS empty?)', highlightIdx);
+      return;
+    }
+    connLog.info('[game] cmd 20 (examine): slot=%d typeString=%s', highlightIdx, mech.typeString);
+    send(session.socket, buildCmd20Packet(CMD20_DIALOG_ID, 0, '',             nextSeq(session)), capture, 'CMD20_CLEAR');
+    send(session.socket, buildCmd20Packet(CMD20_DIALOG_ID, 1, mech.typeString, nextSeq(session)), capture, 'CMD20_LINE');
+    send(session.socket, buildCmd20Packet(CMD20_DIALOG_ID, 2, '',             nextSeq(session)), capture, 'CMD20_FINAL');
 
   } else {
     connLog.debug('[game] cmd=%d ignored (mechListSent=%s)', cmdIdx, session.mechListSent);

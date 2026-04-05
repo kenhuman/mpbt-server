@@ -653,7 +653,11 @@ These areas have not yet been reverse-engineered.
 ### Command 20 — Client→Server Examine Request (PARTIALLY RESOLVED)
 
 - Server→client format confirmed in §14: `type1(dialog_id) + byte(mode) + string(text)`
-- **Still unknown:** exact format the client sends when `X` is pressed (likely carries `mech_id` or `slot`)
+- **Still suspected but not confirmed by capture:** the client sends
+  `[encodeAsByte(highlightIdx)]` — a single byte encoding the highlighted
+  slot (0-based, same as `g_mechWin_HighlightIdx` / `DAT_004dbd80`).
+  The server implementation uses this assumption; slot defaults to 0 on
+  a short or malformed payload.
 
 ### Post-Redirect Game World Protocol
 
@@ -669,11 +673,16 @@ These areas have not yet been reverse-engineered.
 - The data arriving on this connection is fed to a different game window/loop
 - Relationship to the lobby connection is not fully understood
 
-### Command 0x1D (Cancel/Close)
+### Command 0x1D (Cancel/Close) — RESOLVED
 
 - Sent by the client when ESC is pressed in a menu dialog
 - Format: `[byte(p1), type1(p2), type4(p3)]`
-- Server-side handler (if any) is unknown
+- **Server must re-send the mech list frame.** The client uses the incoming
+  frame to dismiss the dialog and return to mech selection; sending nothing
+  leaves the client frozen indefinitely.
+- Implemented in `handleGameData()` (`src/server.ts`): re-sends
+  `buildMechListPacket` and resets `session.awaitingMechConfirm`.
+  Verified by T7 in the M1 test pass.
 
 ### CRC for Combat Frames
 

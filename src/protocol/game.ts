@@ -306,6 +306,44 @@ export function buildMenuDialogPacket(
   return buildGamePacket(7, buildMenuDialogArgs(listId, title, items), false, seq);
 }
 
+// ── Command 20 — Text dialog (server→client) ──────────────────────────────────
+// CONFIRMED from Cmd20_ParseTextDialog (FUN_00411D90). See RESEARCH.md §14.
+//
+// Wire layout (args after seq+cmd bytes):
+//   [type1 2B: dialog_id]   arbitrary panel ID
+//   [byte  1B: mode]        0=clear  1=append line  2=finalise/show
+//   [string:   text]        content for mode=1; empty for mode=0 and mode=2
+//
+// Typical sequence to display a stats panel:
+//   buildCmd20Packet(id, 0, '')       — clear the panel
+//   buildCmd20Packet(id, 1, line)     — append one text line (repeat as needed)
+//   buildCmd20Packet(id, 2, '')       — finalise / make visible
+
+/** Build args for a single server cmd-20 (text-dialog) frame. */
+export function buildCmd20Args(dialogId: number, mode: number, text: string): Buffer {
+  return Buffer.concat([
+    encodeB85_1(dialogId),  // type1: 2 bytes
+    encodeAsByte(mode),     // byte:  0=clear 1=append 2=finalise
+    encodeString(text),     // string: content (empty for mode 0 and 2)
+  ]);
+}
+
+/**
+ * Build a full ARIES packet for server command 20 (text dialog).
+ * @param dialogId  Arbitrary panel identifier (avoid 8,12,34,37,52,1000 — see §11).
+ * @param mode      0 = clear, 1 = append text line, 2 = finalise/show.
+ * @param text      Text to append (mode 1); ignored for modes 0 and 2.
+ * @param seq       Sequence number 0..42.
+ */
+export function buildCmd20Packet(
+  dialogId: number,
+  mode:     number,
+  text:     string,
+  seq      = 0,
+): Buffer {
+  return buildGamePacket(20, buildCmd20Args(dialogId, mode, text), false, seq);
+}
+
 // ── REDIRECT (ARIES type 0x03) ────────────────────────────────────────────────
 // CONFIRMED by COMMEG32.DLL FUN_100014e0 case 3:
 //   Payload is exactly 120 bytes: addr[40] | internet[40] | password[40]
