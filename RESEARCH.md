@@ -21,8 +21,10 @@ contributors who want to extend or audit the server emulator.
 11. [Command 7 — Menu Dialog](#11-command-7--menu-dialog)
 12. [REDIRECT (ARIES type 0x03)](#12-redirect-aries-type-0x03)
 13. [play.pcgi Configuration File](#13-playpcgi-configuration-file)
-14. [Open Questions](#14-open-questions)
-15. [Methodology](#15-methodology)
+14. [Command 20 — Text Dialog (Server→Client)](#14-command-20--text-dialog-serverclient)
+15. [MPBT.MSG — Mech String Table](#15-mpbtmsg--mech-string-table)
+16. [Open Questions](#16-open-questions)
+17. [Methodology](#17-methodology)
 
 ---
 
@@ -307,30 +309,40 @@ ARIES `0x00` packet).
 
 ## 8. Lobby Command Dispatcher
 
-**Confirmed from `Lobby_RecvDispatch` (`FUN_00402cf0`) and `g_lobby_DispatchTable` (`DAT_00470198`) in MPBTWIN.EXE.**
+**Confirmed from `Lobby_RecvDispatch` (`FUN_00402cf0`), `g_lobby_DispatchTable` (`DAT_00470198`), and `g_combat_DispatchTable` (`DAT_00470408`) in MPBTWIN.EXE.**
 
-`Lobby_RecvDispatch` (`FUN_00402cf0`) is the main receive loop for the lobby (pre-game) phase.  For
-each arriving inner frame it:
+`Lobby_RecvDispatch` (`FUN_00402cf0`) serves as the main receive loop for **both** the lobby and the in-combat phase.
+It selects between two command tables based on `g_combat_Mode` (`DAT_004e2cd0`):
+
+- When `g_combat_Mode == 0` → uses `g_lobby_DispatchTable` (`DAT_00470198`) — 0x4C entries — RPS/lobby commands
+- When `g_combat_Mode != 0` → uses `g_combat_DispatchTable` (`DAT_00470408`) — 0x4F entries — in-combat commands
+
+For each arriving inner frame it:
 
 1. Calls `g_lobby_SeqHandlerPtr` (`PTR_FUN_00470190`) = `Lobby_SeqHandler` (`FUN_0040C2A0`) (seq pre-handler — see §9)
 2. If pre-handler returns 1 (ACK frame), skip dispatch
 3. Otherwise reads the next byte as `cmdIndex` (via `Frame_ReadByte` / `FUN_00402f40`)
-4. Looks up `g_lobby_DispatchTable[cmdIndex]` (`DAT_00470198`) — a 0x4C-entry function-pointer table
+4. Looks up the active table at `cmdIndex`
 5. If entry is NULL → logs "Invalid RPS command: N" crash
 6. Otherwise calls the function pointer with the parse context
 
-### Command Table (`g_lobby_DispatchTable` / `DAT_00470198`) — Key Entries
+### Lobby Command Table (`g_lobby_DispatchTable` / `DAT_00470198`) — Key Entries
 
-The full table is 0x4C (76) entries × 4 bytes = 304 bytes.  Confirmed non-null
-entries:
+Full table: 0x4C (76) entries × 4 bytes = 304 bytes.  Confirmed non-null entries:
 
 | Index | Canonical Name | Binary Address | Role |
 |:---:|---------|---------|------|
 | 0 | — | `NULL` | Crashes with "Invalid RPS command: 0" |
 | 3 | `Cmd3_Thunk` | `FUN_0040C190` | Calls `Cmd3_SendCapabilities` (`FUN_0040d3c0`): sends `[1,6,3,0]` |
 | 7 | `Cmd7_ParseMenuDialog` | `FUN_004112B0` | Server menu dialog renderer |
-| 20 | `Cmd20_Thunk` → `Cmd20_MouseHandler` | `FUN_00401D90` → `FUN_00401c90` | Mouse/cursor position handler |
+| 20 | `Cmd20_ParseTextDialog` | `FUN_00411D90` | Server text dialog with mech stats (see §14) |
 | 26 | `Cmd26_ParseMechList` | `FUN_0043A370` | Mech list parser → `MechWin_Create` (`FUN_00439f70`) |
+
+### Combat Command Table (`g_combat_DispatchTable` / `DAT_00470408`) — Key Entries
+
+| Index | Binary Address | Notes |
+|:---:|---------|------|
+| 0x48 | `FUN_00406140` | Receives mech stats from server; fills mech data arrays |
 
 ### Client Command 3 — Client-Ready (CONFIRMED)
 
@@ -564,17 +576,84 @@ email=player@mpbt.local
 
 ---
 
-## 14. Open Questions
+## 14. Command 20 — Text Dialog (Server→Client)
+
+**Confirmed from `Cmd20_ParseTextDialog` (`FUN_00411D90`) in MPBTWIN.EXE.**
+
+Command 20 is sent by the **server** to display a text block in the mech selection UI.
+When the player presses `X` (examine) in the mech window, the server responds with
+one or more cmd-20 frames.
+
+### Wire Format (Server → Client, args after cmd byte)
+
+```
+[type1  2B]  dialog_id     (arbitrary id targeting the stats panel)
+[byte   1B]  mode          0 = clear panel
+                           1 = append a line of text
+                           2 = finalise / show
+[string    ] text          (ASCII line; empty when mode=0 or mode=2)
+```
+
+### Notes
+
+- `FUN_00401c90` (previously misidentified as the cmd-20 handler) is the
+  **combat frame tick mover**, called every frame by the combat loop (`FUN_00408080`).
+  It is unrelated to cmd 20.
+- The client cmd-20 packet (sent when `X` is pressed) has not been confirmed;
+  it likely carries the `mech_id` or `slot` being examined.
+
+---
+
+## 15. MPBT.MSG — Mech String Table
+
+**Confirmed by RE of `Mech_VariantLookup` (`FUN_00438280`) and
+`Mech_ChassisLookup` (`FUN_004382b0`), and by verifying all 161 `.MEC`
+filenames against the table.**
+
+`MPBT.MSG` is a plain-text file (CRLF, 1164 lines) shipped with the game
+containing all in-game strings indexed by 1-based line number.
+
+### Variant Designation Table (mech_id → typeString)
+
+- **Lines (1-based):** 942–1102  (base offset `0x3AE`)
+- Line `942 + id` = typeString for `mech_id = id` (161 entries, id 0–160)
+
+| mech_id | typeString |
+|:---:|--------|
+| 0 | FLE-4 |
+| 24 | SDR-5V |
+| 79 | SHD-2H |
+| 141 | ZEU-6T |
+| 156 | ANH-1A |
+| 160 | MAD-4A |
+
+`Mech_VariantLookup` (`FUN_00438280`) = `FUN_00405840(id + 0x3AE)`.
+Out-of-range `id` falls back to `"HBK-4G"` (guard in FUN_00438280).
+
+### Chassis Name Table (chassis_id → name)
+
+- **Lines (1-based):** 876–941  (base offset `0x36C`)
+- 66 entries, chassis_id 0–65
+
+`Mech_ChassisLookup` (`FUN_004382b0`) = `FUN_00405840(id + 0x36C)`.
+Out-of-range id falls back to `"HUNCHBACK"`.
+
+### Implementation
+
+The emulator loads the variant table at startup in `loadVariantIdMap()`
+(`src/data/mechs.ts`) and uses it to assign the correct `mech_id` to each
+`.MEC` file found in `mechdata/`.
+
+---
+
+## 16. Open Questions
 
 These areas have not yet been reverse-engineered.
 
-### Command 20 — Examine/Mech Stats
+### Command 20 — Client→Server Examine Request (PARTIALLY RESOLVED)
 
-- Sent by client when `X` is pressed in the mech window
-- `Cmd20_MouseHandler` (`FUN_00401c90`) is the client-side handler (cmd index 20 in the dispatch table)
-- That function handles mouse/cursor movement — it may **also** receive a server
-  response with mech stats that updates the UI
-- **Unknown:** what format the server should send in reply
+- Server→client format confirmed in §14: `type1(dialog_id) + byte(mode) + string(text)`
+- **Still unknown:** exact format the client sends when `X` is pressed (likely carries `mech_id` or `slot`)
 
 ### Post-Redirect Game World Protocol
 
@@ -608,7 +687,7 @@ These areas have not yet been reverse-engineered.
 
 ---
 
-## 15. Methodology
+## 17. Methodology
 
 ### Tools Used
 
@@ -702,8 +781,8 @@ in [`symbols.json`](symbols.json).
 | `Cmd7_OnMenuEsc` | `FUN_004122d0` | 7 | User presses ESC in menu; calls `Cmd1d_Send` |
 | `Cmd7_SendReply` | `FUN_0040d2f0` | 7 | Send cmd 7 reply: `startCmd('\a') + type1(listId) + type4(val)` |
 | `Cmd1d_Send` | `FUN_00410cc0` | 0x1d | Send cancel frame: `byte(p1) + type1(p2) + type4(p3)` |
-| `Cmd20_Thunk` | `FUN_00401D90` | 20 | Dispatch table entry; jumps to `Cmd20_MouseHandler` |
-| `Cmd20_MouseHandler` | `FUN_00401c90` | 20 | Cursor/mouse position handler |
+| `Cmd20_ParseTextDialog` | `FUN_00411D90` | 20 | Parses server text dialog: `type1(id) + byte(mode 0/1/2) + string(text)` |
+| `CombatTick_Mover` | `FUN_00401c90` | — | Combat frame tick mover; called every frame by combat loop (`FUN_00408080`) |
 | `Cmd26_ParseMechList` | `FUN_0043A370` | 26 | Parse mech list payload; populate `g_cmd26_*` arrays |
 | `Cmd26_ReadTypeFlag` | `FUN_0040d4c0` | 26 | Read 2-byte type_flag via `Frame_DecodeArg(1)` |
 
@@ -715,7 +794,8 @@ in [`symbols.json`](symbols.json).
 | `MechWin_HighlightSlot` | `FUN_004394b0` | Highlight a mech row in selection window |
 | `MechWin_ScrollCallback` | `FUN_00439580` | Repaint callback; highlights `g_mechWin_HighlightIdx` |
 | `MechWin_KeyHandler` | `FUN_0043a990` | Keyboard: S/Enter=select, X=examine, n/p=navigate |
-| `MechWin_LookupMechName` | `FUN_00438280` | Return mech name string from mech ID |
+| `Mech_VariantLookup` | `FUN_00438280` | `FUN_00405840(id + 0x3AE)` — variant typeString from MPBT.MSG; fallback "HBK-4G" |
+| `Mech_ChassisLookup` | `FUN_004382b0` | `FUN_00405840(id + 0x36C)` — chassis name from MPBT.MSG; fallback "HUNCHBACK" |
 
 ### Key Data Labels — MPBTWIN.EXE
 
@@ -735,7 +815,7 @@ in [`symbols.json`](symbols.json).
 | `g_cmd26_SlotArrAlt` | `DAT_004dbd88` | slot array (alternate copy), indexed by entry i |
 | `g_cmd26_TypeStrArr` | `DAT_004dc5b8` | type_string array (e.g. `"SDR-5V"`), indexed by entry i |
 | `g_cmd26_VariantArr` | `DAT_004dc1d0` | variant string array (e.g. `"Spider"`), indexed by entry i |
-| `g_cmd26_NameArr` | `DAT_004dc028` | pilot name array (empty → `MechWin_LookupMechName` fallback) |
+| `g_cmd26_NameArr` | `DAT_004dc028` | pilot name array (empty → `Mech_VariantLookup(mech_id)` fallback at `FUN_00438280`) |
 | `g_mechWin_ShowExtButtons` | `DAT_004dbd84` | Non-zero when typeFlag triggers extended button display |
 | `g_mechWin_HighlightIdx` | `DAT_004dbd80` | Currently highlighted slot index |
 
@@ -767,7 +847,7 @@ Offset  Ptr (LE32)   Resolved
  36     10C34000     0x0040C310
  40     70C34000     0x0040C370
  ...   (entries 11–19 not all confirmed)
- 80     90 1D 40 00  0x00401D90  ← cmd 20: mouse (→ FUN_00401c90)
+ 80     90 1D 41 00  0x00411D90  ← cmd 20: text-dialog handler (`Cmd20_ParseTextDialog`)
 ...
 104     70 A3 43 00  0x0043A370  ← cmd 26: mech list
 ```
