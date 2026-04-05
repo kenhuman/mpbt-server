@@ -32,6 +32,8 @@ This is a long-haul reverse-engineering project. Every milestone below is blocke
 | 19-bit LFSR CRC (lobby init `0x0A5C25`) | ✅ |
 | Cmd 26 — mech list window | ✅ |
 | Cmd 7 — menu dialog (select + confirm) | ✅ |
+| Cmd 0x1D — cancel/ESC re-sends mech list | ✅ |
+| Cmd 20 — examine mech text-dialog response | ✅ |
 | `REDIRECT` packet (type `0x03`) | ✅ |
 | Post-redirect game world | 🔬 |
 
@@ -49,12 +51,12 @@ The client reaches the mech selection screen, browses mechs, confirms selection,
 
 | Task | Status | Notes |
 |---|---|---|
-| Parse real `.MEC` files → `src/data/mechs.ts` | ❌ | 117 files in `mechdata/`; replace hardcoded `SAMPLE_MECHS` |
-| Cmd 20 — mech examine/stats response | 🔬 | RE `FUN_00401c90` (`Cmd20_MouseHandler`) for server response format |
-| Cmd `0x1D` — cancel/ESC in menu dialogs | 🔬 | Format partially known; server-side handler unknown |
+| Parse real `.MEC` files → `src/data/mechs.ts` | ❌ | 161 files in `mechdata/`; replace hardcoded `SAMPLE_MECHS` |
+| Cmd 20 — mech examine/stats response | ✅ | Implemented in PR #12; three-frame clear→line→finalise using `mech.typeString`; full stats pending M2 .MEC RE |
+| Cmd `0x1D` — cancel/ESC in menu dialogs | ✅ | Resolved — server re-sends mech list; sending nothing freezes client |
 | ACK reply for seq > 42 | 🔬 | Trigger condition documented in RESEARCH.md §9; reply format unknown |
 
-**Verification:** Connect real `MPBTWIN.EXE`; press `X` on a mech (stats appear), press `ESC` in dialog (no disconnect), browse all 117 mechs without crash.
+**Verification:** Connect real `MPBTWIN.EXE`; press `X` on a mech (stats appear), press `ESC` in dialog (no disconnect), browse all 161 mechs without crash.
 
 ---
 
