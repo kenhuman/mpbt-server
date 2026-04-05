@@ -33,7 +33,7 @@ jobs:
             const isMaintainer = ['admin', 'write'].includes(perm.permission);
             if (isMaintainer) return;
 
-            // All four templates require multiple "### Heading" sections.
+            // All five templates require multiple "### Heading" sections.
             // A bare/blank issue won't have these.
             const hasStructure = /###\s+\S/.test(body);
             const hasContent   = body.trim().length >= 100;
@@ -50,10 +50,11 @@ jobs:
                 'Thank you for opening an issue! This one has been closed because it does not use one of the required templates.',
                 '',
                 '**Please resubmit using one of the available templates:**',
-                '- ��� **Bug Report** — something broken or behaving unexpectedly',
+                '🐛 **Bug Report** — something broken or behaving unexpectedly',
                 '- ✨ **Feature Request** — a new feature or enhancement',
-                '- ��� **Research Finding** — a reverse engineering discovery',
-                '- ��� **Documentation** — missing or incorrect documentation',
+                '🔬 **Research Finding** — a reverse engineering discovery',
+                '📖 **Documentation** — missing or incorrect documentation',
+                '🧪 **Test Plan** — milestone verification or manual test pass',
                 '',
                 `Open a new issue: https://github.com/${context.repo.owner}/${context.repo.repo}/issues/new/choose`,
                 '',
