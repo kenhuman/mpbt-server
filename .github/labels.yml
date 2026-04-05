@@ -19,6 +19,10 @@
   color: "e4e669"
   description: "Maintenance, dependencies, CI"
 
+- name: "type: testing"
+  color: "c5def5"
+  description: "Test plan, QA verification, or manual test pass"
+
 # ── Priority ──────────────────────────────────────────────────────────────────
 - name: "priority: critical"
   color: "b60205"
