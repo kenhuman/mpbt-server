@@ -318,11 +318,15 @@ function handleGameData(
   } else if (cmdIdx === 0x1D) {
     // cmd 0x1D (29) = ESC/cancel pressed in a menu dialog.
     // Client format confirmed: [Frame_ReadByte(p1)] [type1 2B: p2] [type4 5B: p3]
-    // Server response: unknown — needs RE of g_lobby_DispatchTable[0x1D].
-    // Safe default: reset confirm state so client can re-select a mech.
+    // Response: re-send the mech list so the client dismisses the dialog and
+    // returns to the mech selection screen. Sending nothing leaves the dialog
+    // frozen (client waits indefinitely for a server packet to close it).
     const p1 = payload.length > 3 ? payload[3] - 0x21 : -1;
-    connLog.info('[game] cmd 0x1D (cancel/ESC): p1=%d — resetting confirm state', p1);
+    connLog.info('[game] cmd 0x1D (cancel/ESC): p1=%d — re-sending mech list to dismiss dialog', p1);
     session.awaitingMechConfirm = false;
+    const mechsToSend = MECHS.slice(0, 4);
+    const mechPkt = buildMechListPacket(mechsToSend, 0, '', nextSeq(session));
+    send(session.socket, mechPkt, capture, 'MECH_LIST');
 
   } else if (cmdIdx === 20) {
     // cmd 20 = 'X' key — examine mech (requests mech stats from server).
