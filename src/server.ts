@@ -296,19 +296,31 @@ function handleGameData(
     if (listId === 0 && selection > 0 && session.mechListSent && !session.awaitingMechConfirm) {
       // Mech-window selection: user picked a mech (selection = mech.slot + 1).
       // Send server cmd-7 confirmation dialog — FUN_004112b0 shows a numbered menu.
+      // Two options: 1=Launch! 2=Cancel. ESC alone sends no packet from inside this
+      // dialog type, so a Cancel item is required to allow the user to go back.
       connLog.info('[game] mech selected (slot=%d) → sending CONFIRM dialog', selection - 1);
-      const confirmPkt = buildMenuDialogPacket(CONFIRM_DIALOG_ID, 'CONFIRM', ['Launch!'], nextSeq(session));
+      const confirmPkt = buildMenuDialogPacket(CONFIRM_DIALOG_ID, 'CONFIRM', ['Launch!', 'Cancel'], nextSeq(session));
       send(session.socket, confirmPkt, capture, 'CONFIRM_DIALOG');
       session.awaitingMechConfirm = true;
 
     } else if (listId === CONFIRM_DIALOG_ID && selection > 0 && session.awaitingMechConfirm) {
-      // User confirmed from the dialog → redirect to game world.
-      // COMMEG32.DLL case 3: 120-byte payload [addr40|internet40|pw40],
-      // then FUN_100011c0 opens a new TCP connection to addr.
-      connLog.info('[game] confirmed (item=%d) → sending REDIRECT', selection);
-      const redir = buildRedirectPacket('127.0.0.1');
-      send(session.socket, redir, capture, 'REDIRECT');
-      session.phase = 'closing';
+      if (selection === 1) {
+        // Item 1 = "Launch!" → redirect to game world.
+        // COMMEG32.DLL case 3: 120-byte payload [addr40|internet40|pw40],
+        // then FUN_100011c0 opens a new TCP connection to addr.
+        connLog.info('[game] confirmed (Launch!) → sending REDIRECT');
+        const redir = buildRedirectPacket('127.0.0.1');
+        send(session.socket, redir, capture, 'REDIRECT');
+        session.phase = 'closing';
+      } else {
+        // Item 2 = "Cancel" → dismiss dialog, re-send mech list so client returns
+        // to mech selection screen.
+        connLog.info('[game] cancelled → re-sending mech list');
+        session.awaitingMechConfirm = false;
+        const mechsToSend = MECHS.slice(0, 4);
+        const mechPkt = buildMechListPacket(mechsToSend, 0, '', nextSeq(session));
+        send(session.socket, mechPkt, capture, 'MECH_LIST');
+      }
 
     } else {
       connLog.debug('[game] cmd 7 ignored (listId=%d sel=%d mechSent=%s awaitConfirm=%s)',
