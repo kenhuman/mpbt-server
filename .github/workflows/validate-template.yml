@@ -19,8 +19,19 @@ jobs:
       - uses: actions/github-script@v7
         with:
           script: |
-            const body = context.payload.issue.body ?? '';
-            const num  = context.payload.issue.number;
+            const body   = context.payload.issue.body ?? '';
+            const num    = context.payload.issue.number;
+            const author = context.payload.issue.user.login;
+
+            // Maintainers (repo owner or users with write access) may create
+            // issues programmatically without the web form — skip enforcement.
+            const { data: perm } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              username: author,
+            }).catch(() => ({ data: { permission: 'none' } }));
+            const isMaintainer = ['admin', 'write'].includes(perm.permission);
+            if (isMaintainer) return;
 
             // All four templates require multiple "### Heading" sections.
             // A bare/blank issue won't have these.
@@ -75,8 +86,18 @@ jobs:
       - uses: actions/github-script@v7
         with:
           script: |
-            const body = context.payload.pull_request.body ?? '';
-            const num  = context.payload.pull_request.number;
+            const body   = context.payload.pull_request.body ?? '';
+            const num    = context.payload.pull_request.number;
+            const author = context.payload.pull_request.user.login;
+
+            // Maintainers may open PRs via CLI without the web form — skip enforcement.
+            const { data: perm } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              username: author,
+            }).catch(() => ({ data: { permission: 'none' } }));
+            const isMaintainer = ['admin', 'write'].includes(perm.permission);
+            if (isMaintainer) return;
 
             const hasIssueRef  = /closes?\s+#\d+|fixes?\s+#\d+|resolves?\s+#\d+/i.test(body);
             const hasChecklist = /- \[[ x]\]/.test(body);
