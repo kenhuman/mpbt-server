@@ -1,0 +1,32 @@
+name: Request Copilot Review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+    branches: [main]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  request-review:
+    # Skip draft PRs — Copilot will be requested when marked ready
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.rest.pulls.requestReviewers({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                pull_number: context.payload.pull_request.number,
+                reviewers: ['copilot-pull-request-reviewer'],
+              });
+              core.info('Copilot review requested.');
+            } catch (err) {
+              // Copilot review may already be requested, or the feature may need
+              // to be enabled in Settings → Copilot → Code review.
+              core.warning(`Could not request Copilot review: ${err.message}`);
+            }
