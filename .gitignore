@@ -17,7 +17,8 @@ MPBT.MSG
 # Research / reference materials — proprietary Kesmai/EA source materials and
 # private correspondence.  Place these in research/ for local use; they must
 # never be committed.
-research/
+research/*
+!research/README.md
 IS.MAP
 SOLARIS.MAP
 BT-MAN.pdf
