@@ -121,7 +121,7 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 | Character creation flow (first login) | ✅ | cmd-3 → no character in DB → send House allegiance dialog (cmd-7) → persist → REDIRECT |
 | Post-login direct world entry (returning player) | ✅ | cmd-3 → character found → REDIRECT to port 2001 immediately; no mech-select shown |
 | World server uses `displayName` as Cmd4 callsign | ✅ | Falls back to `username` if character data unavailable (e.g. test direct-connect) |
-| Display name entry (name selection dialog) | 🔬 | Stronger RE now points to server `Cmd9` as the likely authentic first-login prompt: it opens `MPBT.MSG[5]` (`"Enter your character's name"`), then a numbered selector titled `MPBT.MSG[6]` (`"Choose your allegiance:"`), and submits outbound `cmd 9, subcmd 1, <typed name>, <selected-index>`. This supersedes the earlier `Cmd36`/`Cmd37` hypothesis; `Cmd36` is the read/reply viewer, `Cmd37` opens the ComStar compose editor, and the live `Cmd37(0)` probe is only a compatibility bridge. Remaining work: GUI-probe `Cmd9` in first-login flow and replace the current username-as-display-name placeholder if confirmed. |
+| Display name entry (name selection dialog) | 🔬 | Stronger RE now points to server `Cmd9` as the likely authentic first-login prompt: it opens `MPBT.MSG[5]` (`"Enter your character's name"`), then a numbered selector titled `MPBT.MSG[6]` (`"Choose your allegiance:"`), and submits outbound `cmd 9, subcmd 1, <typed name>, <selected-index>`. This supersedes the earlier `Cmd36`/`Cmd37` hypothesis; `Cmd36` is the read/reply viewer, `Cmd37` opens the ComStar compose editor, and the live `Cmd37(0)` probe is only a compatibility bridge. Live GUI probe on 2026-04-06 confirmed `Cmd9` returns typed name + selected House (`Moosington`, index 4 → Marik) and can advance to REDIRECT. Remaining work: replace the current username-as-display-name placeholder with a clean `Cmd9` implementation and seed normal launch/world context. |
 
 **Known M3 limitations / M4 work:**
 - Initial room-sync uses `Cmd10`; the earlier `Cmd9(count=0)` placeholder was removed, and `Cmd9` is now tied to the first-login name + allegiance prompt rather than room presence.
@@ -134,7 +134,7 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 - *Returning player:* connect, skip allegiance dialog, enter world directly — no mech-select screen shown.
 - *Wrong password:* second login with wrong credentials → connection closed.
 - *Mech select (M6 path):* cmd-26 visible only when explicitly triggered; pre-combat flow unaffected.
-- *First-login `Cmd37(0)` probe:* live GUI client returned `cmd 21(dialogId=0, text=...)`, then accepted House selection and REDIRECT. This confirms a workable probe path, not yet the authentic original name-entry UI.
+- *First-login `Cmd9` probe:* live GUI client rendered the `MPBT.MSG[5]` / `[6]` name + allegiance path, returned `cmd 9 / subcmd 1` with typed name `Moosington` and selected index `4`, persisted `Marik`, and advanced to REDIRECT. The older `Cmd37(0)` probe remains a compatibility bridge, not the authentic original name-entry UI.
 
 ---
 
