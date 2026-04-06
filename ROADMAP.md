@@ -121,7 +121,7 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 | Character creation flow (first login) | ✅ | cmd-3 → no character in DB → send House allegiance dialog (cmd-7) → persist → REDIRECT |
 | Post-login direct world entry (returning player) | ✅ | cmd-3 → character found → REDIRECT to port 2001 immediately; no mech-select shown |
 | World server uses `displayName` as Cmd4 callsign | ✅ | Falls back to `username` if character data unavailable (e.g. test direct-connect) |
-| Display name entry (name selection dialog) | 🔬 | Text-input wire format not yet RE'd. Current placeholder: login username is used as display name. See issue #26 for RE tasks. |
+| Display name entry (name selection dialog) | 🔬 | Still unresolved. Stronger RE rules out the earlier `Cmd36` assumption: `Cmd36` is the read/reply viewer, `Cmd37` opens the ComStar compose editor, and `FUN_00416db0` remains ComStar-specific even with target `0`. `MPBT.MSG` still contains `Character Generation`, `Enter your character's name`, `Choose your allegiance:`, and `Enter choice:`, but no live online caller has been traced yet. Current placeholder: login username is used as display name. See issue #26 for RE tasks. |
 
 **Known M3 limitations / M4 work:**
 - Initial room-sync packet is still unresolved; the earlier `Cmd9(count=0)` placeholder was removed after stronger RE tied `Cmd9` to a player-inquiry workflow.
