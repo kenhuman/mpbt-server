@@ -202,7 +202,7 @@ The world uses two distinct room types: **bar** (social spaces, Tier Ranking ter
 
 | Task | Status | Notes |
 |---|---|---|
-| All 161 mechs loaded from real `.MEC` files | ❌ | M1 prerequisite |
+| All 161 mechs loaded from real `.MEC` files | 🔧 | `loadMechs()` scans/parses `mechdata/*.MEC` in M1; remaining work is validating and integrating all 161 mechs for actual gameplay |
 | Real Solaris arena layouts | ❌ | From M5 RE work |
 | Correct mech stat handling (armor, weapons, heat) | ❌ | From `.MEC` parser + damage model |
 | Client launcher — `play.pcgi` generator | ✅ | `npm run gen-pcgi` already works |

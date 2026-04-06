@@ -54,7 +54,7 @@ export function encodeAsByte(v: number): Buffer {
 /**
  * Encode a string via FUN_00403160 wire format:
  *   [length_byte = len + 0x21]  [raw bytes]
- * Strings must be ≤ 84 bytes (length byte would hit 0x6D max; ESC = 0x1B never reached).
+ * Strings must be ≤ 84 bytes (length byte would hit 0x75 max; ESC = 0x1B never reached).
  *
  * Used for cmd-26 (mech list) strings read by FUN_0040c0d0.  NOT for cmd-20 text
  * (which uses buildCmd20Args with a base-85 length prefix via FUN_0040c130).

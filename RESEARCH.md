@@ -589,10 +589,16 @@ When the player presses `X` (examine) in the mech window, the server responds wi
 ### Wire Format (Server → Client, args after cmd byte)
 
 ```
-[type1  2B]  dialog_id     (arbitrary id; avoid 13/30/35/39 — trigger printf via MPBT.MSG)
-[byte   1B]  mode          2 = create/show stats panel with Ok button
-[string    ] text          "#NNN" where NNN is the zero-padded mech_id (3 ASCII digits)
+[type1  2B]  dialog_id     base-85(1) — arbitrary id; avoid 13/30/35/39 (trigger printf via MPBT.MSG)
+[byte   1B]  mode          (mode + 0x21) — 2 = create/show stats panel with Ok button
+[type1  2B]  text_len      base-85(1) — byte length of the following raw text
+[N bytes ]  text           raw latin1; use 0x5C ('\') as line separator
 ```
+
+The text is sent as a raw latin1 byte string (NOT `#NNN`). `buildCmd20Args()` uses
+`encodeB85_1(raw.length)` for the length prefix — **not** `encodeString()`'s 1-byte
+prefix, which `FUN_0040c130` would misread as a large length (≈1732) and immediately
+return -1 ("RPS command 20 failed.").
 
 ### `#NNN` Text Format — Broken with This MPBT.MSG
 
@@ -833,7 +839,9 @@ connect(host, port);                      // TCP connect
 Sending just `"127.0.0.1"` (no colon) causes `Aries_OpenSocket` to return -1
 immediately, silently failing the secondary connection.
 
-**Our REDIRECT now sends:** `"127.0.0.1:2001"` (see `WORLD_PORT` in `constants.ts`).
+**Current emulator behavior:** REDIRECT sends `"127.0.0.1:2000"` (the
+`ARIES_PORT` value in `constants.ts`). This is intentional until a separate
+world listener exists on a distinct port.
 
 ### Secondary Connection Handshake — CONFIRMED
 
@@ -867,7 +875,9 @@ loop is skipped — no mechs are stored.
 
 **Maximum safe count: 127** (encoded as raw byte 0xA0; `(char)127` = 127 > 0).
 
-Our `MECH_SEND_LIMIT = 84` (raw byte 0x75) is safely within this range.
+Our current safe sender limit is `MECH_SEND_LIMIT = 20` (raw byte 0x35), which is
+safely within this encoding range and matches the client's static mech-list array
+capacity enforced by `buildMechListArgs`.
 
 ---
 
