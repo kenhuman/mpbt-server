@@ -1078,7 +1078,7 @@ No seed change happens mid-session in standard gameplay.
 | 33 | `0x42` | `0x00419360` | `FUN_00419370` — Ok-dialog callback |
 | 34 | `0x43` | `0x00413FF0` | |
 | 35 | `0x44` | `0x00429C80` | |
-| 36 | `0x45` | `0x004161A0` | |
+| 36 | `0x45` | `0x004161A0` | `Cmd36_UserCreationWizard` — new/returning player flow |
 | 37 | `0x46` | `0x00416D40` | |
 | 38 | `0x47` | `0x00419250` | |
 | 39 | `0x48` | `0x0043DAE0` | |
@@ -1192,6 +1192,82 @@ Frame-reading helpers referenced below:
 | 11 | `0x2c` | `FUN_0040C6C0` | `Cmd11_PlayerEvent` | Reads 4-byte session-ID + 1-byte status code + callsign string. Finds/creates roster slot via `FUN_0040c590`. Status: `0`=left arena; `1–4`=tier/game-state (formatted via message table `DAT_00472a34[status]`); `5`=moved to spectator; `0x54`=match-end score update; other=game-state N−5. Appends formatted event line to chat. |
 | 12 | `0x2d` | `FUN_0040C5C0` | `Cmd12_PlayerRename` | Reads 4-byte session-ID + new callsign string. Looks up existing roster slot, formats "{old} is now {new}" message (MSG `0x13`), overwrites stored name in player table, appends to chat. |
 | 13 | `0x2e` | `FUN_0040C920` | `Cmd13_PlayerArrival` | Reads 4-byte session-ID + callsign string. Searches player table for matching session-ID (update) or first free slot (insert). Sets active flag, stores callsign, resets timer field to 0, appends "{callsign} entered" line (MSG `0x19`) to chat. |
+
+---
+
+## 18b. Cmd36 — User Creation Wizard (`FUN_004161A0`) — RESOLVED
+
+**Confirmed by decompiling `FUN_004161A0` (Cmd36 handler) in MPBTWIN.EXE.**
+
+Cmd36 is the **original Kesmai new/returning player detection command**, sent by the real
+server early in the RPS session to present either a "Create New Pilot" wizard or a
+"Continue as Existing Pilot" dialog.
+
+### Wire Format
+
+```
+[B85_4 int: iVar3 / accountId]  [B85 string: dialog display text]
+```
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `iVar3` | B85_4 (5 bytes) | `0` = new user; non-zero = returning accountId |
+| string | B85 string | Player callsign or prompt text shown in dialog |
+
+### Client Behaviour
+
+`FUN_004161A0` reads `iVar3` from the wire and branches:
+
+**`iVar3 == 0` — New player:**
+- Creates a medium-width dialog (`FUN_004145a0(4)`) at position (0, 0xdd)–(0x280, 0x103)
+- Adds two clickable buttons:
+  - Button `0x0d` — "Proceed as new pilot" (always present)
+  - Button `0x6d` — scroll/more (only if dialog text > 10 lines: `uVar6 != 0`)
+- Sets `DAT_004ddfc0+0x44 = 0x21` (roster ready flag)
+- Keyboard handler at `LAB_00415f50` (scroll up/down, Escape → dismiss)
+- Clicking button `0x0d` → `FUN_004160c0` + `FUN_00411200` → closes dialog, shows arena
+
+**`iVar3 != 0` — Returning player:**
+- Same dialog but adds a third button:
+  - Button `0x72` — "Continue as existing pilot"
+  - Button `0x0d` — "Create new pilot instead"
+  - Button `0x6d` — scroll (if text > 10 lines)
+- Keyboard handler at `LAB_00415f50` (same scroll)
+- `DAT_00472c94[0x50d]` set to `LAB_00416170` (ESC/Space → remap to button press)
+- Clicking button `0x72` — "Continue": closes dialog, **then** calls `FUN_00416db0(iVar3, 0)`
+  which opens a second confirm dialog with the player's character data
+- Clicking button `0x0d` — "New": closes dialog, shows arena directly (same as new-user path)
+
+### Second Dialog — `FUN_00416db0` (Returning-User Confirm)
+
+Opened after clicking "Continue" with `param_1 = accountId`:
+- Creates another dialog with two buttons: `0x132` (OK/confirm) and `0x1b` (cancel)
+- Loads up to 1000 character data entries from a supplied array; if >999, stores as a single int
+- Keyboard at `LAB_00416b90`; scroll at `LAB_00417460`; Escape at `LAB_00416d10`
+- Pressing OK → confirm account → enter arena
+- Pressing Cancel → closes this dialog, returns to the wizard (account selection)
+
+### Bypass Conditions
+
+The wizard is triggered **entirely by receiving Cmd36**. There is no client-side allegiance
+or callsign state that prevents it from firing, and there is no prior-message path that
+stores callsign/allegiance into globals checked here.
+
+**The only way to bypass the wizard is to never send Cmd36.** Our emulator does not send
+Cmd36, which correctly skips both the new-user and returning-user dialog flows entirely.
+
+### Emulator Notes
+
+- We do **not** send Cmd36. Client proceeds from welcome → cmd-3 → Cmd4 arena without
+  any user-creation dialog.
+- The allegiance picker and character name our server previously showed via Cmd7 was our
+  own addition (not related to Cmd36). That has been replaced by server-side auto-create
+  in `handleWorldLogin` (see §5 and `src/server-world.ts`).
+- `FUN_00415f50` (keyboard handler at `LAB_00415f50`) and `FUN_00416170` (ESC/Space remap)
+  are inline label targets inside the Cmd36 dialog; they are not independently reachable
+  from the dispatch table.
+
+---
 
 **Correction note for §8**: The lobby dispatch table entry at index 3 was previously labelled
 `Cmd3_Thunk — Calls Cmd3_SendCapabilities (FUN_0040d3c0)`.  Decompilation of `FUN_0040C190`
