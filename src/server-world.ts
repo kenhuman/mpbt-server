@@ -237,7 +237,24 @@ function handleWorldGameData(
   if (cmdIdx === 3) {
     // Cmd-3: client capabilities / ready signal (RPS mode).
     // Called by FUN_0040d3c0 immediately after the world-MMW welcome is received.
-    // Respond with the world initialization sequence.
+    // The client also sends cmd-3 again after its character-creation wizard
+    // completes (callsign + allegiance).  Guard against re-running the full
+    // init if allegiance is already set: just acknowledge so the client exits
+    // the busy-cursor state without clobbering the existing arena windows.
+    if (session.allegiance !== undefined) {
+      connLog.info('[world] cmd-3 (wizard-done re-trigger): allegiance=%s, acking without reinit', session.allegiance);
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket(
+          `You are a ${session.allegiance} pilot. Your character is ready.`,
+          nextSeq(session),
+        ),
+        capture,
+        'CMD3_READY',
+      );
+      send(session.socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
+      return;
+    }
     connLog.info('[world] cmd-3 (client-ready) → sending world init sequence');
     sendWorldInitSequence(session, connLog, capture);
 
@@ -332,8 +349,20 @@ function handleWorldGameData(
     connLog.info('[world] cmd-4 (chat): text="%s"', chatText);
 
     if (session.allegiance !== undefined) {
-      // Allegiance already set — ignore (normal chat during gameplay is not yet implemented).
-      connLog.debug('[world] cmd-4 (chat): allegiance already set, ignoring');
+      // Allegiance is already set.  The player is typing in the chat box,
+      // which the client may interpret as name/callsign entry during its
+      // character-creation wizard.  Echo a friendly acknowledgement so the
+      // player knows their allegiance is locked in and character is ready.
+      connLog.info('[world] cmd-4 (chat): allegiance already set — echoing status to player');
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket(
+          `You are a ${session.allegiance} pilot. Character creation is complete.`,
+          nextSeq(session),
+        ),
+        capture,
+        'CMD3_STATUS',
+      );
       return;
     }
 
@@ -415,7 +444,16 @@ function applyAllegiancePick(
     // hourglass via FUN_00433ef0.  Just acknowledge and restore the cursor.
     connLog.info('[world] %s: allegiance set — sending Cmd3+Cmd5 only (no reinit)', source);
     const { socket } = session;
-    send(socket, buildCmd3BroadcastPacket(`Allegiance set to ${allegiance}.`, nextSeq(session)), capture, 'CMD3_ALLEGIANCE');
+    send(
+      socket,
+      buildCmd3BroadcastPacket(
+        `You have joined House ${allegiance}. Your pilot is ready! ` +
+        `Type anything in the box below or press Escape to continue.`,
+        nextSeq(session),
+      ),
+      capture,
+      'CMD3_ALLEGIANCE',
+    );
     send(socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
   } else {
     connLog.info('[world] %s: sending post-allegiance reinit', source);
