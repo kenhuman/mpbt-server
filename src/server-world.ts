@@ -40,7 +40,7 @@ import {
   buildCmd6CursorBusyPacket,
   buildCmd9RoomPlayerListPacket,
 } from './protocol/world.js';
-import { buildMenuDialogPacket } from './protocol/game.js';
+import { buildMenuDialogPacket, verifyInboundGameCRC } from './protocol/game.js';
 import { PlayerRegistry, ClientSession } from './state/players.js';
 import { launchRegistry } from './state/launch.js';
 import { loadMechs } from './data/mechs.js';
@@ -228,6 +228,10 @@ function handleWorldGameData(
   if (payload.length < 4 || payload[0] !== 0x1B) {
     connLog.debug('[world] short/non-ESC payload — ignoring');
     return;
+  }
+
+  if (!verifyInboundGameCRC(payload)) {
+    connLog.warn('[world] inbound CRC mismatch (seq=0x%s) — processing anyway', payload[1].toString(16));
   }
 
   const seq = payload[1] - 0x21;

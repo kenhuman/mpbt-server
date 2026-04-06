@@ -71,18 +71,27 @@ export function encodeString(s: string): Buffer {
 
 // ── CRC algorithm ─────────────────────────────────────────────────────────────
 // CONFIRMED from FUN_00402e30 (server→client validator in MPBTWIN.EXE).
-// The server must produce CRC bytes that FUN_00402e30 will accept.
+// Inbound seeds confirmed by cross-reference with RazorWing/solaris repo
+// (INBOUND_SEED_RPS=795941=0x0C2525, INBOUND_SEED_COMBAT=804165=0x0C4545).
+//
+// Direction | Mode  | Seed      | Hex
+// ----------|-------|-----------|----------
+// S→C       | Lobby | 678949    | 0x0A5C25   (0xFFFFFFE0 + 0x0A5C45) & mask
+// S→C       | Combat| 678981    | 0x0A5C45
+// C→S       | Lobby | 795941    | 0x0C2525
+// C→S       | Combat| 804165    | 0x0C4545
 
-const CRC_INIT_LOBBY  = 0x0A5C25; // (0xFFFFFFE0 + 0x0A5C45) & 0xFFFFFFFF
-const CRC_INIT_COMBAT = 0x0A5C45;
+// Server → Client seeds (used when generating CRC for outbound frames)
+const CRC_OUTBOUND_LOBBY  = 0x0A5C25; // (0xFFFFFFE0 + 0x0A5C45) & 0xFFFFFFFF
+const CRC_OUTBOUND_COMBAT = 0x0A5C45;
 
-/**
- * Compute the 19-bit CRC value for a data buffer.
- * @param data   All bytes to checksum (cmd_byte + args + 0x20 terminator).
- * @param combat false = lobby init (default), true = combat init.
- */
-export function computeGameCRC(data: Buffer, combat = false): number {
-  let crc = combat ? CRC_INIT_COMBAT : CRC_INIT_LOBBY;
+// Client → Server seeds (used when verifying CRC on inbound frames)
+const CRC_INBOUND_LOBBY   = 0x0C2525; // 795941 — confirmed: RazorWing INBOUND_SEED_RPS
+const CRC_INBOUND_COMBAT  = 0x0C4545; // 804165 — confirmed: RazorWing INBOUND_SEED_COMBAT
+
+/** Core 19-bit LFSR CRC with explicit seed (matches FUN_00402e30 in MPBTWIN.EXE). */
+function computeGameCRCWithSeed(data: Buffer, seed: number): number {
+  let crc = seed;
 
   for (const b of data) {
     crc = crc * 2;
@@ -101,6 +110,55 @@ export function computeGameCRC(data: Buffer, combat = false): number {
   if (s & 0x80000) s = (s & 0x7FFFE) | 1;
 
   return s ^ ((crc & 0x70000) >> 16);
+}
+
+/**
+ * Compute the 19-bit CRC for an outbound (server → client) frame buffer.
+ * @param data   All bytes to checksum (seq_byte + cmd_byte + args + 0x20 terminator).
+ * @param combat false = lobby seed (default), true = combat seed.
+ */
+export function computeGameCRC(data: Buffer, combat = false): number {
+  return computeGameCRCWithSeed(data, combat ? CRC_OUTBOUND_COMBAT : CRC_OUTBOUND_LOBBY);
+}
+
+/**
+ * Verify the CRC of an inbound (client → server) game frame.
+ *
+ * Expected payload layout (as received in the ARIES SYNC packet):
+ *   [0x1B] [seq+0x21] [cmd+0x21] [args...] [0x20] [crc0] [crc1] [crc2] [optional 0x1B]
+ *
+ * CRC input covers bytes from seq_byte through (and including) the 0x20 terminator.
+ * The three CRC bytes are base-85 decoded into the expected 19-bit value.
+ *
+ * @param payload  Raw ARIES payload starting with 0x1B.
+ * @param combat   false = lobby seed (default), true = combat seed.
+ * @returns true if the CRC matches, false otherwise.
+ */
+export function verifyInboundGameCRC(payload: Buffer, combat = false): boolean {
+  if (payload.length < 5 || payload[0] !== 0x1B) return false;
+
+  // Trailing 0x1B may or may not be present (RESEARCH.md §3 note).
+  const hasTrailingEsc = payload[payload.length - 1] === 0x1B;
+  const frameEnd = hasTrailingEsc ? payload.length - 1 : payload.length;
+
+  // Need at least 3 CRC bytes after the leading ESC + at least one data byte.
+  if (frameEnd < 5) return false;
+
+  // Last 3 bytes of the frame (before optional trailing ESC) are the CRC.
+  const crcOffset = frameEnd - 3;
+  const d0 = payload[crcOffset]     - 0x21;
+  const d1 = payload[crcOffset + 1] - 0x21;
+  const d2 = payload[crcOffset + 2] - 0x21;
+  const receivedCRC = d0 * 85 * 85 + d1 * 85 + d2;
+
+  // CRC input: everything from seq_byte (payload[1]) up to (not including) CRC bytes.
+  const crcData = payload.slice(1, crcOffset);
+  const expectedCRC = computeGameCRCWithSeed(
+    crcData,
+    combat ? CRC_INBOUND_COMBAT : CRC_INBOUND_LOBBY,
+  );
+
+  return expectedCRC === receivedCRC;
 }
 
 /** Encode a CRC value as 3 base-85 bytes (FUN_00402be0(2, crc)). */

@@ -188,10 +188,27 @@ The CRC is a 19-bit linear-feedback shift register.
 
 ### Parameters
 
+The CRC seed depends on **both** the connection mode (RPS/Combat) **and** the direction of the frame.
+
+**Server → Client** (outbound; seed used when generating CRC to send):
+
 | Context | Init value | Notes |
 |---------|-----------|-------|
-| Lobby | `0x0A5C25` | Derived: `(0xFFFFFFE0 + 0x0A5C45) & 0xFFFFFFFF` |
-| Combat | `0x0A5C45` | Read directly from `Frame_VerifyCRC` (`FUN_00402e30`) |
+| Lobby / RPS | `0x0A5C25` | Derived: `(0xFFFFFFE0 + 0x0A5C45) & 0xFFFFFFFF` |
+| Combat       | `0x0A5C45` | Read directly from `Frame_VerifyCRC` (`FUN_00402e30`) |
+
+**Client → Server** (inbound; seed used to validate received frames):
+
+| Context | Init value | Notes |
+|---------|-----------|-------|
+| Lobby / RPS | `0x0C2525` (795,941) | Confirmed by independent RE — RazorWing/solaris `INBOUND_SEED_RPS` |
+| Combat       | `0x0C4545` (804,165) | Confirmed by independent RE — RazorWing/solaris `INBOUND_SEED_COMBAT` |
+
+Both pairs follow the same nibble-rotation pattern:
+- Outbound RPS: `0xA5C25` → Inbound RPS: `0xC2525`
+- Outbound Combat: `0xA5C45` → Inbound Combat: `0xC4545`
+
+The algorithm is **identical** in both directions; only the initial seed differs.
 
 ### Coverage
 
@@ -1193,6 +1210,30 @@ gate handlers `FUN_00429870` and `FUN_00429a00` — it fires when the client rec
   analysis was done purely through static RE
 - **Custom TypeScript server** (`src/server.ts`) — used to trigger client paths
   and observe what the binary did next
+
+### Third-Party Cross-Reference — RazorWing/solaris
+
+An independent MPBT RE project at [https://github.com/RazorWing/solaris](https://github.com/RazorWing/solaris)
+cross-validates several findings in this document. **Important caveat**: it analyses
+a different build of `Mpbtwin.exe` (MD5: `60c8febf6b4e0a319367e3c6557d705e`) — function
+addresses and dispatch table offsets do not match our binary's. The **protocol wire
+format** (base-85 encoding, 19-bit LFSR checksum, ESC framing) is identical.
+
+Specific confirmed findings from that repo:
+
+| Finding | Our RESEARCH.md | RazorWing source |
+|---------|----------------|-----------------|
+| Outbound CRC seeds | `0x0A5C25` / `0x0A5C45` | `calculate_checksum()` seeds 678949/678981 ✓ |
+| **Inbound CRC seeds (NEW)** | `0x0C2525` / `0x0C4545` | `INBOUND_SEED_RPS=795941`, `INBOUND_SEED_COMBAT=804165` |
+| COMMEG32 queue msg type=0 | §17 — all game packets use type 0 | `build_queue_message()` confirms |
+| Short-format flag byte non-zero | §17 — `buffer[3] != 0` for short msg | `flag = 0x01` in `build_short_message()` |
+| Cmd7 wire format | §11 | `build_cmd7_packet()` matches exactly |
+| ESC `0x1B` frame delimiter | §3 | `encode_final_packet()` suffix `b'\x1B'` |
+
+The repo also documents COMMEG32 ARIES message types 0/27/28/29 (heartbeat/ping/timing
+configuration) in detail — not covered in this file because the server does not currently
+implement COMMEG32-level timing; see `commeg32_message_types.md` in that repo for the
+full `ParseProtocolMessage` switch-table and timing histogram structures.
 
 ### RE Process
 

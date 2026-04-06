@@ -23,7 +23,7 @@ import * as os from 'os';
 import { ARIES_PORT, WORLD_PORT, Msg } from './protocol/constants.js';
 import { PacketParser, buildPacket, hexDump } from './protocol/aries.js';
 import { parseLoginPayload, buildLoginRequest, buildSyncAck, buildWelcomePacket } from './protocol/auth.js';
-import { buildMechListPacket, buildMenuDialogPacket, buildRedirectPacket, buildCmd20Packet, parseClientCmd7, decodeArgType4, type MechEntry } from './protocol/game.js';
+import { buildMechListPacket, buildMenuDialogPacket, buildRedirectPacket, buildCmd20Packet, parseClientCmd7, decodeArgType4, verifyInboundGameCRC, type MechEntry } from './protocol/game.js';
 import { loadMechs } from './data/mechs.js';
 import { MECH_STATS } from './data/mech-stats.js';
 import { PlayerRegistry, ClientSession } from './state/players.js';
@@ -357,6 +357,10 @@ function handleGameData(
   if (payload.length < 4 || payload[0] !== 0x1B) {
     connLog.debug('[game] short/non-ESC payload — ignoring');
     return;
+  }
+
+  if (!verifyInboundGameCRC(payload)) {
+    connLog.warn('[game] inbound CRC mismatch (seq=0x%s) — processing anyway', payload[1].toString(16));
   }
 
   const seq = payload[1] - 0x21;
