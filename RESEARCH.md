@@ -612,12 +612,17 @@ had the actual stats at that line; our copy is incomplete.
 
 **Fix Applied:** The server now sends the stats text directly (not as `#NNN`).
 `buildMechExamineText()` in `src/server.ts` builds a compact stats string from
-`MECH_STATS` (src/data/mech-stats.ts), using `0x8D` (0x8D — the MPBT dialog
-line separator, swapped with NUL by the renderer in `FUN_00433d00`) between
-lines.  The `encodeString()` function was updated to use `'latin1'` encoding so
-that `0x8D` passes through faithfully.  The only forbidden byte in text content
-is `0x1B` (ESC), which would prematurely terminate the ESC accumulator
-(`FUN_00429510`) in the client.
+`MECH_STATS` (src/data/mech-stats.ts).  Lines are separated with `0x5C` (`\`) —
+`FUN_00433310` NULs this byte in its staging buffer before calling `FUN_00431f10`,
+so it acts as a clean line break.  (`0x8D` is wrong: `FUN_00431e00` treats it as
+signed char −115, producing font-width table index −460 → memory corruption / hang.)
+The text is sent as raw latin1 with a 2-byte base-85 length prefix via
+`encodeB85_1()`, NOT via `encodeString()` (which uses a 1-byte prefix misread by
+`FUN_0040c130` as length 1732, triggering "RPS command 20 failed.").  The only
+forbidden byte in text content is `0x1B` (ESC), which would prematurely terminate
+the ARIES ESC accumulator (`FUN_00429510`); both `encodeString()` and
+`buildCmd20Args()` now encode to a Buffer first and then check `raw.includes(0x1B)`
+to catch characters whose latin1 encoding truncates to 0x1B.
 
 ### Mode Values — Independent Dialog Objects
 

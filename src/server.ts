@@ -85,11 +85,16 @@ function buildMechExamineText(mech: MechEntry): string {
   // Known mech: build a compact but informative summary.
   const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
   const title = stats.name ? `${mech.typeString}  ${stats.name}` : mech.typeString;
-  const specs = `${cap(stats.weightClass)}  ${stats.tonnage}T  ${stats.maxSpeedKph}kph` +
-                (stats.jumpMeters ? `  Jump:${stats.jumpMeters}m` : '');
-  const arms  = stats.armament.length > 0 ? stats.armament.join(' ') : '';
+  const specParts: string[] = [cap(stats.weightClass)];
+  if (stats.tonnage != null) specParts.push(`${stats.tonnage}T`);
+  if (stats.maxSpeedKph != null) specParts.push(`${stats.maxSpeedKph}kph`);
+  if (stats.jumpMeters != null) specParts.push(`Jump:${stats.jumpMeters}m`);
+  const specs = specParts.join('  ');
+  const arms  = Array.isArray(stats.armament) && stats.armament.length > 0 ? stats.armament.join(' ') : '';
 
-  const lines = arms ? [title, specs, arms] : [title, specs];
+  const lines = [title];
+  if (specs) lines.push(specs);
+  if (arms) lines.push(arms);
   const full  = lines.join(SEP);
   // Truncate to 84 bytes if the armament list is very long (safety guard).
   return Buffer.byteLength(full, 'latin1') <= 84 ? full : Buffer.from(full, 'latin1').subarray(0, 84).toString('latin1');

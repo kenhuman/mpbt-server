@@ -63,8 +63,8 @@ export function encodeAsByte(v: number): Buffer {
  * terminate the ARIES inner frame in the client's ESC accumulator (FUN_00429510).
  */
 export function encodeString(s: string): Buffer {
-  if (s.includes('\x1b')) throw new RangeError('encodeString: text must not contain ESC (0x1B)');
   const raw = Buffer.from(s, 'latin1');
+  if (raw.includes(0x1b)) throw new RangeError('encodeString: text must not contain ESC (0x1B)');
   if (raw.length > 84) throw new RangeError(`encodeString: string too long (${raw.length} > 84)`);
   return Buffer.concat([Buffer.from([raw.length + 0x21]), raw]);
 }
@@ -325,7 +325,7 @@ export function buildMenuDialogPacket(
 //   [type1  2B: dialog_id]   FUN_0040d4c0 → FUN_00402b10(1)  — base-85(1)
 //   [byte   1B: mode]        FUN_00402f40                     — (mode + 0x21)
 //   [strlen 2B: text_len]    FUN_0040c130 → FUN_00403200 → FUN_00402b10(1)
-//   [text_len bytes: raw text content]                        — latin1, 0x8D allowed
+//   [text_len bytes: raw text content]                        — latin1, use 0x5C ('\\') as line separator
 //
 // IMPORTANT: the string uses base-85(1) length prefix (encodeB85_1), NOT the
 // 1-byte encodeString prefix.  encodeString is only correct for cmd-26 strings
@@ -340,16 +340,18 @@ export function buildMenuDialogPacket(
 //
 // Mode=2 behaviour (FUN_00411a10, param_4==2 branch):
 //   • If text[0]=='#', expands NNN digits → DAT_00473ad8[n] → MPBT.MSG line
-//   • Sets DAT_004dde61 = 0x8D (line separator used by FUN_00433310)
-//   • Passes text to FUN_00433310 which renders it, splitting on 0x8D
+//   • Sets DAT_004dde61 = 0x5C (line separator used by FUN_00433310)
+//   • Passes text to FUN_00433310 which renders it, splitting on 0x5C ('\\')
+//     (0x8D is wrong: FUN_00431e00 treats it as signed-char −115 → font-width
+//      table index −460 → memory corruption / hang)
 //   • Creates "Ok" button; sets dialog flags=9, callback=FUN_00419370
 //
 // One packet is all that is needed — send mode=2 with the complete text directly.
 
 /** Build args for a single server cmd-20 (text-dialog) frame. */
 export function buildCmd20Args(dialogId: number, mode: number, text: string): Buffer {
-  if (text.includes('\x1b')) throw new RangeError('buildCmd20Args: text must not contain ESC (0x1B)');
   const raw = Buffer.from(text, 'latin1');
+  if (raw.includes(0x1b)) throw new RangeError('buildCmd20Args: text must not contain ESC (0x1B)');
   if (raw.length > 84) throw new RangeError(`buildCmd20Args: text too long (${raw.length} > 84)`);
   return Buffer.concat([
     encodeB85_1(dialogId),  // 2 bytes: dialog_id  via FUN_0040d4c0 → FUN_00402b10(1)

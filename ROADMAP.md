@@ -65,7 +65,7 @@ These files are gitignored — place them in `research/` for local use.
 | Task | Status | Notes |
 |---|---|---|
 | Parse real `.MEC` files → `src/data/mechs.ts` | ✅ | `loadMechs()` scans `mechdata/*.MEC`, assigns correct `mech_id` from MPBT.MSG variant table; `mechType` field hardcoded to 0 pending M2 binary RE; `variant`/`name` empty → client falls back to its own MPBT.MSG lookup |
-| Cmd 20 — mech examine/stats response | ✅ | Single mode=2 packet with `#NNN` text → client resolves full stats from MPBT.MSG via `DAT_00473ad8` jump table; no server-side .MEC data needed |
+| Cmd 20 — mech examine/stats response | ✅ | Single mode=2 packet with direct stats text built by `buildMechExamineText()` from `MECH_STATS`; `0x5C` (`\`) is the line separator (`FUN_00433310` NULs it before rendering); `#NNN` shortcode is NOT used — our MPBT.MSG has incomplete/stale stats data |
 | Cmd `0x1D` — cancel/ESC in menu dialogs | ✅ | Resolved — server re-sends mech list; sending nothing freezes client |
 | ACK reply for seq > 42 | 🔬 | Trigger condition documented in RESEARCH.md §9; reply format unknown |
 
