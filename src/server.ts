@@ -416,15 +416,14 @@ function handleGameData(
         });
         issueWorldRedirect(session, connLog, capture);
       } else {
-        // First login — no character yet.  Send the player directly to the world
-        // server where the allegiance-picker wizard runs.  Character creation
-        // happens there after the player selects a house, so we only record the
-        // display name here; allegiance is intentionally omitted so the world
-        // server knows to show the picker.
+        // First login — no character yet.  Send to world server which will
+        // auto-create the character (Davion default) before cmd-3 arrives,
+        // bypassing the allegiance-picker wizard.  Allegiance is intentionally
+        // omitted from the launch record so the world server detects "new player".
         const displayName = session.username.slice(0, 64);
         session.displayName = displayName;
         connLog.info(
-          '[game] first login — no character, sending to world wizard (displayName="%s")',
+          '[game] first login — no character, world server will auto-create (displayName="%s")',
           displayName,
         );
         launchRegistry.record(session.username, {

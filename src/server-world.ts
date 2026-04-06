@@ -166,9 +166,13 @@ async function handleWorldLogin(
     );
   }
 
-  // displayName and allegiance are set by the lobby before REDIRECT.
-  // If missing (e.g. direct connection for testing), fall back to DB lookup.
-  if (!session.displayName && session.accountId !== undefined) {
+  // Ensure session has both displayName and allegiance before cmd-3 arrives.
+  // Returning players: lobby populates both from the launch record.
+  // New players: lobby sets displayName but deliberately omits allegiance so the
+  //   world server knows to create the character.  We auto-create here using a
+  //   default allegiance (Davion) — this bypasses the Cmd7 wizard entirely.
+  // Direct-connect (testing): neither field set; fall back to DB then auto-create.
+  if (session.accountId !== undefined && session.allegiance === undefined) {
     const character = await findCharacter(session.accountId);
     if (character) {
       session.displayName = character.display_name;
@@ -177,6 +181,36 @@ async function handleWorldLogin(
         '[world-login] character loaded from DB: displayName="%s" allegiance=%s',
         character.display_name, character.allegiance,
       );
+    } else {
+      // First login — auto-create a character so the Cmd7 allegiance picker is
+      // never shown.  Use the lobby-supplied displayName (= username by default)
+      // with 'Davion' as the starting house.  If the name is already taken
+      // (edge case / race), append the accountId and retry once.
+      const DEFAULT_ALLEGIANCE: Allegiance = 'Davion';
+      const baseName = (session.displayName ?? session.username).slice(0, 84) || 'Pilot';
+      let created: Awaited<ReturnType<typeof createCharacter>> | null = null;
+      for (let attempt = 0; attempt < 2 && created === null; attempt++) {
+        const name = attempt === 0 ? baseName : `${baseName}${session.accountId}`;
+        try {
+          created = await createCharacter(session.accountId, name, DEFAULT_ALLEGIANCE);
+        } catch (err: unknown) {
+          if ((err as { code?: string }).code !== '23505') throw err;
+          connLog.warn('[world-login] display name "%s" taken, retrying with suffix', name);
+        }
+      }
+      if (created) {
+        session.displayName = created.display_name;
+        session.allegiance  = created.allegiance ?? undefined;
+        connLog.info(
+          '[world-login] auto-created character: displayName="%s" allegiance=%s',
+          created.display_name, created.allegiance,
+        );
+      } else {
+        connLog.warn(
+          '[world-login] could not auto-create character for "%s" (accountId=%d) — wizard will show',
+          session.username, session.accountId,
+        );
+      }
     }
   }
 
