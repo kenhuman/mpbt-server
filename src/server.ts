@@ -410,6 +410,11 @@ function handleGameData(
     // SERVER RESPONSE — direct text (NOT the legacy "#NNN" shortcode):
     //   ONE packet: mode=2, text = mech stats built by buildMechExamineText().
     //
+    //   String encoding: encodeB85_1(len) + raw bytes — NOT encodeString.
+    //   FUN_00411D90 reads the string via FUN_0040c130 → FUN_00402b10(1) (base-85 2-byte
+    //   length prefix).  encodeString's 1-byte prefix caused the client to decode 2 bytes
+    //   as a 1732-byte length, fail the bounds check → return -1 ("RPS command 20 failed.").
+    //
     //   The legacy "#NNN" path (confirmed by RE of FUN_00411a10, FUN_00473ad8) does a
     //   client-side lookup: DAT_00473ad8[mech_id] → MPBT.MSG line → stats string.
     //   Unfortunately our MPBT.MSG has "Mechs now in use:" at the expected line (252)

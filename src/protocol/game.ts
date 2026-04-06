@@ -317,24 +317,44 @@ export function buildMenuDialogPacket(
 }
 
 // ── Command 20 — Text dialog (server→client) ──────────────────────────────────
-// CONFIRMED from Cmd20_ParseTextDialog (FUN_00411D90). See RESEARCH.md §14.
+// CONFIRMED from Cmd20_ParseTextDialog (FUN_00411D90) + FUN_00411a10 RE.
+// See RESEARCH.md §14.
 //
 // Wire layout (args after seq+cmd bytes):
-//   [type1 2B: dialog_id]   arbitrary panel ID
-//   [byte  1B: mode]        0=clear  1=append line  2=finalise/show
-//   [string:   text]        content for mode=1; empty for mode=0 and mode=2
+//   [type1  2B: dialog_id]   FUN_0040d4c0 → FUN_00402b10(1)  — base-85(1)
+//   [byte   1B: mode]        FUN_00402f40                     — (mode + 0x21)
+//   [strlen 2B: text_len]    FUN_0040c130 → FUN_00403200 → FUN_00402b10(1)
+//   [text_len bytes: raw text content]                        — latin1, 0x8D allowed
 //
-// Typical sequence to display a stats panel:
-//   buildCmd20Packet(id, 0, '')       — clear the panel
-//   buildCmd20Packet(id, 1, line)     — append one text line (repeat as needed)
-//   buildCmd20Packet(id, 2, '')       — finalise / make visible
+// IMPORTANT: the string uses base-85(1) length prefix (encodeB85_1), NOT the
+// 1-byte encodeString prefix.  encodeString is only correct for cmd-26 strings
+// read by FUN_0040c0d0, which uses a different 1-byte reader (FUN_00402f40).
+// Using encodeString here makes the client decode 2 bytes as a huge length (>1700)
+// and immediately return -1 ("RPS command 20 failed.").
+//
+// Modes (confirmed by FUN_00411a10 decompile):
+//   mode=0 → "Yes"/"No" dialog variant A (NOT for stats; do not use)
+//   mode=1 → "Yes"/"No" dialog variant B (NOT for stats; do not use)
+//   mode=2 → text dialog with "Ok" button — use this for mech stats
+//
+// Mode=2 behaviour (FUN_00411a10, param_4==2 branch):
+//   • If text[0]=='#', expands NNN digits → DAT_00473ad8[n] → MPBT.MSG line
+//   • Sets DAT_004dde61 = 0x8D (line separator used by FUN_00433310)
+//   • Passes text to FUN_00433310 which renders it, splitting on 0x8D
+//   • Creates "Ok" button; sets dialog flags=9, callback=FUN_00419370
+//
+// One packet is all that is needed — send mode=2 with the complete text directly.
 
 /** Build args for a single server cmd-20 (text-dialog) frame. */
 export function buildCmd20Args(dialogId: number, mode: number, text: string): Buffer {
+  if (text.includes('\x1b')) throw new RangeError('buildCmd20Args: text must not contain ESC (0x1B)');
+  const raw = Buffer.from(text, 'latin1');
+  if (raw.length > 84) throw new RangeError(`buildCmd20Args: text too long (${raw.length} > 84)`);
   return Buffer.concat([
-    encodeB85_1(dialogId),  // type1: 2 bytes
-    encodeAsByte(mode),     // byte:  0=clear 1=append 2=finalise
-    encodeString(text),     // string: content (empty for mode 0 and 2)
+    encodeB85_1(dialogId),  // 2 bytes: dialog_id  via FUN_0040d4c0 → FUN_00402b10(1)
+    encodeAsByte(mode),     // 1 byte:  mode        via FUN_00402f40
+    encodeB85_1(raw.length), // 2 bytes: text length via FUN_0040c130 → FUN_00402b10(1)
+    raw,                    // N bytes: raw text (0x8D = line separator for FUN_00433310)
   ]);
 }
 
