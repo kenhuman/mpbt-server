@@ -308,7 +308,9 @@ function handleWorldGameData(
     }
     const allegiance = ALLEGIANCES[allegianceIdx] as Allegiance;
     connLog.info('[world] cmd-7 (allegiance dialog): player chose %s', allegiance);
-    applyAllegiancePick(session, allegiance, 'cmd-7', connLog, capture);
+    // skipReinit=true: scene is already initialised; a second Cmd4 would crash
+    // the client by overflowing the fixed-size DAT_004ddf70 window array.
+    applyAllegiancePick(session, allegiance, 'cmd-7', connLog, capture, true);
 
   } else if (cmdIdx === 4) {
     // Cmd-4: chat text from the player (FUN_0040d280 in MPBTWIN.EXE).
@@ -363,13 +365,21 @@ function handleWorldGameData(
  *
  * Persists the choice to the database (INSERT new character or UPDATE existing)
  * and then sends the post-allegiance arena reinit sequence to the client.
+ *
+ * @param skipReinit  When true, skip the Cmd4 SceneInit reinit and only send
+ *   Cmd3 + Cmd5.  Use this when the scene is already initialised (e.g. after a
+ *   Cmd7 dialog pick).  A second Cmd4 would call FUN_00414b70 which leaks the
+ *   old mech-display / chat windows without destroying them first, overflowing
+ *   the fixed-size DAT_004ddf70 window array → NULL return from FUN_00431880 →
+ *   crash on the next DAT_00472ca4 write.
  */
 function applyAllegiancePick(
-  session:   ClientSession,
+  session:    ClientSession,
   allegiance: Allegiance,
-  source:    string,
-  connLog:   Logger,
-  capture:   CaptureLogger,
+  source:     string,
+  connLog:    Logger,
+  capture:    CaptureLogger,
+  skipReinit  = false,
 ): void {
   session.allegiance = allegiance;
 
@@ -400,8 +410,17 @@ function applyAllegiancePick(
     connLog.warn('[world] %s: no accountId — allegiance not persisted to DB', source);
   }
 
-  connLog.info('[world] %s: sending post-allegiance reinit (no wizard)', source);
-  sendPostAllegianceReinit(session, allegiance, connLog, capture);
+  if (skipReinit) {
+    // Scene already initialised; client's click handler already put up the
+    // hourglass via FUN_00433ef0.  Just acknowledge and restore the cursor.
+    connLog.info('[world] %s: allegiance set — sending Cmd3+Cmd5 only (no reinit)', source);
+    const { socket } = session;
+    send(socket, buildCmd3BroadcastPacket(`Allegiance set to ${allegiance}.`, nextSeq(session)), capture, 'CMD3_ALLEGIANCE');
+    send(socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
+  } else {
+    connLog.info('[world] %s: sending post-allegiance reinit', source);
+    sendPostAllegianceReinit(session, allegiance, connLog, capture);
+  }
 }
 
 /**
