@@ -487,7 +487,7 @@ function applyAllegiancePick(
     send(
       socket,
       buildCmd3BroadcastPacket(
-        `Welcome to House ${allegiance}! Click Continue in the dialog below.`,
+        `Welcome to House ${allegiance}! Click #1 below to continue.`,
         nextSeq(session),
       ),
       capture,
@@ -497,8 +497,8 @@ function applyAllegiancePick(
       socket,
       buildMenuDialogPacket(
         WELCOME_DIALOG_ID,
-        `House ${allegiance} — Welcome, Pilot!`,
-        ['Continue →'],
+        `House ${allegiance}: Welcome, Pilot!`,
+        ['[ Continue ]'],
         nextSeq(session),
       ),
       capture,
