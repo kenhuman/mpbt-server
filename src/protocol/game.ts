@@ -335,10 +335,12 @@ export function parseClientCmd4(
 /**
  * Parse a client-sent cmd-21 editable-text reply.
  *
- * INFERENCE from MPBTWIN.EXE:
- *   cmd 36 (wire 0x45) creates an editable text dialog via FUN_004161a0.
- *   Submitting the typed value emits client cmd 21 via FUN_00418760:
+ * CONFIRMED by MPBTWIN.EXE:
+ *   local compose builder FUN_00416db0 submits cmd 21 via FUN_00418760:
  *     [type4 dialog_id] [raw-string via FUN_00403100]
+ *
+ * The dialog itself may be opened locally by the `listId=1000` inquiry submenu
+ * or by server command 37 (`FUN_00416d40`), which wraps FUN_00416db0.
  */
 export function parseClientCmd21TextReply(
   payload: Buffer,
@@ -413,30 +415,33 @@ export function buildMenuDialogPacket(
   return buildGamePacket(7, buildMenuDialogArgs(listId, title, items), false, seq);
 }
 
-// ── Command 36 — Editable text prompt (server→client) ───────────────────────
-// INFERENCE from MPBTWIN.EXE FUN_004161a0 / FUN_00418760:
+// ── Command 36 — Read / Reply message view (server→client) ──────────────────
+// CONFIRMED from MPBTWIN.EXE FUN_004161a0:
 //
 // Wire layout (args after seq+cmd bytes):
 //   [type4 5B: dialog_id]
-//   [strlen 2B: prompt_len via FUN_00402be0(1)]
-//   [prompt_len bytes: raw prompt text]
+//   [strlen 2B: text_len via FUN_00402be0(1)]
+//   [text_len bytes: raw text]
 //
-// This creates a writable text-entry dialog. Submitting the text sends client
-// cmd 21 back to the server.
+// dialog_id == 0:
+//   opens a read-only text page with Enter / optional paging controls.
+// dialog_id != 0:
+//   opens the same page but adds Reply; pressing R reopens the local compose
+//   builder FUN_00416db0(dialog_id, NULL), and that later emits cmd 21.
 
-export function buildCmd36TextEntryPromptArgs(dialogId: number, prompt: string): Buffer {
+export function buildCmd36MessageViewArgs(dialogId: number, text: string): Buffer {
   return Buffer.concat([
     encodeB85_4(dialogId),
-    encodeB85LengthString(prompt),
+    encodeB85LengthString(text),
   ]);
 }
 
-export function buildCmd36TextEntryPromptPacket(
+export function buildCmd36MessageViewPacket(
   dialogId: number,
-  prompt: string,
+  text: string,
   seq = 0,
 ): Buffer {
-  return buildGamePacket(36, buildCmd36TextEntryPromptArgs(dialogId, prompt), false, seq);
+  return buildGamePacket(36, buildCmd36MessageViewArgs(dialogId, text), false, seq);
 }
 
 // ── Command 20 — Text dialog (server→client) ──────────────────────────────────

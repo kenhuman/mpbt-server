@@ -33,7 +33,7 @@ import {
   buildWelcomePacket,
 } from './protocol/auth.js';
 import {
-  buildCmd36TextEntryPromptPacket,
+  buildCmd36MessageViewPacket,
   buildMenuDialogPacket,
   parseClientCmd4,
   parseClientCmd21TextReply,
@@ -81,7 +81,6 @@ const ALL_ROSTER_LIST_ID = 0x3F4;
 const INQUIRY_MENU_ID    = 1000;
 const PERSONNEL_LIST_ID  = 0x3F2;
 const PERSONNEL_MORE_ID  = 0x95;
-const COMSTAR_PROMPT_MAX = 84;
 let nextWorldRosterId    = 1;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -200,10 +199,10 @@ function buildPersonnelRecordLines(target: ClientSession, page: number): string[
   ];
 }
 
-function buildComstarPrompt(target: ClientSession): string {
-  const prompt = `Send a ComStar message to ${getDisplayName(target)}:`;
-  let trimmed = prompt;
-  while (Buffer.byteLength(trimmed, 'latin1') > COMSTAR_PROMPT_MAX) {
+function buildComstarDeliveryText(senderName: string, text: string): string {
+  const raw = `ComStar message from ${senderName}\\${text}`;
+  let trimmed = raw.replace(/\x1b/g, '?');
+  while (Buffer.byteLength(trimmed, 'latin1') > (85 * 85 - 1)) {
     trimmed = trimmed.slice(0, -1);
   }
   return trimmed;
@@ -337,7 +336,6 @@ function handleComstarTextReply(
 
   const senderName = getDisplayName(session);
   const targetName = getDisplayName(target);
-  const outbound = `[ComStar] ${senderName}: ${clean}`;
   const ack = `ComStar sent to ${targetName}.`;
 
   connLog.info(
@@ -348,7 +346,13 @@ function handleComstarTextReply(
     clean,
   );
 
-  target.socket.write(buildCmd3BroadcastPacket(outbound, nextSeq(target)));
+  target.socket.write(
+    buildCmd36MessageViewPacket(
+      getComstarId(session),
+      buildComstarDeliveryText(senderName, clean),
+      nextSeq(target),
+    ),
+  );
   send(
     session.socket,
     buildCmd3BroadcastPacket(ack, nextSeq(session)),
@@ -734,12 +738,9 @@ function handleWorldGameData(
       }
 
       if (parsed.selection === 1) {
-        connLog.info('[world] inquiry submenu: ComStar compose for target=%d', targetId);
-        send(
-          session.socket,
-          buildCmd36TextEntryPromptPacket(targetId, buildComstarPrompt(target), nextSeq(session)),
-          capture,
-          'CMD36_COMSTAR_PROMPT',
+        connLog.info(
+          '[world] inquiry submenu: local ComStar compose expected for target=%d',
+          targetId,
         );
         return;
       }
