@@ -4,6 +4,14 @@ These prompts are designed for `GhidrAssist` with `GhidrAssistMCP` enabled.
 Each one is scoped to a single reverse-engineering task so the model stays
 grounded and produces reviewable output.
 
+Before using any prompt in this file:
+
+- read [`RESEARCH.md`](../RESEARCH.md)
+- read [`symbols.json`](../symbols.json)
+- summarize the already-confirmed findings relevant to the target
+- assume the majority of the RE has already been done, and avoid re-solving
+  documented protocol details from scratch
+
 ## Output Contract
 
 Ask for this structure every time:
@@ -40,6 +48,9 @@ Seed evidence:
 - function(s): FUN_100014e0, FUN_00429870
 - local project docs already describe the lobby handshake and current world notes
 
+Before analyzing the binaries, summarize what RESEARCH.md and symbols.json
+already say about the post-REDIRECT path.
+
 Tasks:
 - identify the exact byte flow after REDIRECT
 - explain which side sends each frame first
@@ -60,6 +71,9 @@ Target:
 - dispatch table: DAT_00470198 or DAT_00470408
 - command index: <N>
 - handler address: <FUN_xxxxxxxx>
+
+Before proposing any name, check whether RESEARCH.md or symbols.json already
+documents this entry or nearby handlers.
 
 Tasks:
 - summarize what the handler reads from the frame buffer
@@ -122,6 +136,9 @@ Seed evidence:
 - Frame_VerifyCRC
 - string: "\x1b?MMC Copyright Kesmai Corp. 1991"
 - combat dispatch table: DAT_00470408
+
+Before tracing, summarize the current documented understanding from RESEARCH.md
+and only investigate what remains unresolved.
 
 Tasks:
 - identify the earliest write to g_combatMode that matters for network parsing

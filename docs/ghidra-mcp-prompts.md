@@ -6,6 +6,14 @@ tool names exposed by `bridge_mcp_ghidra.py`.
 Use them as task starters, not blind automation. Keep the model in read-only mode
 until the result is validated.
 
+Before using any prompt in this file:
+
+- read [`RESEARCH.md`](../RESEARCH.md)
+- read [`symbols.json`](../symbols.json)
+- summarize the relevant already-confirmed findings
+- assume the majority of the RE has already been completed and use MCP to fill
+  gaps rather than rediscover the established baseline
+
 ## Output Contract
 
 Require this structure every time:
@@ -51,6 +59,9 @@ Questions to answer:
 - what is the first client world command?
 - which globals or flags change state?
 
+Before tool use, summarize what RESEARCH.md and symbols.json already say about
+the handshake and treat that as the baseline.
+
 Do not rename or comment anything yet.
 Return using the required output contract.
 ```
@@ -82,6 +93,9 @@ Return:
 - UI or state side effects
 - a conservative canonical name
 - a one-line RESEARCH.md entry
+
+Before proposing a name, check whether the command or adjacent handlers are
+already documented in RESEARCH.md or symbols.json.
 
 Do not perform write operations.
 ```
