@@ -578,29 +578,65 @@ email=player@mpbt.local
 
 ## 14. Command 20 — Text Dialog (Server→Client)
 
-**Confirmed from `Cmd20_ParseTextDialog` (`FUN_00411D90`) in MPBTWIN.EXE.**
+**Confirmed from `Cmd20_ParseTextDialog` (`FUN_00411D90`) and inner handler
+`FUN_00411a10` in MPBTWIN.EXE.  Packet capture of the T1 test session confirmed
+the client-side payload format.**
 
-Command 20 is sent by the **server** to display a text block in the mech selection UI.
+Command 20 is sent by the **server** to display a stats panel in the mech selection UI.
 When the player presses `X` (examine) in the mech window, the server responds with
-one or more cmd-20 frames.
+**exactly one** cmd-20 packet.
 
 ### Wire Format (Server → Client, args after cmd byte)
 
 ```
-[type1  2B]  dialog_id     (arbitrary id targeting the stats panel)
-[byte   1B]  mode          0 = clear panel
-                           1 = append a line of text
-                           2 = finalise / show
-[string    ] text          (ASCII line; empty when mode=0 or mode=2)
+[type1  2B]  dialog_id     (arbitrary id; avoid 13/30/35/39 — trigger printf via MPBT.MSG)
+[byte   1B]  mode          2 = create/show stats panel with Ok button
+[string    ] text          "#NNN" where NNN is the zero-padded mech_id (3 ASCII digits)
 ```
+
+### `#NNN` Text Format
+
+The client's `FUN_00411a10` inspects `text[0]`:
+- If `text[0] == '#'` (0x23): decodes a 3-digit decimal mech_id from `text[1..3]`
+  using the formula `(d1-'0')*100 + (d2-'0')*10 + (d3-'0')`, looks up
+  `DAT_00473ad8[mech_id]` (a table of MPBT.MSG line numbers), fetches the
+  pre-formatted stats string via `FUN_00405840`, copies it over `text`, and
+  uses the expanded string as the dialog content.
+- If `text[0] != '#'`: the text is used as-is (arbitrary string in the dialog).
+
+The `#NNN` path is the **correct** path for mech stats.  The client has all stats
+embedded in MPBT.MSG; the server only provides the 3-digit mech_id redirect.
+
+**Example:** `examineText = "#156"` for ANH-1A (mech_id 156).
+
+### Mode Values — Independent Dialog Objects
+
+`FUN_00411a10` is called **once per cmd-20 packet** and creates a **new independent
+dialog object** each call.  Modes do NOT accumulate into one shared panel:
+
+| mode | Dialog content | Buttons | Flags |
+|------|---------------|---------|-------|
+| 0 | `text` (arbitrary) | MPBT.MSG[1]="Yes" + MPBT.MSG[2]="No" | 0xf |
+| 1 | `text` (arbitrary) | MPBT.MSG[1]="Yes" + MPBT.MSG[2]="No" | 0xf |
+| 2 | `text` (arbitrary) | MPBT.MSG[3]="Ok" | 9 (persistent) |
+
+For mech stats, **only mode=2 should be sent**.  Sending mode=0 or mode=1 first
+creates extra "Yes/No" dialogs that stack beneath the stats dialog and must each
+be dismissed separately; this was the root cause of the T1 freeze.
+
+The mode=2 dialog (flags=9) sets callback `FUN_00419370` as the Ok handler.
+`FUN_00419370` → `FUN_00411200` pops the dialog stack and, when the stack is
+empty and the lobby gate is open, calls `FUN_00410dc0` to restore the mech
+selection window.  No server communication is required to close the stats panel.
 
 ### Notes
 
 - `FUN_00401c90` (previously misidentified as the cmd-20 handler) is the
   **combat frame tick mover**, called every frame by the combat loop (`FUN_00408080`).
   It is unrelated to cmd 20.
-- The client cmd-20 packet (sent when `X` is pressed) has not been confirmed;
-  it likely carries the `mech_id` or `slot` being examined.
+- Special dialog_ids 13 (0xd), 30 (0x1e), 35 (0x23), 39 (0x27) route `text` through
+  a `sprintf`-style formatter using MPBT.MSG format strings (0x8c–0x8f).  Other ids
+  (including 5, our emulator's id) pass text directly.
 
 ---
 
@@ -650,14 +686,20 @@ The emulator loads the variant table at startup in `loadVariantIdMap()`
 
 These areas have not yet been reverse-engineered.
 
-### Command 20 — Client→Server Examine Request (PARTIALLY RESOLVED)
+### Command 20 — Client→Server Examine Request (RESOLVED)
 
-- Server→client format confirmed in §14: `type1(dialog_id) + byte(mode) + string(text)`
-- **Still suspected but not confirmed by capture:** the client sends
-  `[encodeAsByte(highlightIdx)]` — a single byte encoding the highlighted
-  slot (0-based, same as `g_mechWin_HighlightIdx` / `DAT_004dbd80`).
-  The server implementation uses this assumption; slot defaults to 0 on
-  a short or malformed payload.
+**Confirmed by packet capture of the T1 test session (session `22096a84`, 2026-04-05).**
+
+- Client frame payload (args after seq+cmd): `type4(slot + 1)` = 5 bytes (big-endian base-85)
+- `slot` is the 0-based highlight index in the mech window (= `g_mechWin_HighlightIdx`)
+- The 1-indexed encoding matches cmd-7 mech-selection exactly: `selection = slot + 1`
+- Decoded by server as `decodeArgType4(payload, 3)` → value, then `slot = value - 1`
+
+Capture evidence: client sent `21 21 21 21 22` at payload[3..7] for mech at slot 0
+→ `decodeArgType4` → 1 → slot = 0 (ANH-1A, s first sorted mech).
+
+**Server response:** ONE cmd-20 packet, mode=2, `text="#NNN"` (3-digit mech_id).
+See §14 for full details.
 
 ### Post-Redirect Game World Protocol
 

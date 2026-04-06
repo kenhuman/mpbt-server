@@ -52,7 +52,7 @@ The client reaches the mech selection screen, browses mechs, confirms selection,
 | Task | Status | Notes |
 |---|---|---|
 | Parse real `.MEC` files → `src/data/mechs.ts` | ❌ | 161 files in `mechdata/`; replace hardcoded `SAMPLE_MECHS` |
-| Cmd 20 — mech examine/stats response | ✅ | Implemented in PR #12; three-frame clear→line→finalise using `mech.typeString`; full stats pending M2 .MEC RE |
+| Cmd 20 — mech examine/stats response | ✅ | Single mode=2 packet with `#NNN` text → client resolves full stats from MPBT.MSG via `DAT_00473ad8` jump table; no server-side .MEC data needed |
 | Cmd `0x1D` — cancel/ESC in menu dialogs | ✅ | Resolved — server re-sends mech list; sending nothing freezes client |
 | ACK reply for seq > 42 | 🔬 | Trigger condition documented in RESEARCH.md §9; reply format unknown |
 

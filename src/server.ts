@@ -23,7 +23,7 @@ import * as os from 'os';
 import { ARIES_PORT, Msg } from './protocol/constants.js';
 import { PacketParser, buildPacket, hexDump } from './protocol/aries.js';
 import { parseLoginPayload, buildLoginRequest, buildSyncAck, buildWelcomePacket } from './protocol/auth.js';
-import { buildMechListPacket, buildMenuDialogPacket, buildRedirectPacket, buildCmd20Packet, parseClientCmd7, type MechEntry } from './protocol/game.js';
+import { buildMechListPacket, buildMenuDialogPacket, buildRedirectPacket, buildCmd20Packet, parseClientCmd7, decodeArgType4, type MechEntry } from './protocol/game.js';
 import { loadMechs } from './data/mechs.js';
 import { PlayerRegistry, ClientSession } from './state/players.js';
 import { Logger } from './util/logger.js';
@@ -352,22 +352,37 @@ function handleGameData(
     send(session.socket, mechPkt, capture, 'MECH_LIST');
 
   } else if (cmdIdx === 20) {
-    // cmd 20 = 'X' key — examine mech (requests mech stats from server).
-    // Client payload (suspected, not capture-confirmed): [encodeAsByte(highlightIdx)]
-    // where highlightIdx (0-based) matches g_mechWin_HighlightIdx (DAT_004dbd80).
-    // Server responds with cmd-20 text-dialog frames (RESEARCH.md §14):
-    //   mode 0 = clear panel, mode 1 = append line, mode 2 = finalise/show.
-    const CMD20_DIALOG_ID = 5; // arbitrary; 8,12,34,37,52,1000 have special client behaviour
-    const highlightIdx = payload.length > 3 ? payload[3] - 0x21 : 0;
-    const mech = MECHS[highlightIdx] ?? MECHS[0];
+    // cmd 20 = 'X' key / Examine button — client requests stats for the highlighted mech.
+    //
+    // CLIENT PAYLOAD (CONFIRMED by capture analysis — RESEARCH.md §16):
+    //   type4(slot + 1) at payload[3..7]  — 5-byte base-85 encoding, identical to
+    //   the cmd-7 mech-selection encoding; slot is 0-based, value is 1-indexed.
+    //
+    // SERVER RESPONSE (CONFIRMED by RE of FUN_00411D90 + FUN_00411a10 — RESEARCH.md §14):
+    //   ONE packet: mode=2, text="#NNN" where NNN = zero-padded mech_id (3 ASCII digits).
+    //   The client detects '*param_2 == 0x23' ('#'), looks up DAT_00473ad8[mech_id] to get
+    //   the MPBT.MSG line number for the mech's pre-formatted stats string, fetches it,
+    //   and renders it in a modal "Ok" dialog (flags=9, callback FUN_00419370).
+    //
+    // IMPORTANT: Do NOT send mode=0 or mode=1 packets.
+    //   FUN_00411a10 creates a NEW independent dialog object for EVERY call. Modes 0 and 1
+    //   produce "Yes"/"No" button dialogs (unrelated to stats) that stack under mode=2 and
+    //   were never closed by the server, causing the UI to appear frozen (T1 failure).
+    const CMD20_DIALOG_ID = 5;
+    let slot = 0;
+    if (payload.length >= 8) {
+      const [slotPlusOne] = decodeArgType4(payload, 3);
+      slot = Math.max(0, slotPlusOne - 1);
+    }
+    const mech = MECHS[slot] ?? MECHS[0];
     if (!mech) {
-      connLog.warn('[game] cmd 20: no mech at slot %d (MECHS empty?)', highlightIdx);
+      connLog.warn('[game] cmd 20: MECHS empty, cannot examine');
       return;
     }
-    connLog.info('[game] cmd 20 (examine): slot=%d typeString=%s', highlightIdx, mech.typeString);
-    send(session.socket, buildCmd20Packet(CMD20_DIALOG_ID, 0, '',             nextSeq(session)), capture, 'CMD20_CLEAR');
-    send(session.socket, buildCmd20Packet(CMD20_DIALOG_ID, 1, mech.typeString, nextSeq(session)), capture, 'CMD20_LINE');
-    send(session.socket, buildCmd20Packet(CMD20_DIALOG_ID, 2, '',             nextSeq(session)), capture, 'CMD20_FINAL');
+    const examineText = `#${String(mech.id).padStart(3, '0')}`;
+    connLog.info('[game] cmd 20 (examine): slot=%d mech_id=%d (%s) → %s',
+      slot, mech.id, mech.typeString, examineText);
+    send(session.socket, buildCmd20Packet(CMD20_DIALOG_ID, 2, examineText, nextSeq(session)), capture, 'CMD20_STATS');
 
   } else {
     connLog.debug('[game] cmd=%d ignored (mechListSent=%s)', cmdIdx, session.mechListSent);
