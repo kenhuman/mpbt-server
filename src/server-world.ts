@@ -33,7 +33,10 @@ import {
   buildWelcomePacket,
 } from './protocol/auth.js';
 import {
+  buildCmd36TextEntryPromptPacket,
+  buildMenuDialogPacket,
   parseClientCmd4,
+  parseClientCmd21TextReply,
   parseClientCmd7,
 } from './protocol/game.js';
 import {
@@ -75,8 +78,10 @@ const DEFAULT_SCENE_NAME = 'Solaris Arena';
 const WELCOME_TEXT       = 'Welcome to the game world.';
 const DEFAULT_ROOM_ID    = 'world_default_room';
 const ALL_ROSTER_LIST_ID = 0x3F4;
+const INQUIRY_MENU_ID    = 1000;
 const PERSONNEL_LIST_ID  = 0x3F2;
 const PERSONNEL_MORE_ID  = 0x95;
+const COMSTAR_PROMPT_MAX = 84;
 let nextWorldRosterId    = 1;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -195,6 +200,15 @@ function buildPersonnelRecordLines(target: ClientSession, page: number): string[
   ];
 }
 
+function buildComstarPrompt(target: ClientSession): string {
+  const prompt = `Send a ComStar message to ${getDisplayName(target)}:`;
+  let trimmed = prompt;
+  while (Buffer.byteLength(trimmed, 'latin1') > COMSTAR_PROMPT_MAX) {
+    trimmed = trimmed.slice(0, -1);
+  }
+  return trimmed;
+}
+
 function sendAllRosterList(
   players: PlayerRegistry,
   session: ClientSession,
@@ -213,6 +227,34 @@ function sendAllRosterList(
     ),
     capture,
     'CMD48_ALL_ROSTER',
+  );
+}
+
+function sendInquiryMenu(
+  session: ClientSession,
+  target: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const targetId = getComstarId(target);
+  session.worldInquiryTargetId = targetId;
+  session.worldInquiryPage = undefined;
+
+  connLog.info(
+    '[world] sending inquiry submenu: target=%d handle="%s"',
+    targetId,
+    getDisplayName(target),
+  );
+  send(
+    session.socket,
+    buildMenuDialogPacket(
+      INQUIRY_MENU_ID,
+      'Personal inquiry on:',
+      ['Send a ComStar message', 'Access personnel data'],
+      nextSeq(session),
+    ),
+    capture,
+    'CMD7_INQUIRY_MENU',
   );
 }
 
@@ -258,6 +300,60 @@ function sendPersonnelRecord(
     ),
     capture,
     page <= 1 ? 'CMD14_PERSONNEL_P1' : 'CMD14_PERSONNEL_P2',
+  );
+}
+
+function handleComstarTextReply(
+  players: PlayerRegistry,
+  session: ClientSession,
+  dialogId: number,
+  text: string,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const clean = text.replace(/\x1b/g, '?').replace(/\s+/g, ' ').trim();
+  if (clean.length === 0) {
+    connLog.warn('[world] cmd-21 ComStar text ignored (empty)');
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket('ComStar message not sent: empty text.', nextSeq(session)),
+      capture,
+      'CMD3_COMSTAR_EMPTY',
+    );
+    return;
+  }
+
+  const target = findWorldTargetBySelectionId(players, dialogId);
+  if (!target) {
+    connLog.warn('[world] cmd-21 ComStar target unavailable: id=%d', dialogId);
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket('ComStar target unavailable.', nextSeq(session)),
+      capture,
+      'CMD3_COMSTAR_MISSING',
+    );
+    return;
+  }
+
+  const senderName = getDisplayName(session);
+  const targetName = getDisplayName(target);
+  const outbound = `[ComStar] ${senderName}: ${clean}`;
+  const ack = `ComStar sent to ${targetName}.`;
+
+  connLog.info(
+    '[world] cmd-21 ComStar: from="%s" to="%s" target=%d text=%j',
+    senderName,
+    targetName,
+    dialogId,
+    clean,
+  );
+
+  target.socket.write(buildCmd3BroadcastPacket(outbound, nextSeq(target)));
+  send(
+    session.socket,
+    buildCmd3BroadcastPacket(ack, nextSeq(session)),
+    capture,
+    'CMD3_COMSTAR_ACK',
   );
 }
 
@@ -593,6 +689,14 @@ function handleWorldGameData(
     }
     handleWorldTextCommand(players, session, parsed.text, connLog);
 
+  } else if (cmdIdx === 21) {
+    const parsed = parseClientCmd21TextReply(payload);
+    if (!parsed) {
+      connLog.warn('[world] cmd-21 parse failed');
+      return;
+    }
+    handleComstarTextReply(players, session, parsed.dialogId, parsed.text, connLog, capture);
+
   } else if (cmdIdx === 7) {
     const parsed = parseClientCmd7(payload);
     if (!parsed) {
@@ -607,7 +711,46 @@ function handleWorldGameData(
     }
 
     if (parsed.listId === ALL_ROSTER_LIST_ID && parsed.selection > 0) {
-      sendPersonnelRecord(players, session, parsed.selection - 1, 1, connLog, capture);
+      const target = findWorldTargetBySelectionId(players, parsed.selection - 1);
+      if (!target) {
+        connLog.warn('[world] all-roster selection target not found: selection=%d', parsed.selection);
+        return;
+      }
+      sendInquiryMenu(session, target, connLog, capture);
+      return;
+    }
+
+    if (parsed.listId === INQUIRY_MENU_ID && parsed.selection > 0) {
+      const targetId = session.worldInquiryTargetId;
+      if (targetId === undefined) {
+        connLog.warn('[world] inquiry submenu reply with no active target');
+        return;
+      }
+
+      const target = findWorldTargetBySelectionId(players, targetId);
+      if (!target) {
+        connLog.warn('[world] inquiry submenu target unavailable: target=%d', targetId);
+        return;
+      }
+
+      if (parsed.selection === 1) {
+        connLog.info('[world] inquiry submenu: ComStar compose for target=%d', targetId);
+        send(
+          session.socket,
+          buildCmd36TextEntryPromptPacket(targetId, buildComstarPrompt(target), nextSeq(session)),
+          capture,
+          'CMD36_COMSTAR_PROMPT',
+        );
+        return;
+      }
+
+      if (parsed.selection === 2) {
+        connLog.info('[world] inquiry submenu: personnel data for target=%d', targetId);
+        sendPersonnelRecord(players, session, targetId, 1, connLog, capture);
+        return;
+      }
+
+      connLog.warn('[world] inquiry submenu: unsupported selection=%d', parsed.selection);
       return;
     }
 
