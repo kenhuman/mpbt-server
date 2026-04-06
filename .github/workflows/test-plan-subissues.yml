@@ -13,7 +13,7 @@ jobs:
     # Uses labeled (not opened) because the GitHub API fires the opened event
     # before labels are attached, so the label check would always fail on opened.
     # Guards against duplicates by skipping if subissues already exist.
-    if: github.event.label.name == 'type: testing'
+    if: "github.event.label.name == 'type: testing'"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/github-script@v7

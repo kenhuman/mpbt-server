@@ -589,12 +589,18 @@ When the player presses `X` (examine) in the mech window, the server responds wi
 ### Wire Format (Server → Client, args after cmd byte)
 
 ```
-[type1  2B]  dialog_id     (arbitrary id; avoid 13/30/35/39 — trigger printf via MPBT.MSG)
-[byte   1B]  mode          2 = create/show stats panel with Ok button
-[string    ] text          "#NNN" where NNN is the zero-padded mech_id (3 ASCII digits)
+[type1  2B]  dialog_id     base-85(1) — arbitrary id; avoid 13/30/35/39 (trigger printf via MPBT.MSG)
+[byte   1B]  mode          (mode + 0x21) — 2 = create/show stats panel with Ok button
+[type1  2B]  text_len      base-85(1) — byte length of the following raw text
+[N bytes ]  text           raw latin1; use 0x5C ('\') as line separator
 ```
 
-### `#NNN` Text Format
+The text is sent as a raw latin1 byte string (NOT `#NNN`). `buildCmd20Args()` uses
+`encodeB85_1(raw.length)` for the length prefix — **not** `encodeString()`'s 1-byte
+prefix, which `FUN_0040c130` would misread as a large length (≈1732) and immediately
+return -1 ("RPS command 20 failed.").
+
+### `#NNN` Text Format — Broken with This MPBT.MSG
 
 The client's `FUN_00411a10` inspects `text[0]`:
 - If `text[0] == '#'` (0x23): decodes a 3-digit decimal mech_id from `text[1..3]`
@@ -604,10 +610,25 @@ The client's `FUN_00411a10` inspects `text[0]`:
   uses the expanded string as the dialog content.
 - If `text[0] != '#'`: the text is used as-is (arbitrary string in the dialog).
 
-The `#NNN` path is the **correct** path for mech stats.  The client has all stats
-embedded in MPBT.MSG; the server only provides the 3-digit mech_id redirect.
+**T1 Bug Root Cause:** The `#NNN` path relies on the correct MPBT.MSG having
+pre-formatted mech stats at specific line numbers (pointed to by `DAT_00473ad8`).
+In our distribution, `DAT_00473ad8[156]` (ANH-1A) = 252, but MPBT.MSG line 252
+= `"Mechs now in use:"` — not the mech stats.  The original MPBT.MSG would have
+had the actual stats at that line; our copy is incomplete.
 
-**Example:** `examineText = "#156"` for ANH-1A (mech_id 156).
+**Fix Applied:** The server now sends the stats text directly (not as `#NNN`).
+`buildMechExamineText()` in `src/server.ts` builds a compact stats string from
+`MECH_STATS` (src/data/mech-stats.ts).  Lines are separated with `0x5C` (`\`) —
+`FUN_00433310` NULs this byte in its staging buffer before calling `FUN_00431f10`,
+so it acts as a clean line break.  (`0x8D` is wrong: `FUN_00431e00` treats it as
+signed char −115, producing font-width table index −460 → memory corruption / hang.)
+The text is sent as raw latin1 with a 2-byte base-85 length prefix via
+`encodeB85_1()`, NOT via `encodeString()` (which uses a 1-byte prefix misread by
+`FUN_0040c130` as length 1732, triggering "RPS command 20 failed.").  The only
+forbidden byte in text content is `0x1B` (ESC), which would prematurely terminate
+the ARIES ESC accumulator (`FUN_00429510`); both `encodeString()` and
+`buildCmd20Args()` now encode to a Buffer first and then check `raw.includes(0x1B)`
+to catch characters whose latin1 encoding truncates to 0x1B.
 
 ### Mode Values — Independent Dialog Objects
 
@@ -698,8 +719,10 @@ These areas have not yet been reverse-engineered.
 Capture evidence: client sent `21 21 21 21 22` at payload[3..7] for mech at slot 0
 → `decodeArgType4` → 1 → slot = 0 (ANH-1A, s first sorted mech).
 
-**Server response:** ONE cmd-20 packet, mode=2, `text="#NNN"` (3-digit mech_id).
-See §14 for full details.
+**Server response:** ONE cmd-20 packet, mode=2.  The emulator now sends the
+stats text directly from `buildMechExamineText()` (see §14) rather than the
+legacy `"#NNN"` shortcode, because our MPBT.MSG does not have the correct
+pre-formatted stats at the expected line numbers.
 
 ### Post-Redirect Game World Protocol
 
@@ -738,7 +761,347 @@ See §14 for full details.
 
 ---
 
-## 17. Methodology
+## 17. COMMEG32.DLL — Secondary Connection Protocol (M2 RE)
+
+**Confirmed by decompiling COMMEG32.DLL exports and internal functions in Ghidra,
+informed by packet capture from the T1 test session (2026-04-05).**
+
+### DLL Exported API (relevant subset)
+
+| Export | Address | Role |
+|--------|---------|------|
+| `FilterDllMsg` | `100041d0` | Windows msg handler; dispatches to vtable[0x18] (method 24) of lobby-conn obj |
+| `ProcessDllIdle` | `10004260` | Per-frame idle; loops calling vtable[0x1a] (method 26) on the lobby-conn obj |
+| `MakeTCPConnection` | `100043e0` | Calls `Aries_Connect(1, param_2)` to open the primary ARIES connection |
+| `SetInternet` | `100048e0` | Stores the "internet" address field from the REDIRECT payload |
+| `SetUserPassword` | `10004840` | Stores the session password field from the REDIRECT payload |
+
+### Aries_RecvHandler (`FUN_100014e0` / `100014e0`)
+
+The central ARIES packet switch.  Called (via vtable) with each parsed ARIES packet.
+
+```c
+int __thiscall Aries_RecvHandler(int conn_obj, int packet_ctx)
+```
+
+| Case | ARIES type | Action |
+|------|-----------|--------|
+| 0 | `SYNC` (0x00) | `SendMessageA(game_hwnd, WM_0x7f0, payload_len, payload_ptr)` — raw data to MPBTWIN.EXE |
+| 1 | `CONN_CLOSE` | Disconnect; sets conn flag at `conn_obj+0x154` |
+| 2 | `CONN_ERROR` | Same as case 1 |
+| 3 | `REDIRECT` (0x03) | **See below** |
+| 5 | `KEEPALIVE` | Sends ARIES type-5 response; forwards to game-world conn if it exists; sends `WM_0x7f7` if no game-world conn (triggers graceful exit) |
+| 0x16 | `LOGIN_REQUEST` | Calls `func_0x10001420()` which sends the ARIES LOGIN (type 0x15) response |
+| 0x1a | text | `SendMessageA(game_hwnd, WM_0x7f9, len, ptr)` — async text command dispatch |
+| 0x1e | Unknown | `SendMessageA(game_hwnd, WM_0x7f1, 0xc, ptr)` — unknown event |
+| 0x21 | File download | XOR-decode binary payload; `GetProcAddress(0, fn_name_from_payload)` → execute (remote exec) |
+| 0x22 | Dir change + file | `SetCurrentDirectoryA` + XOR-decode file content |
+
+### Case 3 — REDIRECT (CONFIRMED)
+
+When the client receives type 0x03 (REDIRECT):
+
+1. `SendMessageA(game_hwnd, WM_0x7fe, 1, status_msg)` — notifies UI of redirect
+2. Copies 120 bytes from packet (30 DWORDs = `addr[40]|internet[40]|pw[40]`)
+3. Parses via `func_0x10010fea`: splits into addr, internet, pw fields
+4. Calls `SetInternet(internet)` and `SetUserPassword(pw)`
+5. Closes any existing game-world connection (`g_aries_GameWorldConn = NULL`)
+6. Calls `Aries_Connect(1, addr_string)` to open the new secondary connection
+7. If connection fails: `SendMessageA(game_hwnd, WM_0x7f9, 0xcd, error_msg)`
+
+### Aries_Connect (`func_0x100011c0`) — CONFIRMED
+
+```c
+int __thiscall Aries_Connect(int conn_type, char *addr_string)
+```
+
+- Validates the address and calls `Aries_OpenSocket` to create the socket
+- Creates `g_aries_GameWorldConn` (`DAT_1001a080`) via `func_0x10002610(conn_type, 0x7e9)`
+- On success: stores socket handle at `conn_obj[0x44]`, returns 1
+
+### Aries_OpenSocket (`func_0x10001d80`) — CONFIRMED
+
+```c
+int __thiscall Aries_OpenSocket(int conn_obj, int *addr_string_ptr)
+```
+
+**Critical behaviour:**
+```c
+puVar1 = strchr(*addr_string_ptr, ':');   // find ':' in addr
+if (puVar1 == NULL) return -1;            // FAIL if no port separator
+*puVar1 = 0;                              // null-terminate host part
+// puVar1+1 = port string
+port = atoi(puVar1 + 1);                  // parse port number from string
+connect(host, port);                      // TCP connect
+```
+
+**The addr field in the REDIRECT payload MUST be in `"host:port"` format.**
+Sending just `"127.0.0.1"` (no colon) causes `Aries_OpenSocket` to return -1
+immediately, silently failing the secondary connection.
+
+**Current emulator behavior:** REDIRECT sends `"127.0.0.1:2000"` (the
+`ARIES_PORT` value in `constants.ts`). This is intentional until a separate
+world listener exists on a distinct port.
+
+### Secondary Connection Handshake — CONFIRMED
+
+After `Aries_OpenSocket` succeeds, the secondary connection uses the **same
+ARIES auth sequence** as the primary (lobby) connection:
+
+```
+Server → Client: ARIES LOGIN_REQUEST (type 0x16, empty payload)
+Client → Server: ARIES LOGIN (type 0x15, same 333-byte payload, same username/pw)
+Server → Client: ARIES SYNC (type 0x00, empty)
+Server → Client: ARIES SYNC with WELCOME escape sequence
+Client → Server: ARIES SYNC with cmd-3 capabilities
+Server → Client: [game world initialization packets]
+```
+
+Evidence: `Aries_RecvHandler` case 0x16 unconditionally calls `func_0x10001420()` (the LOGIN responder) — this fires on BOTH the primary and secondary connections.  The secondary connection is authenticated independently.
+
+### cmd-26 Count Encoding Limit — CONFIRMED
+
+**Confirmed by RE of `Cmd26_ParseMechList` (`FUN_0043a370`) in MPBTWIN.EXE:**
+
+```c
+uVar3 = FUN_00402f40();          // read raw byte from stream (returns B - 0x21)
+iVar4 = (int)(char)uVar3;        // SIGNED CHAR CAST
+if (0 < iVar4) { /* loop */ }   // skips all entries if iVar4 ≤ 0
+```
+
+`encodeAsByte(N)` writes `N + 0x21` to the wire.  The client decodes to N, then
+casts N to a **signed char**.  For N ≥ 128, signed char becomes negative and the
+loop is skipped — no mechs are stored.
+
+**Maximum safe count: 127** (encoded as raw byte 0xA0; `(char)127` = 127 > 0).
+
+Our current safe sender limit is `MECH_SEND_LIMIT = 20` (raw byte 0x35), which is
+safely within this encoding range and matches the client's static mech-list array
+capacity enforced by `buildMechListArgs`.
+
+---
+
+## 18. Game World Protocol — MPBTWIN.EXE RE
+
+**Confirmed by decompiling `FUN_00428920` (WndProc), `FUN_00429870` (WM_0x7f0 handler),
+`FUN_00429510` (world accumulator), `FUN_004294c0` (world dispatcher),
+`FUN_00402cf0` (Lobby_RecvDispatch), `FUN_00402e30` (Frame_VerifyCRC), and
+`FUN_00429a00` (lobby welcome gate).**
+
+### Summary
+
+The game world protocol after REDIRECT is **identical to the lobby protocol**:
+same ESC-delimited frame format, same 19-bit LFSR CRC, same `Lobby_RecvDispatch`
+function, two sub-tables switched by one flag.
+
+### WndProc — `FUN_00428920` (WM table) — CONFIRMED
+
+| WM value | Purpose |
+|---------|---------|
+| `0x7f0` | ARIES raw data received → `FUN_00429870(data, len)` |
+| `0x7f7` | Disconnecting (graceful) → `FUN_00433f30()` (quit) |
+| `0x7f8` | Communications error → display message + quit |
+| `0x7f9` | Fatal error/winsock error → display message + quit |
+| `0x7fa` | Lost TCP connection → display message + quit |
+| `0x7fe` | Redirect-in-progress → `DAT_00474d14 = (param_3 == 1)` (status flag) |
+| `0x855` | INITAR `Ordinal_11(data)` |
+| `0x856` | INITAR `Ordinal_9(data)` |
+| `0x857` | Copy string to `DAT_004e2500`; `Ordinal_4(1, &dat)` → `MakeTCPConnection` |
+| `0x858` | INITAR `Ordinal_12(param_3)` |
+| `0x859` | INITAR `Ordinal_13(data)` |
+| `0x85a` | INITAR `Ordinal_14(data)` |
+| `0x85b` | INITAR `Ordinal_10(param_3)` |
+
+### WM_0x7f0 Handler — `FUN_00429870` — CONFIRMED
+
+Demultiplexes lobby vs game world data using `DAT_004e2de8`:
+
+1. **`DAT_004e2de8 < 1`** (pre-welcome, lobby gate): → `FUN_00429a00` (welcome gate)
+2. **`DAT_004e2de8 >= 1`** (post-welcome):
+   a. If data starts with `'\x1b?'`: compare to welcome strings:
+      - Matches `"\x1b?MMW Copyright Kesmai Corp. 1991"`: world-MMW init sequence
+      - Matches `"\x1b?MMC Copyright Kesmai Corp. 1991"`: world-MMC (direct combat) init
+   b. Otherwise: `FUN_00429510(data, len)` — world ESC accumulator
+
+### Two Welcome Strings — CONFIRMED
+
+| String | Address | Mode set | Combat? |
+|--------|---------|----------|---------|
+| `"\x1b?MMW Copyright Kesmai Corp. 1991"` | `DAT_00474d48` | `DAT_004e2cd0=0` (RPS) | No |
+| `"\x1b?MMC Copyright Kesmai Corp. 1991"` | `DAT_00474d70` | `DAT_004e2cd0=1` (Combat) | Yes |
+
+Our game world server MUST send **MMW** as the welcome string. MMC activates
+combat-only dispatch and loads `scenes.dat` — it is the original dedicated
+combat server path (never needed for standard emulation).
+
+### Frame Accumulator and Dispatch — CONFIRMED
+
+```
+Raw ARIES SYNC bytes
+    ↓ FUN_00429510 (ESC accumulator)
+    ↓   Collects bytes; on ESC('\x1b') → null-terminate + dispatch
+    ↓   Skips '\r' and '\n'; ESC resets buffer ptr to DAT_004d5b34
+    ↓ FUN_004294c0 (world dispatcher)
+    ↓   Null-terminates at buf[0xFFF] (max 4095 B)
+    ↓   FUN_00402e30 → Frame_VerifyCRC(buf) → 19-bit LFSR check
+    ↓   If OK: FUN_00402cf0 → Lobby_RecvDispatch → command table lookup
+    ↓   If BAD: Frame_WriteCmdByte(2) → send NACK byte; FUN_00429400
+    ↓ FUN_00429440 (post-dispatch ACK)
+```
+
+### CRC Seed Crossover — CONFIRMED
+
+Inside `Frame_VerifyCRC` (`FUN_00402e30`):
+
+```c
+uVar4 = (-(uint)(DAT_004e2cd0 == 0) & 0xFFFFFFE0) + 0x0a5c45;
+// RPS mode  (DAT_004e2cd0==0): 0xFFFFFFE0 + 0x0a5c45 = 0x0a5c25
+// Combat mode (DAT_004e2cd0!=0): 0x00000000 + 0x0a5c45 = 0x0a5c45
+```
+
+| Mode | `DAT_004e2cd0` | CRC seed |
+|------|--------------|---------|
+| RPS (lobby + world MMW) | `0` | `0x0a5c25` |
+| Combat (MMC direct-connect) | `≠ 0` | `0x0a5c45` |
+
+**Implication**: For our server (MMW path), CRC seed is always `0x0a5c25`.
+No seed change happens mid-session in standard gameplay.
+
+### Dual Dispatch Tables — CONFIRMED
+
+`Lobby_RecvDispatch` selects one of two command tables based on `DAT_004e2cd0`:
+
+**RPS table** (`DAT_00470198`): `DAT_004e2cd0 == 0`; max index 0x4c (cmd 0–76)
+**Combat table** (`DAT_00470408`): `DAT_004e2cd0 != 0`; max index 0x4f (cmd 0–79)
+
+| Cmd | Wire byte | RPS dispatch address | Notes |
+|-----|-----------|---------------------|-------|
+| 0 | — | NULL | unused |
+| 1 | `0x22` | `FUN_0040C030` | Seq/ACK check |
+| 2 | `0x23` | `FUN_0040C060` | |
+| 3 | `0x24` | `0x0040C190` | `Cmd3_ThunkSendCapabilities` |
+| 4 | `0x25` | `0x00414B70` | |
+| 5 | `0x26` | `0x0040C2F0` | |
+| 6 | `0x27` | `0x0040C300` | |
+| 7 | `0x28` | `0x004112B0` | `Cmd7_ParseMenuDialog` |
+| 8 | `0x29` | `0x00413960` | |
+| 9 | `0x2a` | `0x0040C310` | |
+| 10 | `0x2b` | `0x0040C370` | |
+| 11 | `0x2c` | `0x0040C6C0` | |
+| 12 | `0x2d` | `0x0040C5C0` | |
+| 13 | `0x2e` | `0x0040C920` | |
+| 14 | `0x2f` | `0x00415700` | |
+| 15 | `0x30` | `0x004139C0` | |
+| 16 | `0x31` | `0x00411DE0` | same addr as cmd 19 |
+| 17 | `0x32` | `0x0041E2C0` | |
+| 18 | `0x33` | `0x00420780` | |
+| 19 | `0x34` | `0x00411DE0` | same as cmd 16 |
+| 20 | `0x35` | `0x00411D90` | `Cmd20_ParseTextDialog` |
+| 21 | `0x36` | `0x004208C0` | |
+| 22 | `0x37` | `0x00420940` | |
+| 23 | `0x38` | `0x00420990` | |
+| 24 | `0x39` | `0x00420A10` | |
+| 25 | `0x3a` | `0x00411590` | |
+| 26 | `0x3b` | `0x0043A370` | `Cmd26_ParseMechList` |
+| 27 | `0x3c` | `0x0043A6B0` | |
+| 28 | `0x3d` | `0x00413D20` | |
+| 29 | `0x3e` | `0x00427710` | |
+| 30 | `0x3f` | `0x0043B4E0` | |
+| 31 | `0x40` | `0x0043C190` | |
+| 32 | `0x41` | `0x0043A520` | |
+| 33 | `0x42` | `0x00419360` | `FUN_00419370` — Ok-dialog callback |
+| 34 | `0x43` | `0x00413FF0` | |
+| 35 | `0x44` | `0x00429C80` | |
+| 36 | `0x45` | `0x004161A0` | |
+| 37 | `0x46` | `0x00416D40` | |
+| 38 | `0x47` | `0x00419250` | |
+| 39 | `0x48` | `0x0043DAE0` | |
+| 40 | `0x49` | `0x0040ECB0` | |
+| 41 | `0x4a` | `0x00415AF0` | |
+| 42 | `0x4b` | `0x00412680` | |
+| 43 | `0x4c` | `0x0040EED0` | |
+| 44 | `0x4d` | `0x00410000` | |
+| 45 | `0x4e` | `0x0040CEF0` | |
+| 46 | `0x4f` | `0x00414130` | |
+| 47 | `0x50` | `0x004192F0` | |
+| 48 | `0x51` | `0x00411DF0` | |
+| 49 | `0x52` | `0x0040F980` | |
+| 50 | `0x53` | `0x00410460` | |
+| 51 | `0x54` | `0x00410480` | |
+| 52 | `0x55` | `0x00401000` | |
+| 53 | `0x56` | `0x004010C0` | |
+| 54 | `0x57` | `0x00419320` | |
+| 55 | `0x58` | `0x00419340` | |
+| 56 | `0x59` | `0x0040FD60` | |
+| 57 | `0x5a` | `0x004168E0` | |
+| 58 | `0x5b` | `0x0040CEE0` | |
+| 59 | `0x5c` | `0x0040D4E0` | |
+| 60 | `0x5d` | `0x0040FEB0` | |
+| 61 | `0x5e` | `0x0040FA00` | |
+| 62–75 | — | NULL | unused in RPS mode |
+| 76 | `0x61` | `0x0040C0A0` | in both tables |
+
+Combat-only entries (cmd 62–79, only non-null in combat table):
+
+| Cmd | Wire byte | Combat dispatch address |
+|-----|-----------|------------------------|
+| 62 | `0x63` | `0x004017E0` |
+| 63 | `0x64` | `0x00406880` |
+| 64 | `0x65` | `0x00401390` |
+| 65 | `0x66` | `0x00401820` |
+| 66 | `0x67` | `0x00401E40` |
+| 67 | `0x68` | `0x00401E70` |
+| 68 | `0x69` | `0x00402380` |
+| 69 | `0x6a` | `0x00402530` |
+| 70 | `0x6b` | `0x004026D0` |
+| 71 | `0x6c` | `0x00402A90` |
+| 72 | `0x6d` | `0x00406140` |
+| 73 | `0x6e` | `0x004022D0` |
+| 74 | `0x6f` | `0x004069F0` |
+| 75 | `0x70` | `0x00406840` |
+| 76 | `0x71` | `0x0040C0A0` | (same as RPS 76) |
+| 77 | `0x72` | `0x00401F80` |
+| 78 | `0x73` | `0x004069E0` |
+| 79 | `0x74` | `0x00402AB0` |
+
+### World Handshake Sequence — CONFIRMED
+
+After the client receives the REDIRECT packet and `Aries_Connect` succeeds:
+
+```
+[Secondary TCP connection established]
+Server → Client: ARIES LOGIN_REQUEST  (type 0x16)
+Client → Server: ARIES LOGIN          (type 0x15, same format as lobby LOGIN)
+
+[Server sends welcome as raw ARIES SYNC type-0x00 payload:]
+Server → Client: ARIES SYNC "\x1b?MMW Copyright Kesmai Corp. 1991"
+
+[Client FUN_00429870 ≥1 path, '\x1b?' match, world init fires:]
+  - sets DAT_004e2cd0 = 0 (stays RPS)
+  - calls FUN_00432fb0, Lobby_OnWelcomeB, FUN_00403070
+  - calls Cmd3_SendCapabilities (FUN_0040d3c0) ← CLIENT SENDS CMD-3
+  - calls FUN_00429440 (post-dispatch ACK)
+  - sets DAT_004d5b30=1, runs game world rendering init
+
+[Normal world command dispatch loop begins]
+Client → Server: cmd-3 capabilities frame (same 4-byte payload as lobby)
+Server → Client: game world command frames (RPS table, cmd 0–76)
+```
+
+### Server-Side Implications for M3
+
+1. **Listen on `WORLD_PORT` (2001)**; use the same ARIES packet wrapping
+2. **Send `LOGIN_REQUEST`** (type `0x16`, empty payload) after TCP accept
+3. **Receive `LOGIN`** packet from client; validate (same format as lobby)
+4. **Send welcome** as ARIES SYNC (type `0x00`) containing the raw bytes:
+   `"\x1b?MMW Copyright Kesmai Corp. 1991"` (exactly 33 bytes + null if needed)
+5. **Receive cmd-3** from client (capabilities, 4 bytes: `[1, 6, 3, 0]`)
+6. **Send world initialization commands** via same ESC-framed format with CRC seed `0x0a5c25`
+7. All subsequent data: same frame encoding as lobby (ESC‐framed, 19-bit LFSR CRC)
+
+---
+
+## 19. Methodology
 
 ### Tools Used
 
@@ -794,8 +1157,14 @@ in [`symbols.json`](symbols.json).
 | `Aries_PacketAlloc` | `FUN_10003600` | Allocates outgoing packet; writes type + 12-byte header |
 | `Aries_PacketSetLen` | `FUN_10003680` | Finalises header: fills `payload_length` field at offset 8 |
 | `Aries_PacketParse` | `FUN_100036d0` | Validates 12-byte header; extracts type + payload |
-| `Aries_Connect` | `FUN_100011c0` | Opens new TCP connection to addr (called on REDIRECT) |
+| `Aries_Connect` | `FUN_100011c0` | Opens new TCP connection; parses "host:port" addr, creates `g_aries_GameWorldConn` |
+| `Aries_OpenSocket` | `FUN_10001d80` | Low-level socket open; `strchr(addr,':')` — returns -1 if ':' absent |
 | `Aries_RawWrite` | `FUN_10002b10` | Sends raw bytes on active socket |
+| `FilterDllMsg` | `FUN_100041d0` | Export: Windows msg handler; vtable[24] dispatch on lobby-conn obj |
+| `ProcessDllIdle` | `FUN_10004260` | Export: Per-frame idle; loops vtable[26] until it returns 0 |
+| `MakeTCPConnection` | `FUN_100043e0` | Export: `Aries_Connect(1, addr)` — opens primary lobby connection |
+| `SetInternet` | `FUN_100048e0` | Export: Stores the "internet" address from REDIRECT payload |
+| `SetUserPassword` | `FUN_10004840` | Export: Stores the session password from REDIRECT payload |
 
 ### MPBTWIN.EXE — Frame layer
 
@@ -848,14 +1217,32 @@ in [`symbols.json`](symbols.json).
 | `Mech_VariantLookup` | `FUN_00438280` | `FUN_00405840(id + 0x3AE)` — variant typeString from MPBT.MSG; fallback "HBK-4G" |
 | `Mech_ChassisLookup` | `FUN_004382b0` | `FUN_00405840(id + 0x36C)` — chassis name from MPBT.MSG; fallback "HUNCHBACK" |
 
+### MPBTWIN.EXE — World Protocol (confirmed §18)
+
+| Canonical Name | Binary Address | Role |
+|----------------|---------------|------|
+| `WndProc_Main` | `FUN_00428920` | Main window procedure; WM_0x7f0→data, WM_0x7f7→disconnect, WM_0x7f9→fatal error |
+| `Recv_Handler` | `FUN_00429870` | WM_0x7f0 handler; demuxes lobby vs world via `g_welcomeGateOpen`; checks `'\x1b?'` strings |
+| `World_Accumulator` | `FUN_00429510` | Post-welcome ESC accumulator; collects bytes, dispatches frame on ESC |
+| `World_Dispatcher` | `FUN_004294c0` | CRC-verify then call `Lobby_RecvDispatch`; NACK on bad CRC |
+| `World_PostDispatch` | `FUN_00429440` | Seq-counter ACK after successful dispatch; `DAT_004e2ce0` gate check |
+
 ### Key Data Labels — MPBTWIN.EXE
 
 | Canonical Name | Binary Label | Value / Role |
 |----------------|-------------|------|
-| `g_lobby_DispatchTable` | `DAT_00470198` | Lobby command function-pointer table (0x4C entries) |
+| `g_lobby_DispatchTable` | `DAT_00470198` | RPS (lobby/world) command fn-pointer table; 77 entries; active when `g_combatMode==0` |
+| `g_combat_DispatchTable` | `DAT_00470408` | Combat command fn-pointer table; 80 entries; active when `g_combatMode!=0` |
 | `g_lobby_SeqHandlerPtr` | `PTR_FUN_00470190` | Points to `Lobby_SeqHandler`; installed as pre-handler |
 | `g_lobby_LastSeq` | `DAT_004e2da4` | Stores last seen seq value from client frame |
-| `g_lobby_WelcomeGateOpen` | `DAT_004e2de8` | Set to 1 by `Lobby_WelcomeGate` when welcome string matches |
+| `g_welcomeGateOpen` | `DAT_004e2de8` | 0=pre-welcome (lobby gate), 1=post-welcome (world active) |
+| `g_combatMode` | `DAT_004e2cd0` | 0=RPS mode (CRC seed `0x0a5c25`), ≠0=Combat mode (CRC seed `0x0a5c45`) |
+| `g_worldActiveFlag` | `DAT_004e2d84` | Set to 1 on world welcome (MMW path); 0 on MMC path |
+| `g_lobbyConnActive` | `DAT_004e2ce0` | Gate for post-dispatch ACK sender in `World_PostDispatch` |
+| `g_frameBuf` | `DAT_004d5b34` | Shared 4096-byte ESC-frame accumulation buffer |
+| `g_frameBufPtr` | `DAT_004d6b44` | Write pointer into `g_frameBuf`; reset to start on ESC |
+| `g_welcomeStrMMW` | `DAT_00474d48` | `"\x1b?MMW Copyright Kesmai Corp. 1991"` — standard welcome |
+| `g_welcomeStrMMC` | `DAT_00474d70` | `"\x1b?MMC Copyright Kesmai Corp. 1991"` — direct-combat welcome |
 | `g_lobby_WelcomeStrMMW` | `DAT_00474d48` | `"\x1b?MMW Copyright Kesmai Corp. 1991"` (normal Windows login) |
 | `g_lobby_WelcomeStrMMC` | `DAT_00474d70` | `"\x1b?MMC ..."` (direct-connect alternate path) |
 | `g_cmd7_ListIdTable` | `DAT_00472c94` | Per-list-id callback/state array; index `[0x512]` for menu dialog |
