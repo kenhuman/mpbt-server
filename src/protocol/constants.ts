@@ -20,6 +20,19 @@
 export const ARIES_PORT = 2000; // CONFIRMED — controlled by play.pcgi product field
 
 /**
+ * TCP port the game-world connection uses (post-REDIRECT).
+ *
+ * CONFIRMED by RE of Aries_OpenSocket (COMMEG32.DLL func_0x10001d80):
+ *   func_0x10005ee0(addr, 0x3a) = strchr(addr, ':')   // splits "host:port"
+ *   If ':' not found → returns -1 immediately (connection fails silently)
+ *   Port string is parsed via func_0x10011012 (strings → number)
+ *
+ * The addr field in REDIRECT must be in "host:port" format.
+ * Our server listens on this port for the game world TCP connection.
+ */
+export const WORLD_PORT = 2001; // chosen; no hardcoded port found in binary (comes from REDIRECT addr)
+
+/**
  * Maximum raw receive buffer per read.
  */
 export const RECV_BUFFER_SIZE = 4096;

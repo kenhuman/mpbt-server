@@ -738,7 +738,123 @@ See §14 for full details.
 
 ---
 
-## 17. Methodology
+## 17. COMMEG32.DLL — Secondary Connection Protocol (M2 RE)
+
+**Confirmed by decompiling COMMEG32.DLL exports and internal functions in Ghidra,
+informed by packet capture from the T1 test session (2026-04-05).**
+
+### DLL Exported API (relevant subset)
+
+| Export | Address | Role |
+|--------|---------|------|
+| `FilterDllMsg` | `100041d0` | Windows msg handler; dispatches to vtable[0x18] (method 24) of lobby-conn obj |
+| `ProcessDllIdle` | `10004260` | Per-frame idle; loops calling vtable[0x1a] (method 26) on the lobby-conn obj |
+| `MakeTCPConnection` | `100043e0` | Calls `Aries_Connect(1, param_2)` to open the primary ARIES connection |
+| `SetInternet` | `100048e0` | Stores the "internet" address field from the REDIRECT payload |
+| `SetUserPassword` | `10004840` | Stores the session password field from the REDIRECT payload |
+
+### Aries_RecvHandler (`FUN_100014e0` / `100014e0`)
+
+The central ARIES packet switch.  Called (via vtable) with each parsed ARIES packet.
+
+```c
+int __thiscall Aries_RecvHandler(int conn_obj, int packet_ctx)
+```
+
+| Case | ARIES type | Action |
+|------|-----------|--------|
+| 0 | `SYNC` (0x00) | `SendMessageA(game_hwnd, WM_0x7f0, payload_len, payload_ptr)` — raw data to MPBTWIN.EXE |
+| 1 | `CONN_CLOSE` | Disconnect; sets conn flag at `conn_obj+0x154` |
+| 2 | `CONN_ERROR` | Same as case 1 |
+| 3 | `REDIRECT` (0x03) | **See below** |
+| 5 | `KEEPALIVE` | Sends ARIES type-5 response; forwards to game-world conn if it exists; sends `WM_0x7f7` if no game-world conn (triggers graceful exit) |
+| 0x16 | `LOGIN_REQUEST` | Calls `func_0x10001420()` which sends the ARIES LOGIN (type 0x15) response |
+| 0x1a | text | `SendMessageA(game_hwnd, WM_0x7f9, len, ptr)` — async text command dispatch |
+| 0x1e | Unknown | `SendMessageA(game_hwnd, WM_0x7f1, 0xc, ptr)` — unknown event |
+| 0x21 | File download | XOR-decode binary payload; `GetProcAddress(0, fn_name_from_payload)` → execute (remote exec) |
+| 0x22 | Dir change + file | `SetCurrentDirectoryA` + XOR-decode file content |
+
+### Case 3 — REDIRECT (CONFIRMED)
+
+When the client receives type 0x03 (REDIRECT):
+
+1. `SendMessageA(game_hwnd, WM_0x7fe, 1, status_msg)` — notifies UI of redirect
+2. Copies 120 bytes from packet (30 DWORDs = `addr[40]|internet[40]|pw[40]`)
+3. Parses via `func_0x10010fea`: splits into addr, internet, pw fields
+4. Calls `SetInternet(internet)` and `SetUserPassword(pw)`
+5. Closes any existing game-world connection (`g_aries_GameWorldConn = NULL`)
+6. Calls `Aries_Connect(1, addr_string)` to open the new secondary connection
+7. If connection fails: `SendMessageA(game_hwnd, WM_0x7f9, 0xcd, error_msg)`
+
+### Aries_Connect (`func_0x100011c0`) — CONFIRMED
+
+```c
+int __thiscall Aries_Connect(int conn_type, char *addr_string)
+```
+
+- Validates the address and calls `Aries_OpenSocket` to create the socket
+- Creates `g_aries_GameWorldConn` (`DAT_1001a080`) via `func_0x10002610(conn_type, 0x7e9)`
+- On success: stores socket handle at `conn_obj[0x44]`, returns 1
+
+### Aries_OpenSocket (`func_0x10001d80`) — CONFIRMED
+
+```c
+int __thiscall Aries_OpenSocket(int conn_obj, int *addr_string_ptr)
+```
+
+**Critical behaviour:**
+```c
+puVar1 = strchr(*addr_string_ptr, ':');   // find ':' in addr
+if (puVar1 == NULL) return -1;            // FAIL if no port separator
+*puVar1 = 0;                              // null-terminate host part
+// puVar1+1 = port string
+port = atoi(puVar1 + 1);                  // parse port number from string
+connect(host, port);                      // TCP connect
+```
+
+**The addr field in the REDIRECT payload MUST be in `"host:port"` format.**
+Sending just `"127.0.0.1"` (no colon) causes `Aries_OpenSocket` to return -1
+immediately, silently failing the secondary connection.
+
+**Our REDIRECT now sends:** `"127.0.0.1:2001"` (see `WORLD_PORT` in `constants.ts`).
+
+### Secondary Connection Handshake — CONFIRMED
+
+After `Aries_OpenSocket` succeeds, the secondary connection uses the **same
+ARIES auth sequence** as the primary (lobby) connection:
+
+```
+Server → Client: ARIES LOGIN_REQUEST (type 0x16, empty payload)
+Client → Server: ARIES LOGIN (type 0x15, same 333-byte payload, same username/pw)
+Server → Client: ARIES SYNC (type 0x00, empty)
+Server → Client: ARIES SYNC with WELCOME escape sequence
+Client → Server: ARIES SYNC with cmd-3 capabilities
+Server → Client: [game world initialization packets]
+```
+
+Evidence: `Aries_RecvHandler` case 0x16 unconditionally calls `func_0x10001420()` (the LOGIN responder) — this fires on BOTH the primary and secondary connections.  The secondary connection is authenticated independently.
+
+### cmd-26 Count Encoding Limit — CONFIRMED
+
+**Confirmed by RE of `Cmd26_ParseMechList` (`FUN_0043a370`) in MPBTWIN.EXE:**
+
+```c
+uVar3 = FUN_00402f40();          // read raw byte from stream (returns B - 0x21)
+iVar4 = (int)(char)uVar3;        // SIGNED CHAR CAST
+if (0 < iVar4) { /* loop */ }   // skips all entries if iVar4 ≤ 0
+```
+
+`encodeAsByte(N)` writes `N + 0x21` to the wire.  The client decodes to N, then
+casts N to a **signed char**.  For N ≥ 128, signed char becomes negative and the
+loop is skipped — no mechs are stored.
+
+**Maximum safe count: 127** (encoded as raw byte 0xA0; `(char)127` = 127 > 0).
+
+Our `MECH_SEND_LIMIT = 84` (raw byte 0x75) is safely within this range.
+
+---
+
+## 18. Methodology
 
 ### Tools Used
 
@@ -794,8 +910,14 @@ in [`symbols.json`](symbols.json).
 | `Aries_PacketAlloc` | `FUN_10003600` | Allocates outgoing packet; writes type + 12-byte header |
 | `Aries_PacketSetLen` | `FUN_10003680` | Finalises header: fills `payload_length` field at offset 8 |
 | `Aries_PacketParse` | `FUN_100036d0` | Validates 12-byte header; extracts type + payload |
-| `Aries_Connect` | `FUN_100011c0` | Opens new TCP connection to addr (called on REDIRECT) |
+| `Aries_Connect` | `FUN_100011c0` | Opens new TCP connection; parses "host:port" addr, creates `g_aries_GameWorldConn` |
+| `Aries_OpenSocket` | `FUN_10001d80` | Low-level socket open; `strchr(addr,':')` — returns -1 if ':' absent |
 | `Aries_RawWrite` | `FUN_10002b10` | Sends raw bytes on active socket |
+| `FilterDllMsg` | `FUN_100041d0` | Export: Windows msg handler; vtable[24] dispatch on lobby-conn obj |
+| `ProcessDllIdle` | `FUN_10004260` | Export: Per-frame idle; loops vtable[26] until it returns 0 |
+| `MakeTCPConnection` | `FUN_100043e0` | Export: `Aries_Connect(1, addr)` — opens primary lobby connection |
+| `SetInternet` | `FUN_100048e0` | Export: Stores the "internet" address from REDIRECT payload |
+| `SetUserPassword` | `FUN_10004840` | Export: Stores the session password from REDIRECT payload |
 
 ### MPBTWIN.EXE — Frame layer
 

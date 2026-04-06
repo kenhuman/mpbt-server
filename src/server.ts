@@ -20,7 +20,7 @@ import * as crypto from 'crypto';
 import * as path from 'path';
 import * as os from 'os';
 
-import { ARIES_PORT, Msg } from './protocol/constants.js';
+import { ARIES_PORT, WORLD_PORT, Msg } from './protocol/constants.js';
 import { PacketParser, buildPacket, hexDump } from './protocol/aries.js';
 import { parseLoginPayload, buildLoginRequest, buildSyncAck, buildWelcomePacket } from './protocol/auth.js';
 import { buildMechListPacket, buildMenuDialogPacket, buildRedirectPacket, buildCmd20Packet, parseClientCmd7, decodeArgType4, type MechEntry } from './protocol/game.js';
@@ -321,8 +321,11 @@ function handleGameData(
         // Item 1 = "Launch!" → redirect to game world.
         // COMMEG32.DLL case 3: 120-byte payload [addr40|internet40|pw40],
         // then FUN_100011c0 opens a new TCP connection to addr.
-        connLog.info('[game] confirmed (Launch!) → sending REDIRECT');
-        const redir = buildRedirectPacket('127.0.0.1');
+        connLog.info('[game] confirmed (Launch!) → sending REDIRECT to game world port %d', WORLD_PORT);
+        // IMPORTANT: addr must be "host:port" format.
+        // Aries_OpenSocket (COMMEG32.DLL) calls strchr(addr, ':') and returns -1
+        // immediately if ':' is not found, silently failing the secondary connection.
+        const redir = buildRedirectPacket(`127.0.0.1:${WORLD_PORT}`);
         send(session.socket, redir, capture, 'REDIRECT');
         session.phase = 'closing';
       } else if (selection === 2) {
