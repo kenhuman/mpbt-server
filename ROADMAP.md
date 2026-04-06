@@ -79,16 +79,17 @@ These files are gitignored — place them in `research/` for local use.
 
 This milestone is pure Ghidra work. No code is written here — findings go into `RESEARCH.md`.
 
-| RE Target | Binary | Notes |
-|---|---|---|
-| `FUN_100014e0` case 0 | `COMMEG32.DLL` | Secondary connection data handler — entry point for everything post-REDIRECT |
-| World command dispatch table | `MPBTWIN.EXE` | Analogous to `g_lobby_DispatchTable`; find equivalent for game-world connection |
-| Initial world handshake | `COMMEG32.DLL` | What does the server send first on the new connection? What does the client need before it renders the game world? |
-| `g_aries_GameWorldConn` (`DAT_1001a080`) | `COMMEG32.DLL` | Secondary Aries connection object; how is it initialized? |
-| Combat CRC crossover point | `MPBTWIN.EXE` | When does the client switch from lobby CRC seed (`0x0A5C25`) to combat (`0x0A5C45`)? |
-| First 10+ world commands | `MPBTWIN.EXE` | Position, movement, chat, damage, turn timer, UI updates |
+| RE Target | Binary | Status | Notes |
+|---|---|---|---|
+| `Aries_RecvHandler` case 0 & REDIRECT | `COMMEG32.DLL` | ✅ | §17: REDIRECT handler confirmed; case 0 sends WM_0x7f0 to game window |
+| World command dispatch table | `MPBTWIN.EXE` | ✅ | §18: two tables — RPS (0x00470198, cmd 0–76) and Combat (0x00470408, cmd 0–79); full address table |
+| Initial world handshake | `COMMEG32.DLL` + `MPBTWIN.EXE` | ✅ | §18: LOGIN_REQUEST→LOGIN→`"\x1b?MMW Copyright Kesmai Corp. 1991"`→cmd-3; same sequence as lobby |
+| `g_aries_GameWorldConn` (`DAT_1001a080`) | `COMMEG32.DLL` | ✅ | §17: created by `Aries_Connect`; secondary connection object |
+| Combat CRC crossover point | `MPBTWIN.EXE` | ✅ | §18: `Frame_VerifyCRC` uses `g_combatMode` to select seed; RPS=`0x0a5c25`, Combat=`0x0a5c45` |
+| First 10+ world commands | `MPBTWIN.EXE` | 🔬 | Dispatch table addresses confirmed; individual command semantics not yet decompiled |
+| World frame format | `MPBTWIN.EXE` | ✅ | §18: identical to lobby — ESC-delimited, 19-bit LFSR CRC, same base-85 encoding |
 
-**Deliverable:** New RESEARCH.md sections (§16+) documenting all of the above with confirmed wire formats.
+**Deliverable:** RESEARCH.md §17 (COMMEG32.DLL RE) and §18 (world protocol RE) — COMPLETE.
 
 ---
 
