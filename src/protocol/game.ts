@@ -56,8 +56,9 @@ export function encodeAsByte(v: number): Buffer {
  *   [length_byte = len + 0x21]  [raw bytes]
  * Strings must be ≤ 84 bytes (length byte would hit 0x6D max; ESC = 0x1B never reached).
  *
- * Uses 'latin1' (single-byte) encoding so that 0x80–0xFF values pass through unchanged.
- * In particular 0x8D is the MPBT dialog line-separator (swapped with NUL by the renderer).
+ * Used for cmd-26 (mech list) strings read by FUN_0040c0d0.  NOT for cmd-20 text
+ * (which uses buildCmd20Args with a base-85 length prefix via FUN_0040c130).
+ *
  * The only byte that MUST NOT appear in text is 0x1B (ESC), which would prematurely
  * terminate the ARIES inner frame in the client's ESC accumulator (FUN_00429510).
  */
@@ -354,7 +355,10 @@ export function buildCmd20Args(dialogId: number, mode: number, text: string): Bu
     encodeB85_1(dialogId),  // 2 bytes: dialog_id  via FUN_0040d4c0 → FUN_00402b10(1)
     encodeAsByte(mode),     // 1 byte:  mode        via FUN_00402f40
     encodeB85_1(raw.length), // 2 bytes: text length via FUN_0040c130 → FUN_00402b10(1)
-    raw,                    // N bytes: raw text (0x8D = line separator for FUN_00433310)
+    raw,                    // N bytes: raw text; use 0x5C ('\\') as line separator
+                            // FUN_00433310 NULs '\\' in staging buf before FUN_00431f10;
+                            // 0x8D is wrong: FUN_00431e00 treats it as signed-char -115
+                            // → font-width table index -460 → bad memory / hang
   ]);
 }
 

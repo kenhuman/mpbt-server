@@ -53,8 +53,11 @@ function send(socket: net.Socket, pkt: Buffer, capture: CaptureLogger, label: st
 /**
  * Build the examine-dialog text for cmd-20 (X key / Examine button).
  *
- * Returns a ≤84-byte string ready for encodeString().  Lines are separated by
- * 0x8D (MPBT dialog line separator — the client's renderer swaps 0x8D ↔ NUL).
+ * Returns a ≤84-byte string ready for buildCmd20Args().  Lines are separated by
+ * '\\' (0x5C).  FUN_00433310 (lobby text renderer) treats '\\' as a forced line
+ * break: it NULs it in the staging buffer before passing to FUN_00431f10, so no
+ * backslash is ever rendered.  Only NUL and '\\' terminate a line; 0x8D is NOT
+ * handled and causes signed-char wrap (index -460) in FUN_00431e00's font table.
  *
  * The returned string MUST NOT contain 0x1B (ESC) because the client's ESC
  * accumulator (FUN_00429510) would prematurely terminate the inner frame.
@@ -66,7 +69,11 @@ function send(socket: net.Socket, pkt: Buffer, capture: CaptureLogger, label: st
  * from the server bypasses the broken lookup entirely.
  */
 function buildMechExamineText(mech: MechEntry): string {
-  const SEP = '\x8d'; // 0x8D — MPBT dialog line separator (confirmed by FUN_00433d00 RE)
+  const SEP = '\x5c'; // 0x5C ('\') — lobby dialog line-break in FUN_00433310.
+                      // FUN_00433310 NULs the '\' in the line buffer before calling
+                      // FUN_00431f10, so it forces a new line without being rendered.
+                      // 0x8D was wrong: FUN_00431e00 indexes the font-width table with
+                      // signed-char arithmetic → 0x8D = -115 → offset -460 → bad memory.
   const stats = MECH_STATS.get(mech.typeString);
 
   if (!stats || stats.disabled) {
