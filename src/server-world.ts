@@ -67,6 +67,20 @@ const FALLBACK_MECH_ID = WORLD_MECHS.length > 0 ? WORLD_MECHS[0].id : 0;
 const DEFAULT_SCENE_NAME = 'Solaris Arena';
 const WELCOME_TEXT       = 'Welcome to the game world.';
 
+/**
+ * Map of player-typed text → canonical allegiance.
+ * Accepts numbers 1-5 or house names (lower-cased before lookup).
+ * Confirmed cmd-4 wire format: client sends raw typed text as
+ *   [length_hi = len/85 + 0x21] [length_lo = len%85 + 0x21] [raw ASCII bytes].
+ */
+const ALLEGIANCE_TEXT_MAP: Readonly<Record<string, Allegiance>> = {
+  '1': 'Davion',  'davion':  'Davion',
+  '2': 'Steiner', 'steiner': 'Steiner',
+  '3': 'Liao',    'liao':    'Liao',
+  '4': 'Marik',   'marik':   'Marik',
+  '5': 'Kurita',  'kurita':  'Kurita',
+};
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function send(socket: net.Socket, pkt: Buffer, capture: CaptureLogger, label: string): void {
@@ -248,46 +262,101 @@ function handleWorldGameData(
       return;
     }
     const allegiance = ALLEGIANCES[allegianceType] as Allegiance;
-    session.allegiance = allegiance;
     connLog.info('[world] cmd-5 (allegiance-pick): player chose %s', allegiance);
+    applyAllegiancePick(session, allegiance, 'cmd-5', connLog, capture);
 
-    if (session.accountId !== undefined) {
-      const displayName = session.displayName ?? session.username;
-      // For first-time players the character does not yet exist in the DB (the
-      // lobby deferred creation to here).  Try to INSERT; if the record already
-      // exists (reconnect race / returning player edge-case) fall back to UPDATE.
-      createCharacter(session.accountId, displayName, allegiance)
-        .then(() => connLog.info(
-          '[world] cmd-5: character created (displayName="%s" allegiance=%s)',
-          displayName, allegiance,
-        ))
-        .catch((err: unknown) => {
-          const pgErr = err as { code?: string };
-          if (pgErr.code === '23505') {
-            // Character already exists — just update allegiance.
-            updateCharacterAllegiance(session.accountId!, allegiance).catch((err2: unknown) => {
-              const m2 = err2 instanceof Error ? err2.message : String(err2);
-              connLog.error('[world] cmd-5: failed to update allegiance: %s', m2);
-            });
-          } else {
-            const msg = err instanceof Error ? err.message : String(err);
-            connLog.error('[world] cmd-5: failed to create character: %s', msg);
-          }
-        });
-    } else {
-      connLog.warn('[world] cmd-5: no accountId — allegiance not persisted to DB');
+  } else if (cmdIdx === 4) {
+    // Cmd-4: chat text from the player (FUN_0040d280 in MPBTWIN.EXE).
+    // The player types text in the chat box and presses Enter; the client
+    // sends the raw input string with a 2-byte base-85 length prefix:
+    //   [hi = len/85 + 0x21] [lo = len%85 + 0x21] [raw ASCII bytes]
+    // During first-login (session.allegiance === undefined) we parse the text
+    // as a house name or number to select the player's allegiance faction.
+    if (payload.length < 5) {
+      connLog.debug('[world] cmd-4 (chat): payload too short');
+      return;
+    }
+    const textLen = (payload[3] - 0x21) * 85 + (payload[4] - 0x21);
+    if (textLen <= 0 || payload.length < 5 + textLen) {
+      connLog.debug('[world] cmd-4 (chat): invalid text length=%d', textLen);
+      return;
+    }
+    const chatText = payload.subarray(5, 5 + textLen).toString('latin1').trim();
+    connLog.info('[world] cmd-4 (chat): text="%s"', chatText);
+
+    if (session.allegiance !== undefined) {
+      // Allegiance already set — ignore (normal chat during gameplay is not yet implemented).
+      connLog.debug('[world] cmd-4 (chat): allegiance already set, ignoring');
+      return;
     }
 
-    // After allegiance is chosen the client shows a hourglass (FUN_00433ef0) and
-    // waits for a server response.  Re-send the init sequence WITHOUT arenaOptions
-    // (sessionFlags 0x20 only — clear-arena, no new-char branch) so the client
-    // tears down the character-creation wizard and shows the normal arena.
-    connLog.info('[world] cmd-5: sending post-allegiance reinit (no wizard)');
-    sendPostAllegianceReinit(session, allegiance, connLog, capture);
+    const picked = ALLEGIANCE_TEXT_MAP[chatText.toLowerCase()];
+    if (!picked) {
+      connLog.info('[world] cmd-4 (chat): unrecognised allegiance text "%s"', chatText);
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket(
+          `"${chatText}" is not valid. Type 1-5 or: Davion Steiner Liao Marik Kurita`,
+          nextSeq(session),
+        ),
+        capture,
+        'CMD3_INVALID',
+      );
+      return;
+    }
+    connLog.info('[world] cmd-4 (chat): player chose %s', picked);
+    applyAllegiancePick(session, picked, 'cmd-4', connLog, capture);
 
   } else {
     connLog.debug('[world] cmd=%d — not yet handled (M3 stub)', cmdIdx);
   }
+}
+
+/**
+ * Shared handler called when the player selects their allegiance, regardless
+ * of how the selection was delivered (cmd-5 button click or cmd-4 chat text).
+ *
+ * Persists the choice to the database (INSERT new character or UPDATE existing)
+ * and then sends the post-allegiance arena reinit sequence to the client.
+ */
+function applyAllegiancePick(
+  session:   ClientSession,
+  allegiance: Allegiance,
+  source:    string,
+  connLog:   Logger,
+  capture:   CaptureLogger,
+): void {
+  session.allegiance = allegiance;
+
+  if (session.accountId !== undefined) {
+    const displayName = session.displayName ?? session.username;
+    // For first-time players the character does not yet exist in the DB (the
+    // lobby deferred creation to here).  Try to INSERT; if the record already
+    // exists (reconnect race / returning player edge-case) fall back to UPDATE.
+    createCharacter(session.accountId, displayName, allegiance)
+      .then(() => connLog.info(
+        '[world] %s: character created (displayName="%s" allegiance=%s)',
+        source, displayName, allegiance,
+      ))
+      .catch((err: unknown) => {
+        const pgErr = err as { code?: string };
+        if (pgErr.code === '23505') {
+          // Character already exists — just update allegiance.
+          updateCharacterAllegiance(session.accountId!, allegiance).catch((err2: unknown) => {
+            const m2 = err2 instanceof Error ? err2.message : String(err2);
+            connLog.error('[world] %s: failed to update allegiance: %s', source, m2);
+          });
+        } else {
+          const msg = err instanceof Error ? err.message : String(err);
+          connLog.error('[world] %s: failed to create character: %s', source, msg);
+        }
+      });
+  } else {
+    connLog.warn('[world] %s: no accountId — allegiance not persisted to DB', source);
+  }
+
+  connLog.info('[world] %s: sending post-allegiance reinit (no wizard)', source);
+  sendPostAllegianceReinit(session, allegiance, connLog, capture);
 }
 
 /**
@@ -423,16 +492,16 @@ function sendWorldInitSequence(
   );
 
   // Cmd3 — TextBroadcast: welcome message (only visible after g_chatReady=1, set by Cmd4).
-  // For new players (no allegiance yet), add instructions pointing them at the house buttons.
-  const welcomeMsg = session.allegiance === undefined
-    ? 'NEW PILOT: Select your Great House from the row of buttons at the top of the screen. Click Davion, Steiner, Liao, Marik, or Kurita.'
-    : WELCOME_TEXT;
-  send(
-    socket,
-    buildCmd3BroadcastPacket(welcomeMsg, nextSeq(session)),
-    capture,
-    'CMD3_WELCOME',
-  );
+  // For new players send multiple lines listing the house options with numbers so
+  // the player can type their choice in the chat box and press Enter.
+  // The client also renders a horizontal row of arenaOptions buttons at the top of
+  // the arena panel; clicking a house button sends cmd-5 as an alternative path.
+  if (session.allegiance === undefined) {
+    send(socket, buildCmd3BroadcastPacket('NEW PILOT: Choose your house allegiance by typing a number or name below, then press Enter:', nextSeq(session)), capture, 'CMD3_WELCOME');
+    send(socket, buildCmd3BroadcastPacket('  1. Davion   2. Steiner   3. Liao   4. Marik   5. Kurita', nextSeq(session)), capture, 'CMD3_OPTIONS');
+  } else {
+    send(socket, buildCmd3BroadcastPacket(WELCOME_TEXT, nextSeq(session)), capture, 'CMD3_WELCOME');
+  }
 
   // Cmd5 — CursorNormal: restore the arrow cursor.
   send(socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
