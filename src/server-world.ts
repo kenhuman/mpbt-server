@@ -77,6 +77,16 @@ const WELCOME_TEXT       = 'Welcome to the game world.';
 const ALLEGIANCE_LIST_ID = 5;
 
 /**
+ * listId for the post-allegiance "welcome" confirmation dialog.
+ * Sent immediately after the player picks their house; covers the right panel
+ * so the permanent "Choose your allegiance:" background art (baked into sprites,
+ * not changeable from server side) is not mistaken for another prompt.
+ * When the player clicks Continue the client sends cmd-7(WELCOME_DIALOG_ID, 1)
+ * and we respond with Cmd5 to restore the cursor.
+ */
+const WELCOME_DIALOG_ID = 6;
+
+/**
  * Map of player-typed text → canonical allegiance.
  * Accepts numbers 1-5 or house names (lower-cased before lookup).
  * Confirmed cmd-4 wire format: client sends raw typed text as
@@ -293,31 +303,56 @@ function handleWorldGameData(
 
   } else if (cmdIdx === 7) {
     // Cmd-7: player selected an item in a server-sent menu dialog (FUN_0040d2f0).
-    // Wire format: [listId: B85_1 (2B)] [selectedValue: B85_4 (5B)]
-    //   listId     = (payload[3]-0x21)*85 + (payload[4]-0x21)
-    //   value      = (payload[5]-0x21)*85^4 + ... + (payload[9]-0x21)
-    //   allegiance = ALLEGIANCES[value - 1]  (client sends item_index+1)
+    // Wire format (args after seq+cmd):
+    //   [listId: B85_1 (2B)][selectedValue: B85_4 (5B)]
+    // Two sub-cases based on listId:
+    //   ALLEGIANCE_LIST_ID (5) — allegiance picker (value = 1..5 → ALLEGIANCES[value-1])
+    //   WELCOME_DIALOG_ID  (6) — post-allegiance confirmation (any value → cursor restore)
     if (payload.length < 10) {
       connLog.debug('[world] cmd-7 (menu-select): payload too short');
       return;
     }
     const listId = (payload[3] - 0x21) * 85 + (payload[4] - 0x21);
-    if (listId !== ALLEGIANCE_LIST_ID) {
-      connLog.debug('[world] cmd-7: unrecognised listId=%d — ignoring', listId);
-      return;
-    }
-    if (session.allegiance !== undefined) {
-      connLog.debug('[world] cmd-7: allegiance already set — ignoring');
-      return;
-    }
     // Decode B85_4 selection value (5 bytes, payload[5..9]).
-    // For small values 1-5 only the last byte is non-zero.
     const selectionValue =
       (payload[5] - 0x21) * 52326577 +
       (payload[6] - 0x21) * 614125 +
       (payload[7] - 0x21) * 7225 +
       (payload[8] - 0x21) * 85 +
       (payload[9] - 0x21);
+
+    if (listId === WELCOME_DIALOG_ID) {
+      // Player clicked "Continue" (or pressed ESC) in the post-allegiance welcome
+      // dialog.  Restore cursor — client's FUN_00412190 raised hourglass before
+      // sending cmd-7 — and confirm the character is ready.
+      connLog.info('[world] cmd-7 (welcome-dismiss): sel=%d house=%s', selectionValue, session.allegiance ?? '?');
+      send(session.socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket('Your pilot is ready. Good luck!', nextSeq(session)),
+        capture,
+        'CMD3_READY',
+      );
+      return;
+    }
+
+    if (listId !== ALLEGIANCE_LIST_ID) {
+      connLog.debug('[world] cmd-7: unrecognised listId=%d — ignoring', listId);
+      return;
+    }
+    if (session.allegiance !== undefined) {
+      // Allegiance already set (e.g. player reopened the dialog somehow).
+      // FUN_00412190 always raises the hourglass before sending cmd-7, so we
+      // must restore the cursor even when ignoring the pick.
+      connLog.debug('[world] cmd-7: allegiance already set — restoring cursor');
+      send(session.socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
+      return;
+    }
+    // selectionValue=0 means ESC pressed (dialog closed without picking).
+    if (selectionValue === 0) {
+      connLog.info('[world] cmd-7: player pressed ESC in allegiance dialog — no pick');
+      return;
+    }
     const allegianceIdx = selectionValue - 1;   // client sends 1-based
     if (allegianceIdx < 0 || allegianceIdx >= ALLEGIANCES.length) {
       connLog.warn('[world] cmd-7: selectionValue=%d out of range', selectionValue);
@@ -440,21 +475,35 @@ function applyAllegiancePick(
   }
 
   if (skipReinit) {
-    // Scene already initialised; client's click handler already put up the
-    // hourglass via FUN_00433ef0.  Just acknowledge and restore the cursor.
-    connLog.info('[world] %s: allegiance set — sending Cmd3+Cmd5 only (no reinit)', source);
+    // Scene already initialised.  Instead of restoring the cursor immediately,
+    // send a welcome confirmation dialog that covers the right-panel area where
+    // the permanent "Choose your allegiance:" background art lives.  Without
+    // this, the baked-in sprite text confuses the player into thinking they
+    // need to pick again.  FUN_004112b0 (Cmd7 dialog setup) calls FUN_00433ec0
+    // at the end, so the hourglass is cleared when the welcome dialog appears.
+    // Cursor is fully restored in the WELCOME_DIALOG_ID cmd-7 response handler.
+    connLog.info('[world] %s: sending welcome dialog (no reinit)', source);
     const { socket } = session;
     send(
       socket,
       buildCmd3BroadcastPacket(
-        `You have joined House ${allegiance}. Your pilot is ready! ` +
-        `Type anything in the box below or press Escape to continue.`,
+        `Welcome to House ${allegiance}! Click Continue in the dialog below.`,
         nextSeq(session),
       ),
       capture,
       'CMD3_ALLEGIANCE',
     );
-    send(socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
+    send(
+      socket,
+      buildMenuDialogPacket(
+        WELCOME_DIALOG_ID,
+        `House ${allegiance} — Welcome, Pilot!`,
+        ['Continue →'],
+        nextSeq(session),
+      ),
+      capture,
+      'CMD7_WELCOME_DIALOG',
+    );
   } else {
     connLog.info('[world] %s: sending post-allegiance reinit', source);
     sendPostAllegianceReinit(session, allegiance, connLog, capture);
