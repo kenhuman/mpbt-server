@@ -145,8 +145,8 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 
 | Task | Status | Notes |
 |---|---|---|
-| Room broadcast | 🔬 | Same-room presence now seeds the roster with `Cmd10`, then uses `Cmd13` arrival and `Cmd11(status=0)` departure for incremental updates. Current validation is socket-level only; real-client validation is still needed. |
-| Player join / leave events | 🔬 | Same-room `Cmd10` / `Cmd13` / `Cmd11(status=0)` path is implemented on the branch and passes the local two-client socket smoke harness. |
+| Room broadcast | 🔬 | Same-room presence now seeds the roster with `Cmd10`, then uses `Cmd13` arrival and `Cmd11(status=0)` departure for incremental updates. Validated with the local two-client socket harness and a one-client `MPBTWIN.EXE` launch (`play.pcgi` consumed; client remained connected through world init). |
+| Player join / leave events | 🔬 | Same-room `Cmd10` / `Cmd13` / `Cmd11(status=0)` path is implemented on the branch and passes the local two-client socket smoke harness. Real-client join/leave behavior with multiple GUI clients is still pending. |
 | F7 — team / lance channel | 🔬 | Wire format for scoped team broadcast unknown |
 | F8 — all-comm / chat-window toggle | 🔬 | May share a command code with the chat-window open/close packet |
 | ComStar DM — store and deliver | ❌ | Async private messages; server must persist unread messages per player |
