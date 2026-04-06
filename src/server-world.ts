@@ -309,7 +309,8 @@ function handleWorldGameData(
  * Order:
  *   1. Cmd6 — show busy cursor (hourglass)
  *   2. Cmd4 — SceneInit (creates game window and sets g_chatReady=1)
- *   3. Cmd9 — RoomPlayerList (current room occupants; sets roster ready flag)
+ *   3. Cmd9 — RoomPlayerList (currently sent tentatively; newer RE suggests
+ *      this may actually drive an inquiry popup rather than passive init)
  *   4. Cmd3 — TextBroadcast (welcome message; requires g_chatReady=1)
  *   5. Cmd5 — restore normal cursor
  */
@@ -347,8 +348,9 @@ function sendWorldInitSequence(
   connLog.info('[world] sending Cmd4 SceneInit (mech_id=%d callsign="%s")', mechId, callsign);
   send(socket, sceneInit, capture, 'CMD4_SCENE_INIT');
 
-  // Cmd9 — RoomPlayerList: initial same-room occupant roster, also sets
-  // DAT_004ddfc0+0x44 = 8 (roster ready flag).
+  // Cmd9 — RoomPlayerList. This is currently sent as a best-effort placeholder,
+  // but newer RE suggests the client may treat it as an inquiry popup flow
+  // (`FUN_0042DA40/FUN_00413A60`) rather than passive world-entry presence.
   send(
     socket,
     buildCmd9RoomPlayerListPacket(currentRoomRosterEntries(players, session), nextSeq(session)),

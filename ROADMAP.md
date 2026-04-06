@@ -145,7 +145,7 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 
 | Task | Status | Notes |
 |---|---|---|
-| Room broadcast | ❌ | Players see who is in their current location |
+| Room broadcast | ❌ | Players see who is in their current location. Current caution: `Cmd9` now looks like an on-demand inquiry UI path, so do not assume it is the passive world-entry roster packet. |
 | Player join / leave events | ❌ | Notify room occupants when someone arrives or departs |
 | F7 — team / lance channel | 🔬 | Wire format for scoped team broadcast unknown |
 | F8 — all-comm / chat-window toggle | 🔬 | May share a command code with the chat-window open/close packet |
