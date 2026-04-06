@@ -187,7 +187,7 @@ export function buildMechListArgs(
       'FUN_0043A370 writes into parallel static arrays (stride 4/40/20 bytes). ' +
       'Array gap analysis: DAT_004dc510→DAT_004dc560 = 0x50 = 20 int slots. ' +
       'Entry 21 writes slot_info[20] into mech_id[0], corrupting the first mech. ' +
-      'Cap sender at MECH_SEND_LIMIT=20 in server.ts.',
+      'Cap the sender at 20 mechs.',
     );
   }
   const parts: Buffer[] = [

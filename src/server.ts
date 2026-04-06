@@ -20,7 +20,7 @@ import * as crypto from 'crypto';
 import * as path from 'path';
 import * as os from 'os';
 
-import { ARIES_PORT, WORLD_PORT, Msg } from './protocol/constants.js';
+import { ARIES_PORT, Msg } from './protocol/constants.js';
 import { PacketParser, buildPacket, hexDump } from './protocol/aries.js';
 import { parseLoginPayload, buildLoginRequest, buildSyncAck, buildWelcomePacket } from './protocol/auth.js';
 import { buildMechListPacket, buildMenuDialogPacket, buildRedirectPacket, buildCmd20Packet, parseClientCmd7, decodeArgType4, type MechEntry } from './protocol/game.js';
