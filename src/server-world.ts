@@ -35,6 +35,8 @@ import {
 } from './protocol/auth.js';
 import {
   buildCmd3BroadcastPacket,
+  buildCmd11PlayerEventPacket,
+  buildCmd13PlayerArrivalPacket,
   buildCmd4SceneInitPacket,
   buildCmd5CursorNormalPacket,
   buildCmd6CursorBusyPacket,
@@ -66,6 +68,8 @@ const FALLBACK_MECH_ID = WORLD_MECHS.length > 0 ? WORLD_MECHS[0].id : 0;
 // Default arena name shown in the window title.
 const DEFAULT_SCENE_NAME = 'Solaris Arena';
 const WELCOME_TEXT       = 'Welcome to the game world.';
+const DEFAULT_ROOM_ID    = 'world_default_room';
+let nextWorldRosterId    = 1;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -82,6 +86,68 @@ function nextSeq(session: ClientSession): number {
   const s = session.serverSeq;
   session.serverSeq = (session.serverSeq + 1) % 43;
   return s;
+}
+
+function getDisplayName(session: ClientSession): string {
+  return ((session.displayName ?? session.username) || 'Pilot').slice(0, 84);
+}
+
+function currentRoomRosterEntries(players: PlayerRegistry, session: ClientSession): string[] {
+  return players
+    .inRoom(session.roomId)
+    .filter(other =>
+      other.id !== session.id &&
+      other.phase === 'world' &&
+      other.worldInitialized &&
+      !other.socket.destroyed,
+    )
+    .map(getDisplayName);
+}
+
+function notifyRoomArrival(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+): void {
+  if (!session.roomId || session.worldRosterId === undefined) return;
+  const callsign = getDisplayName(session);
+  for (const other of players.inRoom(session.roomId)) {
+    if (
+      other.id === session.id ||
+      other.phase !== 'world' ||
+      !other.worldInitialized ||
+      other.socket.destroyed
+    ) {
+      continue;
+    }
+    other.socket.write(
+      buildCmd13PlayerArrivalPacket(session.worldRosterId, callsign, nextSeq(other)),
+    );
+  }
+  connLog.info('[world] notified room of arrival: rosterId=%d callsign="%s"', session.worldRosterId, callsign);
+}
+
+function notifyRoomDeparture(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+): void {
+  if (!session.roomId || session.worldRosterId === undefined) return;
+  const callsign = getDisplayName(session);
+  for (const other of players.inRoom(session.roomId)) {
+    if (
+      other.id === session.id ||
+      other.phase !== 'world' ||
+      !other.worldInitialized ||
+      other.socket.destroyed
+    ) {
+      continue;
+    }
+    other.socket.write(
+      buildCmd11PlayerEventPacket(session.worldRosterId, 0, callsign, nextSeq(other)),
+    );
+  }
+  connLog.info('[world] notified room of departure: rosterId=%d callsign="%s"', session.worldRosterId, callsign);
 }
 
 // ── Login handler ─────────────────────────────────────────────────────────────
@@ -111,6 +177,7 @@ async function handleWorldLogin(
   const { login } = result;
   session.username = login.username || '(unknown)';
   session.phase    = 'world';
+  session.roomId   = DEFAULT_ROOM_ID;
 
   // Retrieve the mech the player picked in the lobby.
   const launch = launchRegistry.consume(session.username);
@@ -176,6 +243,7 @@ async function handleWorldLogin(
 //   cmd 29 — FUN_00427710 (unknown; observed in some sessions)
 
 function handleWorldGameData(
+  players: PlayerRegistry,
   session: ClientSession,
   payload: Buffer,
   connLog: Logger,
@@ -209,11 +277,17 @@ function handleWorldGameData(
   connLog.info('[world] client seq=%d cmd=%d', seq, cmdIdx);
 
   if (cmdIdx === 3) {
+    if (session.worldInitialized) {
+      connLog.debug('[world] duplicate cmd-3 after initialization — ignoring');
+      return;
+    }
     // Cmd-3: client capabilities / ready signal (RPS mode).
     // Called by FUN_0040d3c0 immediately after the world-MMW welcome is received.
     // Respond with the world initialization sequence.
     connLog.info('[world] cmd-3 (client-ready) → sending world init sequence');
-    sendWorldInitSequence(session, connLog, capture);
+    sendWorldInitSequence(players, session, connLog, capture);
+    session.worldInitialized = true;
+    notifyRoomArrival(players, session, connLog);
 
   } else if (cmdIdx === 1) {
     // Cmd-1 PingAck: client acknowledging a server ping; no server reply needed.
@@ -235,11 +309,12 @@ function handleWorldGameData(
  * Order:
  *   1. Cmd6 — show busy cursor (hourglass)
  *   2. Cmd4 — SceneInit (creates game window and sets g_chatReady=1)
- *   3. Cmd9 — RoomPlayerList (empty room; sets roster ready flag)
+ *   3. Cmd9 — RoomPlayerList (current room occupants; sets roster ready flag)
  *   4. Cmd3 — TextBroadcast (welcome message; requires g_chatReady=1)
  *   5. Cmd5 — restore normal cursor
  */
 function sendWorldInitSequence(
+  players: PlayerRegistry,
   session: ClientSession,
   connLog: Logger,
   capture: CaptureLogger,
@@ -272,10 +347,11 @@ function sendWorldInitSequence(
   connLog.info('[world] sending Cmd4 SceneInit (mech_id=%d callsign="%s")', mechId, callsign);
   send(socket, sceneInit, capture, 'CMD4_SCENE_INIT');
 
-  // Cmd9 — RoomPlayerList: empty room, sets DAT_004ddfc0+0x44 = 8 (roster ready flag).
+  // Cmd9 — RoomPlayerList: initial same-room occupant roster, also sets
+  // DAT_004ddfc0+0x44 = 8 (roster ready flag).
   send(
     socket,
-    buildCmd9RoomPlayerListPacket([], nextSeq(session)),
+    buildCmd9RoomPlayerListPacket(currentRoomRosterEntries(players, session), nextSeq(session)),
     capture,
     'CMD9_ROOM_LIST',
   );
@@ -316,6 +392,8 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     mechListSent:      false,
     awaitingMechConfirm: false,
     serverSeq:         0,
+    worldInitialized:  false,
+    worldRosterId:     nextWorldRosterId++,
   };
   players.add(session);
 
@@ -352,7 +430,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
           break;
 
         case Msg.SYNC:
-          handleWorldGameData(session, pkt.payload, connLog, capture);
+          handleWorldGameData(players, session, pkt.payload, connLog, capture);
           break;
 
         case Msg.KEEPALIVE:
@@ -380,6 +458,9 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
       '[world] client disconnected (phase=%s, bytes=%d)',
       session.phase, session.bytesReceived,
     );
+    if (session.phase === 'world' && session.worldInitialized) {
+      notifyRoomDeparture(players, session, connLog);
+    }
     players.remove(session.id);
     capture.close();
   });

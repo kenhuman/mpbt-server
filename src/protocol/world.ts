@@ -11,7 +11,13 @@
  * Confirmed by Ghidra RE of MPBTWIN.EXE; individual handlers documented below.
  */
 
-import { buildGamePacket, encodeAsByte, encodeB85_1, encodeString } from './game.js';
+import {
+  buildGamePacket,
+  encodeAsByte,
+  encodeB85_1,
+  encodeB85_4,
+  encodeString,
+} from './game.js';
 
 // ── Cmd 3 — Text Broadcast ────────────────────────────────────────────────────
 // CONFIRMED: FUN_0040C190 handler; RPS mode only.
@@ -206,10 +212,10 @@ export function buildCmd6CursorBusyPacket(seq = 0): Buffer {
 //   [byte: count]             FUN_00402f40
 //   [count × Frame_ReadArg]   FUN_0040c0d0 = encodeString format per entry
 //
-// Each entry is stored into DAT_004de000[i] (40-byte slots); full entry format
-// is TBD (M4 RE work).  For M3 send count=0 (empty room) so only the roster
-// ready flag (DAT_004ddfc0+0x44 = 8) is set, avoiding a crash from parsing
-// unknown entry layouts.
+// Each entry is stored into DAT_004de000[i] as a null-terminated string in a
+// 40-byte slot. FUN_0042daa0 later formats the entries as "%d. %s", so the
+// initial room list is a plain string roster rather than a richer binary
+// struct.
 
 /**
  * Build a Cmd9 (RoomPlayerList) packet.
@@ -224,4 +230,58 @@ export function buildCmd9RoomPlayerListPacket(entries: string[] = [], seq = 0): 
     parts.push(encodeString(e.slice(0, 84)));
   }
   return buildGamePacket(9, Buffer.concat(parts), false, seq);
+}
+
+// ── Cmd 11 — Player Event ────────────────────────────────────────────────────
+// CONFIRMED: FUN_0040C6C0.
+//
+// Wire args:
+//   [type4: roster/session id]
+//   [byte: status]
+//   [Frame_ReadArg: callsign]
+//
+// Minimal useful status for M4:
+//   0 = left room / departed
+
+/** Build a Cmd11 player-event packet. */
+export function buildCmd11PlayerEventPacket(
+  rosterId: number,
+  status: number,
+  callsign: string,
+  seq = 0,
+): Buffer {
+  return buildGamePacket(
+    11,
+    Buffer.concat([
+      encodeB85_4(rosterId),
+      encodeAsByte(status),
+      encodeString(callsign.slice(0, 84)),
+    ]),
+    false,
+    seq,
+  );
+}
+
+// ── Cmd 13 — Player Arrival ──────────────────────────────────────────────────
+// CONFIRMED: FUN_0040C920.
+//
+// Wire args:
+//   [type4: roster/session id]
+//   [Frame_ReadArg: callsign]
+
+/** Build a Cmd13 player-arrival packet. */
+export function buildCmd13PlayerArrivalPacket(
+  rosterId: number,
+  callsign: string,
+  seq = 0,
+): Buffer {
+  return buildGamePacket(
+    13,
+    Buffer.concat([
+      encodeB85_4(rosterId),
+      encodeString(callsign.slice(0, 84)),
+    ]),
+    false,
+    seq,
+  );
 }

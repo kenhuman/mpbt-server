@@ -36,6 +36,14 @@ export interface ClientSession {
   awaitingMechConfirm: boolean;
   /** Server→client sequence number 0..41, incremented per game frame. */
   serverSeq: number;
+  /** True once the world init sequence has been sent in response to the first world cmd-3. */
+  worldInitialized?: boolean;
+  /**
+   * Stable per-connection roster identifier used by world presence packets
+   * (Cmd9/Cmd11/Cmd13). This is distinct from accountId and only needs to be
+   * unique within the current server process.
+   */
+  worldRosterId?: number;
   /**
    * Mech ID selected in the lobby and used to initialize the world arena.
    * Set on world-server sessions (via launchRegistry.consume); undefined on lobby sessions.
