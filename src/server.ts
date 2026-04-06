@@ -23,7 +23,17 @@ import * as os from 'os';
 import { ARIES_PORT, WORLD_PORT, Msg } from './protocol/constants.js';
 import { PacketParser, buildPacket, hexDump } from './protocol/aries.js';
 import { parseLoginPayload, buildLoginRequest, buildSyncAck, buildWelcomePacket } from './protocol/auth.js';
-import { buildMechListPacket, buildMenuDialogPacket, buildRedirectPacket, buildCmd20Packet, parseClientCmd7, decodeArgType4, type MechEntry } from './protocol/game.js';
+import {
+  buildMechListPacket,
+  buildMenuDialogPacket,
+  buildRedirectPacket,
+  buildCmd20Packet,
+  buildCmd36TextEntryPromptPacket,
+  parseClientCmd7,
+  parseClientCmd21TextReply,
+  decodeArgType4,
+  type MechEntry,
+} from './protocol/game.js';
 import { loadMechs } from './data/mechs.js';
 import { MECH_STATS } from './data/mech-stats.js';
 import { PlayerRegistry, ClientSession } from './state/players.js';
@@ -32,7 +42,7 @@ import { startWorldServer } from './server-world.js';
 import { Logger } from './util/logger.js';
 import { CaptureLogger } from './util/capture.js';
 import { verifyOrRegister } from './db/accounts.js';
-import { findCharacter, createCharacter, type Allegiance, ALLEGIANCES } from './db/characters.js';
+import { findCharacter, createCharacter, isDisplayNameTaken, type Allegiance, ALLEGIANCES } from './db/characters.js';
 
 // ── Global state ──────────────────────────────────────────────────────────────
 
@@ -312,8 +322,17 @@ function handleLogin(
 // ARIES list-id used for our mech-confirm dialog (any value ≠ client special IDs).
 const CONFIRM_DIALOG_ID = 2;
 
+// Inferred text-entry prompt: cmd 36 server->client, cmd 21 client->server.
+// Using dialogId=0 yields the simplest single-submit prompt in current RE.
+const DISPLAY_NAME_PROMPT_DIALOG_ID = 0;
+
 // List-id used for the House-allegiance selection dialog during char creation.
 const ALLEGIANCE_DIALOG_ID = 3;
+
+const DISPLAY_NAME_MAX_BYTES = 64;
+const DEFAULT_DISPLAY_NAME_PROMPT = 'Enter your callsign:';
+const INVALID_DISPLAY_NAME_PROMPT = 'Callsign cannot be empty. Enter your callsign:';
+const TAKEN_DISPLAY_NAME_PROMPT = 'That callsign is taken. Enter another callsign:';
 
 // Sample mech roster — one Shadowhawk entry so the UI has something to show.
 // Mech roster loaded from mechdata/*.MEC at startup.
@@ -339,6 +358,20 @@ function nextSeq(session: ClientSession): number {
   const s = session.serverSeq;
   session.serverSeq = (session.serverSeq + 1) % 43; // 0..42 inclusive
   return s;
+}
+
+function normalizeDisplayName(raw: string): string {
+  let normalized = raw
+    .replace(/[\x00-\x1f\x7f\x1b]/g, '')
+    .replace(/[\\\[\]]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  while (normalized && Buffer.byteLength(normalized, 'latin1') > DISPLAY_NAME_MAX_BYTES) {
+    normalized = normalized.slice(0, -1).trimEnd();
+  }
+
+  return normalized;
 }
 
 function handleGameData(
@@ -381,7 +414,7 @@ function handleGameData(
     // NEW POST-M3 FLOW (issues #26/#27):
     //   Look up the player's character in the DB.
     //   - Character exists → REDIRECT immediately to world port (issue #27).
-    //   - No character     → send House allegiance dialog to start creation (issue #26).
+    //   - No character     → send editable name prompt, then House allegiance.
     //
     // The pre-combat mech select (cmd-26) is NOT sent here anymore; it belongs
     // to the M6 combat-entry path, not the initial login flow.
@@ -403,14 +436,65 @@ function handleGameData(
         );
         issueWorldRedirect(session, connLog, capture);
       } else {
-        // First login: no character → prompt for House allegiance.
+        // First login: no character → prompt for display name first.
         connLog.info('[game] no character for account %d — starting char creation', accountId);
         session.phase = 'char-creation';
-        sendAllegianceDialog(session, connLog, capture);
+        session.characterCreateStep = 'display-name';
+        session.pendingDisplayName = undefined;
+        session.displayName = undefined;
+        sendDisplayNamePrompt(session, connLog, capture);
       }
     }).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
       connLog.error('[game] DB error during character lookup: %s', msg);
+      session.socket.destroy();
+    });
+
+  } else if (cmdIdx === 21) {
+    // cmd 21: inferred editable-text reply for the cmd-36 prompt path.
+    if (session.phase !== 'char-creation' || session.characterCreateStep !== 'display-name') {
+      connLog.debug('[game] cmd 21 ignored (phase=%s step=%s)', session.phase, session.characterCreateStep ?? '(none)');
+      return;
+    }
+
+    const parsed = parseClientCmd21TextReply(payload);
+    if (!parsed) {
+      connLog.warn('[game] cmd 21 parse failed (len=%d)', payload.length);
+      return;
+    }
+
+    connLog.info('[game] cmd 21: dialogId=%d text=%j phase=%s', parsed.dialogId, parsed.text, session.phase);
+    if (parsed.dialogId !== DISPLAY_NAME_PROMPT_DIALOG_ID) {
+      connLog.warn('[game] unexpected display-name dialogId=%d — re-prompting', parsed.dialogId);
+      sendDisplayNamePrompt(session, connLog, capture);
+      return;
+    }
+
+    const displayName = normalizeDisplayName(parsed.text);
+    if (!displayName) {
+      connLog.warn('[game] char-creation: empty/invalid callsign submitted');
+      session.pendingDisplayName = undefined;
+      session.displayName = undefined;
+      sendDisplayNamePrompt(session, connLog, capture, INVALID_DISPLAY_NAME_PROMPT);
+      return;
+    }
+
+    isDisplayNameTaken(displayName).then(taken => {
+      if (taken) {
+        connLog.info('[game] char-creation: displayName="%s" already taken', displayName);
+        session.pendingDisplayName = undefined;
+        session.displayName = undefined;
+        sendDisplayNamePrompt(session, connLog, capture, TAKEN_DISPLAY_NAME_PROMPT);
+        return;
+      }
+
+      session.pendingDisplayName = displayName;
+      session.displayName = displayName;
+      connLog.info('[game] char-creation: accepted displayName="%s" → sending allegiance dialog', displayName);
+      sendAllegianceDialog(session, connLog, capture);
+    }).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      connLog.error('[game] DB error during display-name check: %s', msg);
       session.socket.destroy();
     });
 
@@ -427,7 +511,12 @@ function handleGameData(
     const { listId, selection } = parsed;
     connLog.info('[game] cmd 7: listId=%d selection=%d phase=%s', listId, selection, session.phase);
 
-    if (session.phase === 'char-creation' && listId === ALLEGIANCE_DIALOG_ID && selection > 0) {
+    if (
+      session.phase === 'char-creation' &&
+      session.characterCreateStep === 'allegiance' &&
+      listId === ALLEGIANCE_DIALOG_ID &&
+      selection > 0
+    ) {
       // Allegiance selected (1-based index into ALLEGIANCES array).
       const allegianceIndex = selection - 1;
       if (allegianceIndex >= ALLEGIANCES.length) {
@@ -436,11 +525,14 @@ function handleGameData(
         return;
       }
       const allegiance = ALLEGIANCES[allegianceIndex] as Allegiance;
-      // Display name: use the login username for now.
-      // TODO(#26): RE the text-input wire format so players can choose their own
-      // callsign.  Once known, add a name-entry step before this dialog.
-      const displayName = session.username.slice(0, 64);
+      const displayName = session.pendingDisplayName;
       const accountId   = session.accountId!;
+
+      if (!displayName) {
+        connLog.warn('[game] char-creation: allegiance selected without pending display name');
+        sendDisplayNamePrompt(session, connLog, capture, INVALID_DISPLAY_NAME_PROMPT);
+        return;
+      }
 
       connLog.info(
         '[game] char-creation: allegiance=%s displayName="%s" → persisting to DB',
@@ -450,25 +542,18 @@ function handleGameData(
       createCharacter(accountId, displayName, allegiance).then(character => {
         session.displayName = character.display_name;
         session.allegiance  = character.allegiance;
+        session.pendingDisplayName = undefined;
+        session.characterCreateStep = undefined;
         connLog.info('[game] character created (id=%d) → REDIRECT to world', character.id);
         issueWorldRedirect(session, connLog, capture);
       }).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
-        // Handle duplicate display_name (UNIQUE violation — code 23505).
         const pgErr = err as { code?: string };
         if (pgErr.code === '23505') {
-          connLog.warn('[game] display name "%s" already taken — retrying with suffix', displayName);
-          const fallback = `${displayName.slice(0, 60)}_${accountId}` as string;
-          createCharacter(accountId, fallback, allegiance).then(character => {
-            session.displayName = character.display_name;
-            session.allegiance  = character.allegiance;
-            connLog.info('[game] character created with fallback name "%s" → REDIRECT', fallback);
-            issueWorldRedirect(session, connLog, capture);
-          }).catch((err2: unknown) => {
-            const msg2 = err2 instanceof Error ? err2.message : String(err2);
-            connLog.error('[game] failed to create character with fallback: %s', msg2);
-            session.socket.destroy();
-          });
+          connLog.warn('[game] display name "%s" already taken during create — re-prompting', displayName);
+          session.pendingDisplayName = undefined;
+          session.displayName = undefined;
+          sendDisplayNamePrompt(session, connLog, capture, TAKEN_DISPLAY_NAME_PROMPT);
           return;
         }
         connLog.error('[game] char-creation DB error: %s', msg);
@@ -517,9 +602,13 @@ function handleGameData(
     // cmd 0x1D (29) = ESC/cancel pressed in a menu dialog.
     const p1 = payload.length > 3 ? payload[3] - 0x21 : -1;
     if (session.phase === 'char-creation') {
-      // Re-send allegiance dialog — player cannot skip character creation.
-      connLog.info('[game] cmd 0x1D in char-creation: p1=%d — re-sending allegiance dialog', p1);
-      sendAllegianceDialog(session, connLog, capture);
+      if (session.characterCreateStep === 'display-name') {
+        connLog.info('[game] cmd 0x1D in char-creation/display-name: p1=%d — re-sending name prompt', p1);
+        sendDisplayNamePrompt(session, connLog, capture);
+      } else {
+        connLog.info('[game] cmd 0x1D in char-creation/allegiance: p1=%d — re-sending allegiance dialog', p1);
+        sendAllegianceDialog(session, connLog, capture);
+      }
     } else {
       connLog.info('[game] cmd 0x1D (cancel/ESC): p1=%d — re-sending mech list to dismiss dialog', p1);
       session.awaitingMechConfirm = false;
@@ -559,12 +648,30 @@ function handleGameData(
 
 // ── Character creation helpers ────────────────────────────────────────────────
 
+/** Send the editable display-name prompt during first-login character creation. */
+function sendDisplayNamePrompt(
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+  prompt = DEFAULT_DISPLAY_NAME_PROMPT,
+): void {
+  session.characterCreateStep = 'display-name';
+  const pkt = buildCmd36TextEntryPromptPacket(
+    DISPLAY_NAME_PROMPT_DIALOG_ID,
+    prompt,
+    nextSeq(session),
+  );
+  connLog.info('[game] sending display-name prompt %j', prompt);
+  send(session.socket, pkt, capture, 'DISPLAY_NAME_PROMPT');
+}
+
 /** Send the House allegiance selection dialog during character creation. */
 function sendAllegianceDialog(
   session: ClientSession,
   connLog: Logger,
   capture: CaptureLogger,
 ): void {
+  session.characterCreateStep = 'allegiance';
   const items = ALLEGIANCES as readonly string[];
   const pkt = buildMenuDialogPacket(
     ALLEGIANCE_DIALOG_ID,
