@@ -300,7 +300,9 @@ function handleWorldGameData(
  *
  * Cmd9 is intentionally omitted here. Newer RE ties it to a room-occupant
  * inquiry flow (`FUN_0040C310 -> FUN_0042DA40 -> FUN_0040CA70 -> FUN_00412980`)
- * rather than a passive world-entry roster sync.
+ * rather than a passive world-entry roster sync. Current best candidate for the
+ * missing initial room-sync packet is Cmd10 (`FUN_0040C370`), which seeds the
+ * same `DAT_004e1870` roster table later updated by Cmd13/Cmd11.
  */
 function sendWorldInitSequence(
   players: PlayerRegistry,

@@ -145,8 +145,8 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 
 | Task | Status | Notes |
 |---|---|---|
-| Room broadcast | 🔬 | Same-room presence is partially implemented with `Cmd13` arrival and `Cmd11(status=0)` departure. Initial room-sync packet is still unresolved; do not assume `Cmd9` fills that role. |
-| Player join / leave events | 🔬 | Same-room `Cmd13` / `Cmd11(status=0)` path is implemented on the branch; needs real-client validation against room changes and world entry |
+| Room broadcast | 🔬 | Same-room presence is partially implemented with `Cmd13` arrival and `Cmd11(status=0)` departure. New RE points to `Cmd10` as the initial room-sync batch packet; this still needs real-client validation and is not yet implemented on the branch. |
+| Player join / leave events | 🔬 | Same-room `Cmd13` / `Cmd11(status=0)` path is implemented on the branch; `Cmd10` now looks like the missing seed packet that should populate the roster before incremental updates. |
 | F7 — team / lance channel | 🔬 | Wire format for scoped team broadcast unknown |
 | F8 — all-comm / chat-window toggle | 🔬 | May share a command code with the chat-window open/close packet |
 | ComStar DM — store and deliver | ❌ | Async private messages; server must persist unread messages per player |
