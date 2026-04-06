@@ -241,6 +241,54 @@ export function buildCmd9RoomPlayerListPacket(entries: string[] = [], seq = 0): 
   return buildGamePacket(9, Buffer.concat(parts), false, seq);
 }
 
+// ── Cmd 10 — Room Presence Sync ──────────────────────────────────────────────
+// CONFIRMED: FUN_0040C370.
+//
+// Wire args:
+//   [type4: roster/session id]
+//   [byte: status]
+//   [Frame_ReadArg: callsign]
+//   [repeat zero or more times]
+//   [type4: ignored terminator value]
+//   [byte: 0x54 terminator]
+//
+// The client clears and repopulates its live room roster table from this batch,
+// then renders a natural-language occupant list to the world chat window.
+// Status byte 5 seeds a normal present occupant (stored internally as 0).
+
+export interface Cmd10PresenceEntry {
+  /** Stable per-connection roster/session identifier. */
+  rosterId: number;
+  /** Presence state byte. 5 = normal present occupant. */
+  status?: number;
+  /** Callsign shown in the world roster/chat UI. */
+  callsign: string;
+}
+
+function buildCmd10Args(entries: Cmd10PresenceEntry[]): Buffer {
+  if (entries.length === 0) {
+    throw new RangeError('buildCmd10Args: at least one presence entry is required');
+  }
+
+  const parts: Buffer[] = [];
+  for (const entry of entries) {
+    parts.push(
+      encodeB85_4(entry.rosterId),
+      encodeAsByte(entry.status ?? 5),
+      encodeString(entry.callsign.slice(0, 84)),
+    );
+  }
+
+  // FUN_0040C370 always reads one last type4 before the terminating 0x54 byte.
+  parts.push(encodeB85_4(0), encodeAsByte(0x54));
+  return Buffer.concat(parts);
+}
+
+/** Build a Cmd10 room-presence sync packet. */
+export function buildCmd10RoomPresenceSyncPacket(entries: Cmd10PresenceEntry[], seq = 0): Buffer {
+  return buildGamePacket(10, buildCmd10Args(entries), false, seq);
+}
+
 // ── Cmd 11 — Player Event ────────────────────────────────────────────────────
 // CONFIRMED: FUN_0040C6C0.
 //

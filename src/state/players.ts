@@ -40,7 +40,7 @@ export interface ClientSession {
   worldInitialized?: boolean;
   /**
    * Stable per-connection roster identifier used by world presence packets
-   * (Cmd9/Cmd11/Cmd13). This is distinct from accountId and only needs to be
+   * (Cmd10/Cmd11/Cmd12/Cmd13). This is distinct from accountId and only needs to be
    * unique within the current server process.
    */
   worldRosterId?: number;

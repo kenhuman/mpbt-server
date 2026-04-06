@@ -34,6 +34,7 @@ import {
 } from './protocol/auth.js';
 import {
   buildCmd3BroadcastPacket,
+  buildCmd10RoomPresenceSyncPacket,
   buildCmd11PlayerEventPacket,
   buildCmd13PlayerArrivalPacket,
   buildCmd4SceneInitPacket,
@@ -88,6 +89,40 @@ function nextSeq(session: ClientSession): number {
 
 function getDisplayName(session: ClientSession): string {
   return ((session.displayName ?? session.username) || 'Pilot').slice(0, 84);
+}
+
+function currentRoomPresenceEntries(players: PlayerRegistry, session: ClientSession) {
+  if (session.worldRosterId === undefined) {
+    return [];
+  }
+
+  const entries = [
+    {
+      rosterId: session.worldRosterId,
+      status:   5,
+      callsign: getDisplayName(session),
+    },
+  ];
+
+  for (const other of players.inRoom(session.roomId)) {
+    if (
+      other.id === session.id ||
+      other.phase !== 'world' ||
+      !other.worldInitialized ||
+      other.worldRosterId === undefined ||
+      other.socket.destroyed
+    ) {
+      continue;
+    }
+
+    entries.push({
+      rosterId: other.worldRosterId,
+      status:   5,
+      callsign: getDisplayName(other),
+    });
+  }
+
+  return entries;
 }
 
 function notifyRoomArrival(
@@ -295,8 +330,9 @@ function handleWorldGameData(
  * Order:
  *   1. Cmd6 — show busy cursor (hourglass)
  *   2. Cmd4 — SceneInit (creates game window and sets g_chatReady=1)
- *   3. Cmd3 — TextBroadcast (welcome message; requires g_chatReady=1)
- *   4. Cmd5 — restore normal cursor
+ *   3. Cmd10 — RoomPresenceSync (self + current room occupants)
+ *   4. Cmd3 — TextBroadcast (welcome message; requires g_chatReady=1)
+ *   5. Cmd5 — restore normal cursor
  *
  * Cmd9 is intentionally omitted here. Newer RE ties it to a room-occupant
  * inquiry flow (`FUN_0040C310 -> FUN_0042DA40 -> FUN_0040CA70 -> FUN_00412980`)
@@ -337,6 +373,17 @@ function sendWorldInitSequence(
   );
   connLog.info('[world] sending Cmd4 SceneInit (mech_id=%d callsign="%s")', mechId, callsign);
   send(socket, sceneInit, capture, 'CMD4_SCENE_INIT');
+
+  // Cmd10 — RoomPresenceSync: seed the live room roster table before later
+  // Cmd13/Cmd11 incremental updates are applied.
+  const roomPresenceEntries = currentRoomPresenceEntries(players, session);
+  connLog.info('[world] sending Cmd10 RoomPresenceSync (%d entries)', roomPresenceEntries.length);
+  send(
+    socket,
+    buildCmd10RoomPresenceSyncPacket(roomPresenceEntries, nextSeq(session)),
+    capture,
+    'CMD10_ROOM_SYNC',
+  );
 
   // Cmd3 — TextBroadcast: welcome message (only visible after g_chatReady=1, set by Cmd4).
   send(

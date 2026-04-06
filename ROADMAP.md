@@ -105,7 +105,7 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 | `src/protocol/world.ts` — world command builders | ✅ | Cmd3 TextBroadcast, Cmd4 SceneInit, Cmd5/6 cursor, Cmd9 inquiry list prototype |
 | `src/state/launch.ts` — mech launch registry | ✅ | Bridges lobby→world: records selected mech before REDIRECT, consumed on world LOGIN |
 | `ClientSession` — add `'world'` phase | ✅ | Extended `src/state/players.ts`; `selectedMechId?` / `selectedMechSlot?` added |
-| Initial world handshake | ✅ | LOGIN_REQUEST → LOGIN → SYNC ack → MMW welcome → cmd-3 → Cmd6+Cmd4+Cmd3+Cmd5 |
+| Initial world handshake | ✅ | LOGIN_REQUEST → LOGIN → SYNC ack → MMW welcome → cmd-3 → Cmd6+Cmd4+Cmd10+Cmd3+Cmd5 |
 | Fix REDIRECT target to WORLD_PORT | ✅ | Lobby now redirects to port 2001; launch record stored before REDIRECT sends |
 | `gen-pcgi.ts` — separate lobby/world ports | N/A | `play.pcgi` always points to lobby (2000); REDIRECT carries the world address. Combat server is a separate dynamic spin-up (M6/M7). |
 
@@ -145,8 +145,8 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 
 | Task | Status | Notes |
 |---|---|---|
-| Room broadcast | 🔬 | Same-room presence is partially implemented with `Cmd13` arrival and `Cmd11(status=0)` departure. New RE points to `Cmd10` as the initial room-sync batch packet; this still needs real-client validation and is not yet implemented on the branch. |
-| Player join / leave events | 🔬 | Same-room `Cmd13` / `Cmd11(status=0)` path is implemented on the branch; `Cmd10` now looks like the missing seed packet that should populate the roster before incremental updates. |
+| Room broadcast | 🔬 | Same-room presence now seeds the roster with `Cmd10`, then uses `Cmd13` arrival and `Cmd11(status=0)` departure for incremental updates. Current validation is socket-level only; real-client validation is still needed. |
+| Player join / leave events | 🔬 | Same-room `Cmd10` / `Cmd13` / `Cmd11(status=0)` path is implemented on the branch and passes the local two-client socket smoke harness. |
 | F7 — team / lance channel | 🔬 | Wire format for scoped team broadcast unknown |
 | F8 — all-comm / chat-window toggle | 🔬 | May share a command code with the chat-window open/close packet |
 | ComStar DM — store and deliver | ❌ | Async private messages; server must persist unread messages per player |
