@@ -395,7 +395,7 @@ function handleGameData(
       if (character) {
         // Returning player: character on file → straight to world.
         session.displayName = character.display_name;
-        session.allegiance  = character.allegiance;
+        session.allegiance  = character.allegiance ?? undefined;
         connLog.info(
           '[game] character found: displayName="%s" allegiance=%s → REDIRECT to world',
           character.display_name, character.allegiance,
@@ -406,7 +406,9 @@ function handleGameData(
           mechTypeString: MECHS[0]?.typeString ?? '',
           accountId:      accountId,
           displayName:    character.display_name,
-          allegiance:     character.allegiance,
+          // Only pass allegiance if it's actually set; null means the wizard
+          // was never completed → world server should show the picker again.
+          ...(character.allegiance ? { allegiance: character.allegiance } : {}),
         });
         issueWorldRedirect(session, connLog, capture);
       } else {

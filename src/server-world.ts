@@ -139,7 +139,7 @@ async function handleWorldLogin(
     const character = await findCharacter(session.accountId);
     if (character) {
       session.displayName = character.display_name;
-      session.allegiance  = character.allegiance;
+      session.allegiance  = character.allegiance ?? undefined;
       connLog.info(
         '[world-login] character loaded from DB: displayName="%s" allegiance=%s',
         character.display_name, character.allegiance,
@@ -294,11 +294,11 @@ function handleWorldGameData(
  * Respond to the client after it sends cmd-5 (allegiance picked).
  *
  * The client calls FUN_00433ef0 (hourglass) right after sending cmd-5 and then
- * waits for the server.  We re-initialize the arena window WITHOUT arenaOptions
- * (sessionFlags=0x20 only — "clear arena data" but NOT the has-opponents/new-char
- * branch).  This causes the Cmd4 handler (FUN_00414b70) to re-enter without the
- * character-creation wizard, using the callsign already stored client-side from
- * the initial Cmd4 we sent.
+ * waits for the server.  We re-initialize the arena window with sessionFlags=0x30
+ * (has-opponents | clear-arena) so that the client READS a new arenaOptions count
+ * from the wire (flag 0x10 triggers wire-read in FUN_00414b70).  Sending count=0
+ * clears DAT_004e6a70 on the client; without this, the client reuses the stale
+ * count-6 from the initial Cmd4 and redraws the wizard.
  */
 function sendPostAllegianceReinit(
   session:   ClientSession,
@@ -307,21 +307,25 @@ function sendPostAllegianceReinit(
   capture:   CaptureLogger,
 ): void {
   const { socket } = session;
-  const mechId = session.selectedMechId ?? FALLBACK_MECH_ID;
+  const mechId    = session.selectedMechId ?? FALLBACK_MECH_ID;
+  const callsign  = (session.displayName ?? session.username).slice(0, 84) || 'Pilot';
 
   // Cmd6 — hourglass while the arena reloads.
   send(socket, buildCmd6CursorBusyPacket(nextSeq(session)), capture, 'CMD6_BUSY');
 
-  // Cmd4 — reinit WITHOUT arenaOptions and WITHOUT flag 0x10 (no new-char branch).
-  // The client reads the stored callsign from its own memory (set by the first Cmd4).
+  // Cmd4 — reinit WITH flag 0x10 so the client reads the new arenaOptions count
+  // (0) from wire.  This zeroes DAT_004e6a70 and removes the wizard buttons.
   send(
     socket,
     buildCmd4SceneInitPacket(
       {
-        sessionFlags:    0x20,  // clear-arena only; client uses stored callsign
+        sessionFlags:    0x30,  // has-opponents (0x10) + clear-arena (0x20)
         playerScoreSlot: 0,
         playerMechId:    mechId,
-        // No opponents, no arenaOptions → wizard is gone.
+        opponents:       [],    // all 4 slots absent
+        callsign,
+        sceneName:       DEFAULT_SCENE_NAME,
+        arenaOptions:    [],    // explicitly empty → writes count=0 to wire
       },
       nextSeq(session),
     ),
