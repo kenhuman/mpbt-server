@@ -285,12 +285,12 @@ function handleWorldGameData(
   if (cmdIdx === 3) {
     // Cmd-3: client capabilities / ready signal (RPS mode).
     // Called by FUN_0040d3c0 immediately after the world-MMW welcome is received.
-    // The client also sends cmd-3 again after its character-creation wizard
-    // completes (callsign + allegiance).  Guard against re-running the full
-    // init if allegiance is already set: just acknowledge so the client exits
-    // the busy-cursor state without clobbering the existing arena windows.
-    if (session.allegiance !== undefined) {
-      connLog.info('[world] cmd-3 (wizard-done re-trigger): allegiance=%s, acking without reinit', session.allegiance);
+    // The client also sends cmd-3 again after allegiance is picked (cmd-5/cmd-7).
+    // Guard against re-running the full init once the arena is already up:
+    // just acknowledge so the client exits the busy-cursor state without
+    // clobbering the existing arena windows.
+    if (session.arenaInitialized) {
+      connLog.info('[world] cmd-3 (re-trigger): arena already initialized, acking only (allegiance=%s)', session.allegiance);
       send(
         session.socket,
         buildCmd3BroadcastPacket(
@@ -304,6 +304,7 @@ function handleWorldGameData(
       return;
     }
     connLog.info('[world] cmd-3 (client-ready) → sending world init sequence');
+    session.arenaInitialized = true;
     sendWorldInitSequence(session, connLog, capture);
 
   } else if (cmdIdx === 1) {
@@ -714,6 +715,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     mechListSent:      false,
     awaitingMechConfirm: false,
     serverSeq:         0,
+    arenaInitialized:  false,
   };
   players.add(session);
 
