@@ -1024,10 +1024,10 @@ No seed change happens mid-session in standard gameplay.
 | 42 | `0x4b` | `0x00412680` | |
 | 43 | `0x4c` | `0x0040EED0` | |
 | 44 | `0x4d` | `0x00410000` | |
-| 45 | `0x4e` | `0x0040CEF0` | |
+| 45 | `0x4e` | `0x0040CEF0` | `Cmd45_ScrollListShell` | Reads a 1-byte mode and a `Frame_ReadString` title into `DAT_004e1844`, normalizing `\` to newlines. Creates/reuses a type-6 scroll-list window backed by `DAT_004e2620`, installs callbacks `FUN_0040ce70` / `FUN_0040ca70`, and copies the previously latched list-id from `DAT_00472a34` into `window[0x512]` so later Enter/ESC actions can emit `Cmd7(listId, selection)` replies. Mode `0/1` creates a plain list shell, `2/4` add Space/ESC footer controls, and `3` adds a Space-only footer. This command does **not** carry roster rows itself; it is a shell around the shared `DAT_004e2620` list state. |
 | 46 | `0x4f` | `0x00414130` | |
 | 47 | `0x50` | `0x004192F0` | |
-| 48 | `0x51` | `0x00411DF0` | |
+| 48 | `0x51` | `0x00411DF0` | `Cmd48_KeyedTripleStringList` | Wrapper to `FUN_00411e20(1)`. Reads `type1 list_id`, a `Frame_ReadArg` title string, a 1-byte count, then per row: `type4 item_id` + three `Frame_ReadArg` strings. Builds a type-4 numbered selection window where each line formats as `N. <item_id> <str1> <str2> <str3>` when `item_id != 0`. Selecting an entry later emits `Cmd7(list_id, item_id + 1)` via `FUN_00412190`. This is the strongest current candidate for the real global all-roster / KP5 response, because the payload naturally fits `ComStar ID + handle + sector + location` style rows. |
 | 49 | `0x52` | `0x0040F980` | |
 | 50 | `0x53` | `0x00410460` | |
 | 51 | `0x54` | `0x00410480` | |
@@ -1037,7 +1037,7 @@ No seed change happens mid-session in standard gameplay.
 | 55 | `0x58` | `0x00419340` | |
 | 56 | `0x59` | `0x0040FD60` | |
 | 57 | `0x5a` | `0x004168E0` | |
-| 58 | `0x5b` | `0x0040CEE0` | |
+| 58 | `0x5b` | `0x0040CEE0` | `Cmd58_SetScrollListId` | Reads one `type1` value via `FUN_0040d4c0()` and stores it in `DAT_00472a34`. `Cmd45_ScrollListShell` later copies that value into `window[0x512]`, making `Cmd58` a companion “set list-id for the scroll-list shell” packet rather than a visible UI command on its own. |
 | 59 | `0x5c` | `0x0040D4E0` | |
 | 60 | `0x5d` | `0x0040FEB0` | |
 | 61 | `0x5e` | `0x0040FA00` | |
@@ -1141,6 +1141,7 @@ Additional world-client senders confirmed after the first real-client M4 pass:
 - `FUN_0040d280` is the outbound world `cmd-4` free-text sender. In RPS mode (`DAT_004e2cd0 == 0`) it emits `cmd 4` followed by `FUN_00403100(param_1)`, which is `type1(length) + raw text`. Caller `FUN_00405080` feeds it from a local line-edit buffer when `DAT_004f3648 == 1`.
 - The room roster menu uses `FUN_00412e60` + `FUN_004134f0`. Corrected against the local `MPBT.MSG`, message ids `0x120..0x128` are `All`, `Stand`, `New Booth`, `Join`, `Mech Warriors at the current location:`, `Hit ESC to cancel, A for roster of all Mech Warriors.`, `Standing`, `Booth %2d`, `Hit ESC to cancel, n to grab a new booth, s to stand.`.
 - In that menu, `FUN_004134f0` emits `Cmd7(listId=3, selection=1)` for `All`, `selection=2` for `Stand`, `selection=0` for `New Booth`, and `selection = booth + 2` when joining a listed booth entry. Combined with `Cmd11` storing `status - 5` into `DAT_004e1872`, this pins the live social-room presence encoding as `5 = Standing`, `6..12 = Booth 1..7`.
+- The `selection=1` (`All`) path does **not** have a direct local client continuation. The strongest current server-side candidate is `Cmd48_KeyedTripleStringList` (`0x51`), which is self-contained and carries `item_id + three strings` per row. The older `Cmd45`/`Cmd58` family is now understood as a separate scroll-list shell/list-id mechanism and is less likely to be the minimal all-roster reply because `Cmd45` itself carries no row payload.
 
 ---
 

@@ -150,7 +150,7 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 | F7 — team / lance channel | 🔬 | Wire format for scoped team broadcast unknown |
 | F8 — all-comm / chat-window toggle | 🔬 | May share a command code with the chat-window open/close packet |
 | ComStar DM — store and deliver | ❌ | Async private messages; server must persist unread messages per player |
-| All-roster query | 🔬 | Global presence query: returns every online player's ComStar ID, handle, current sector, and location; supports "send ComStar" and "view personnel record" from the list; triggered via KP5. Current RE confirms the `Cmd9 -> 0x3fd` roster popup is room-local occupant selection, not this feature, and the room menu `Cmd7(listId=3)` `selection=1` corresponds to the local `All` action that should eventually trigger the real global-roster path. |
+| All-roster query | 🔬 | Global presence query: returns every online player's ComStar ID, handle, current sector, and location; supports "send ComStar" and "view personnel record" from the list; triggered via KP5. Current RE confirms the `Cmd9 -> 0x3fd` roster popup is room-local occupant selection, not this feature, and the room menu `Cmd7(listId=3)` `selection=1` is the actual `All` request. Strongest current reply candidate: `Cmd48_KeyedTripleStringList` (`0x51`) carrying `item_id + three strings` per row, with later row picks echoing back as `Cmd7(listId, item_id + 1)`. The older `Cmd45`/`Cmd58` family now looks like a separate scroll-list shell/list-id helper rather than the minimal KP5 reply. |
 
 **Verification:** Two clients in different rooms; each sees the other on the all-roster; a ComStar message is delivered even after the recipient moves rooms.
 
