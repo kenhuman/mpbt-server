@@ -145,12 +145,12 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 
 | Task | Status | Notes |
 |---|---|---|
-| Room broadcast | 🔬 | Same-room presence now seeds the roster with `Cmd10`, then uses `Cmd13` arrival and `Cmd11(status=0)` departure for incremental updates. Validated with the local two-client socket harness and a one-client `MPBTWIN.EXE` launch (`play.pcgi` consumed; client remained connected through world init). |
-| Player join / leave events | 🔬 | Same-room `Cmd10` / `Cmd13` / `Cmd11(status=0)` path is implemented on the branch and passes the local two-client socket smoke harness. Real-client join/leave behavior with multiple GUI clients is still pending. |
+| Room broadcast | 🔬 | Same-room presence now seeds the roster with `Cmd10`, then uses `Cmd13` arrival and `Cmd11(status=0)` departure for incremental updates. World `cmd-4` free-text relay is now implemented as room-local chat fan-out to other clients via `Cmd3`. Validated with the local two-client socket harness and a one-client `MPBTWIN.EXE` launch (`play.pcgi` consumed; client remained connected through world init). |
+| Player join / leave events | 🔬 | Same-room `Cmd10` / `Cmd13` / `Cmd11(status=0)` path is implemented on the branch and passes the local two-client socket smoke harness. The social-room status transitions behind the roster menu are now partially implemented too: `Cmd7(listId=3)` `selection=0` grabs a new booth, `selection=2` stands, and `selection>=3` joins booth `selection-2`, with `Cmd11(status=5..12)` updating the live roster table. Real-client join/leave behavior with multiple GUI clients is still pending. |
 | F7 — team / lance channel | 🔬 | Wire format for scoped team broadcast unknown |
 | F8 — all-comm / chat-window toggle | 🔬 | May share a command code with the chat-window open/close packet |
 | ComStar DM — store and deliver | ❌ | Async private messages; server must persist unread messages per player |
-| All-roster query | 🔬 | Global presence query: returns every online player's ComStar ID, handle, current sector, and location; supports "send ComStar" and "view personnel record" from the list; triggered via KP5. Current RE confirms the `Cmd9 -> 0x3fd` roster popup is room-local occupant selection, not this feature. |
+| All-roster query | 🔬 | Global presence query: returns every online player's ComStar ID, handle, current sector, and location; supports "send ComStar" and "view personnel record" from the list; triggered via KP5. Current RE confirms the `Cmd9 -> 0x3fd` roster popup is room-local occupant selection, not this feature, and the room menu `Cmd7(listId=3)` `selection=1` corresponds to the local `All` action that should eventually trigger the real global-roster path. |
 
 **Verification:** Two clients in different rooms; each sees the other on the all-roster; a ComStar message is delivered even after the recipient moves rooms.
 

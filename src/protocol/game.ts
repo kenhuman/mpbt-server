@@ -269,6 +269,32 @@ export function parseClientCmd7(
   return { seq, listId, selection };
 }
 
+/**
+ * Parse a client-sent world cmd-4 free-text frame.
+ * RPS sender path: FUN_0040d280 -> FUN_00403100
+ * Wire layout (args after cmd byte):
+ *   [type1 2B: textLen] [raw text bytes]
+ * Returns null if the frame is malformed or truncated.
+ */
+export function parseClientCmd4(
+  payload: Buffer,
+): { seq: number; text: string } | null {
+  if (payload.length < 9 || payload[0] !== 0x1B) return null;
+  const seq = payload[1] - 0x21;
+  const cmd = payload[2] - 0x21;
+  if (cmd !== 4) return null;
+
+  const [textLen, offset] = decodeArgType1(payload, 3);
+  const textEnd = offset + textLen;
+  // Client frames end with 3 CRC bytes plus trailing ESC.
+  if (textLen < 0 || textEnd + 4 > payload.length) return null;
+
+  return {
+    seq,
+    text: payload.subarray(offset, textEnd).toString('latin1'),
+  };
+}
+
 // ── Command 7 — server menu/dialog ───────────────────────────────────────────
 // CONFIRMED by FUN_004112b0: server sends cmd 7, client shows a numbered menu.
 //

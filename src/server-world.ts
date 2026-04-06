@@ -33,6 +33,10 @@ import {
   buildWelcomePacket,
 } from './protocol/auth.js';
 import {
+  parseClientCmd4,
+  parseClientCmd7,
+} from './protocol/game.js';
+import {
   buildCmd3BroadcastPacket,
   buildCmd10RoomPresenceSyncPacket,
   buildCmd11PlayerEventPacket,
@@ -91,6 +95,10 @@ function getDisplayName(session: ClientSession): string {
   return ((session.displayName ?? session.username) || 'Pilot').slice(0, 84);
 }
 
+function getPresenceStatus(session: ClientSession): number {
+  return session.worldPresenceStatus ?? 5;
+}
+
 function currentRoomPresenceEntries(players: PlayerRegistry, session: ClientSession) {
   if (session.worldRosterId === undefined) {
     return [];
@@ -99,7 +107,7 @@ function currentRoomPresenceEntries(players: PlayerRegistry, session: ClientSess
   const entries = [
     {
       rosterId: session.worldRosterId,
-      status:   5,
+      status:   getPresenceStatus(session),
       callsign: getDisplayName(session),
     },
   ];
@@ -117,12 +125,140 @@ function currentRoomPresenceEntries(players: PlayerRegistry, session: ClientSess
 
     entries.push({
       rosterId: other.worldRosterId,
-      status:   5,
+      status:   getPresenceStatus(other),
       callsign: getDisplayName(other),
     });
   }
 
   return entries;
+}
+
+function nextAvailableBooth(players: PlayerRegistry, roomId: string, excludeId: string): number {
+  const occupied = new Set<number>();
+  for (const other of players.inRoom(roomId)) {
+    if (
+      other.id === excludeId ||
+      other.phase !== 'world' ||
+      !other.worldInitialized ||
+      other.socket.destroyed
+    ) {
+      continue;
+    }
+
+    const booth = getPresenceStatus(other) - 5;
+    if (booth > 0) occupied.add(booth);
+  }
+
+  for (let booth = 1; booth <= 7; booth += 1) {
+    if (!occupied.has(booth)) return booth;
+  }
+
+  return 1;
+}
+
+function updateRoomPresenceStatus(
+  players: PlayerRegistry,
+  session: ClientSession,
+  status: number,
+  connLog: Logger,
+): void {
+  if (
+    !session.roomId ||
+    session.worldRosterId === undefined ||
+    !session.worldInitialized
+  ) {
+    return;
+  }
+
+  if (getPresenceStatus(session) === status) {
+    connLog.debug('[world] room presence unchanged: rosterId=%d status=%d', session.worldRosterId, status);
+    return;
+  }
+
+  session.worldPresenceStatus = status;
+  const callsign = getDisplayName(session);
+  for (const other of players.inRoom(session.roomId)) {
+    if (
+      other.phase !== 'world' ||
+      !other.worldInitialized ||
+      other.socket.destroyed
+    ) {
+      continue;
+    }
+    other.socket.write(
+      buildCmd11PlayerEventPacket(session.worldRosterId, status, callsign, nextSeq(other)),
+    );
+  }
+
+  connLog.info(
+    '[world] room presence update: rosterId=%d status=%d callsign="%s"',
+    session.worldRosterId,
+    status,
+    callsign,
+  );
+}
+
+function handleRoomMenuSelection(
+  players: PlayerRegistry,
+  session: ClientSession,
+  selection: number,
+  connLog: Logger,
+): void {
+  if (selection === 1) {
+    connLog.info('[world] room menu: all-roster request received (selection=1, not yet implemented)');
+    return;
+  }
+
+  if (selection === 0) {
+    const booth = nextAvailableBooth(players, session.roomId, session.id);
+    connLog.info('[world] room menu: new booth requested -> booth %d', booth);
+    updateRoomPresenceStatus(players, session, 5 + booth, connLog);
+    return;
+  }
+
+  if (selection === 2) {
+    connLog.info('[world] room menu: stand requested');
+    updateRoomPresenceStatus(players, session, 5, connLog);
+    return;
+  }
+
+  const booth = selection - 2;
+  if (booth < 1 || booth > 7) {
+    connLog.warn('[world] room menu: unsupported booth selection=%d', selection);
+    return;
+  }
+
+  connLog.info('[world] room menu: join booth %d', booth);
+  updateRoomPresenceStatus(players, session, 5 + booth, connLog);
+}
+
+function handleWorldTextCommand(
+  players: PlayerRegistry,
+  session: ClientSession,
+  text: string,
+  connLog: Logger,
+): void {
+  const clean = text.replace(/\x1b/g, '?').trim();
+  if (clean.length === 0) {
+    connLog.debug('[world] cmd-4 text ignored (empty)');
+    return;
+  }
+
+  const line = `${getDisplayName(session)}: ${clean}`;
+  connLog.info('[world] cmd-4 text: %s', line);
+
+  for (const other of players.inRoom(session.roomId)) {
+    if (
+      other.id === session.id ||
+      other.phase !== 'world' ||
+      !other.worldInitialized ||
+      other.socket.destroyed
+    ) {
+      continue;
+    }
+
+    other.socket.write(buildCmd3BroadcastPacket(line, nextSeq(other)));
+  }
 }
 
 function notifyRoomArrival(
@@ -319,6 +455,28 @@ function handleWorldGameData(
     // COMMEG32 Ordinal_7 sends the reply directly; server does not need to act.
     connLog.debug('[world] cmd-2 (ping-request) — client handles reply via COMMEG32');
 
+  } else if (cmdIdx === 4) {
+    const parsed = parseClientCmd4(payload);
+    if (!parsed) {
+      connLog.warn('[world] cmd-4 parse failed');
+      return;
+    }
+    handleWorldTextCommand(players, session, parsed.text, connLog);
+
+  } else if (cmdIdx === 7) {
+    const parsed = parseClientCmd7(payload);
+    if (!parsed) {
+      connLog.warn('[world] cmd-7 parse failed');
+      return;
+    }
+
+    connLog.info('[world] cmd-7 menu reply: listId=%d selection=%d', parsed.listId, parsed.selection);
+    if (parsed.listId === 3) {
+      handleRoomMenuSelection(players, session, parsed.selection, connLog);
+      return;
+    }
+
+    connLog.debug('[world] cmd-7 ignored: unsupported listId=%d', parsed.listId);
   } else {
     connLog.debug('[world] cmd=%d — not yet handled (M3 stub)', cmdIdx);
   }
@@ -423,6 +581,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     serverSeq:         0,
     worldInitialized:  false,
     worldRosterId:     nextWorldRosterId++,
+    worldPresenceStatus: 5,
   };
   players.add(session);
 

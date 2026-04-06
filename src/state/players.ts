@@ -45,6 +45,11 @@ export interface ClientSession {
    */
   worldRosterId?: number;
   /**
+   * Current room-presence state byte used by Cmd10/Cmd11 updates.
+   * 5 = standing, 6..12 = booth 1..7.
+   */
+  worldPresenceStatus?: number;
+  /**
    * Mech ID selected in the lobby and used to initialize the world arena.
    * Set on world-server sessions (via launchRegistry.consume); undefined on lobby sessions.
    */
