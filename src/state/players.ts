@@ -8,7 +8,7 @@ export type SessionPhase =
   | 'connected'     // TCP accepted, waiting for first bytes
   | 'auth'          // parsing login packet
   | 'lobby'         // authenticated; about to look up or create character
-  | 'char-creation' // first-login character creation in progress (allegiance dialog)
+  | 'char-creation' // first-login character creation in progress
   | 'world'         // in the game world (RPS/arena) after REDIRECT
   | 'closing';      // disconnect in progress
 
@@ -62,6 +62,17 @@ export interface ClientSession {
    * Davion | Steiner | Liao | Marik | Kurita.
    */
   allegiance?: string;
+  /**
+   * Fine-grained step within the first-login character creation flow.
+   * `display-name` waits for the inferred cmd-21 text reply; `allegiance`
+   * waits for the existing cmd-7 House menu reply.
+   */
+  characterCreateStep?: 'display-name' | 'allegiance';
+  /**
+   * Typed callsign captured from the editable prompt before the House menu.
+   * Persisted to the DB only after allegiance selection completes.
+   */
+  pendingDisplayName?: string;
 }
 
 export class PlayerRegistry {
