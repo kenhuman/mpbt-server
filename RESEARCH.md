@@ -1015,7 +1015,7 @@ No seed change happens mid-session in standard gameplay.
 | 33 | `0x42` | `0x00419360` | `FUN_00419370` — Ok-dialog callback |
 | 34 | `0x43` | `0x00413FF0` | |
 | 35 | `0x44` | `0x00429C80` | |
-| 36 | `0x45` | `0x004161A0` | |
+| 36 | `0x45` | `0x004161A0` | `Cmd36_TextEntryPrompt` |
 | 37 | `0x46` | `0x00416D40` | |
 | 38 | `0x47` | `0x00419250` | |
 | 39 | `0x48` | `0x0043DAE0` | |
@@ -1135,6 +1135,102 @@ Frame-reading helpers referenced below:
 confirms it does **not** call `FUN_0040d3c0`.  `FUN_0040d3c0` is called directly from the welcome
 gate handlers `FUN_00429870` and `FUN_00429a00` — it fires when the client receives the
 `"\x1b?MM[WC]..."` welcome string, not in response to a server cmd-3 frame.
+
+### Character Creation Text Prompt — cmd 36 / client cmd 21 (CONFIRMED)
+
+**Goal of this pass:** identify the original free-text prompt used before House allegiance
+selection so first-login character creation can use a real editable client dialog instead of
+reusing cmd-20.
+
+#### Main findings
+
+- The display-name prompt does **not** use cmd-20. `FUN_00411D90` / `FUN_00411A10` builds
+  display-only text dialogs and yes/no style callbacks.
+- Server command **36** (`wire 0x45`, handler `FUN_004161A0`) creates an **editable text-entry
+  dialog**.
+- Submitting that dialog sends **client cmd 21** via `FUN_00418760`.
+- House allegiance selection remains a separate cmd-7 menu path; the text prompt and the House
+  menu are distinct UI systems.
+
+#### cmd 36 payload shape
+
+`FUN_004161A0` reads the server frame as:
+
+```text
+[type4 dialog_id] [raw prompt string]
+```
+
+Ghidra references:
+
+- `FUN_00402b10(4)` reads the first field as a type4 integer (`dialog_id`)
+- `FUN_0040c130(DAT_004e1844)` reads the next field as a raw length-prefixed string
+- `FUN_004145a0(4)` allocates the wide text-entry window variant
+
+`dialog_id == 0` selects the simplest prompt path:
+
+- one primary action button
+- optional secondary button omitted
+- callback slot `0x50c` points at `LAB_00415F50`
+
+When `dialog_id != 0`, `FUN_004161A0` enables an extra callback path via `0x50d = LAB_00416170`
+and builds an additional button row. For first-login name entry, `dialog_id = 0` is therefore the
+smallest confirmed working variant.
+
+#### client cmd 21 submit path
+
+When the user confirms the editable dialog, `FUN_00418760` sends:
+
+```text
+cmd 21
+  [type4 dialog_id]
+  [zero or more extra type4 values]
+  [raw text string]
+```
+
+Observed write sequence:
+
+1. `FUN_00403030(0x15)` writes client command 21 (`0x15 + 0x21 = 0x36` on the wire)
+2. `FUN_00402be0(4, param_1[0x512])` writes the dialog id
+3. optional extra type4 values are emitted from `param_1[0x516]`, count `param_1[0x513]`
+4. `FUN_00403100((char *)param_1[0x14])` writes the typed text field
+5. `FUN_00429440()` flushes the frame
+
+#### Why the minimal server implementation only needs `dialog_id + text`
+
+The optional extra type4 values do **not** originate from the server-driven prompt path.
+
+- `FUN_00431880` zero-initializes the dialog window object, including fields `0x512`, `0x513`,
+  and `0x516`
+- `FUN_004161A0` sets `0x512 = dialog_id` but never allocates or populates the extra-value array
+- the sibling local dialog builder `FUN_00416DB0` is the path that calls `FUN_00431820()` and
+  fills `0x513/0x516`
+
+So a reply generated from the network-built cmd-36 prompt is the simple form:
+
+```text
+[type4 dialog_id] [text]
+```
+
+This matches the working server prototype validated locally on April 6, 2026.
+
+#### Related functions
+
+| Address | Suggested name | Role |
+|---------|----------------|------|
+| `FUN_004161A0` | `Cmd36_TextEntryPrompt` | Parse server cmd 36; build editable text-entry dialog |
+| `FUN_00418760` | `Cmd21_SendTextReply` | Send client cmd 21 with dialog id and typed text |
+| `FUN_00416FE0` | `TextEntry_InitState` | Allocate/reset per-dialog text-entry buffers |
+| `FUN_00416520` | `TextEntry_DecodeMarkup` | Strip inline markup tags like `[p......]` / `[r......]` before display |
+| `FUN_00416DB0` | `TextEntry_LocalPrompt` | Local sibling builder that also populates optional extra type4 values |
+
+#### Character creation implications
+
+- First-login callsign entry can be implemented as: send cmd 36, parse client cmd 21, validate
+  uniqueness, then send the existing cmd-7 House menu.
+- Duplicate-name handling is server policy. This RE pass found no separate server rejection packet;
+  re-sending cmd 36 with a different prompt string is a valid minimal implementation.
+- No extra ACK or completion packet is required before REDIRECT beyond the normal character-creation
+  flow already in use.
 
 ---
 

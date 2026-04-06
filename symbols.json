@@ -38,7 +38,7 @@
       "Lobby_OnWelcomeB":       { "binary": "FUN_00429580", "role": "Called after welcome gate passes (path B)" },
       "Lobby_OnDirectConnect":  { "binary": "FUN_00429620", "role": "MMC alternate welcome path (direct-connect mode)" },
 
-      "Cmd3_Thunk":             { "binary": "FUN_0040C190", "role": "Dispatch table entry for cmd 3; calls Cmd3_SendCapabilities" },
+      "Cmd3_TextBroadcast":     { "binary": "FUN_0040C190", "role": "RPS cmd 3 handler; reads a text string and appends it to the chat window when chat UI is ready" },
       "Cmd3_SendCapabilities":  { "binary": "FUN_0040d3c0", "role": "Client-ready handler; sends capability flags [1,6,3,0]" },
 
       "Cmd7_ParseMenuDialog":   { "binary": "FUN_004112b0", "role": "Parses server cmd 7 menu dialog payload; renders numbered choice list" },
@@ -48,8 +48,13 @@
 
       "Cmd1d_Send":             { "binary": "FUN_00410cc0", "role": "Send cmd 0x1d cancel frame: byte(p1) + type1(p2) + type4(p3)" },
 
-      "Cmd20_Thunk":            { "binary": "FUN_00401D90", "role": "Dispatch table entry for cmd 20; jumps to Cmd20_MouseHandler" },
-      "Cmd20_MouseHandler":     { "binary": "FUN_00401c90", "role": "Cursor/mouse position handler for cmd 20 messages" },
+      "Cmd20_ParseTextDialog":  { "binary": "FUN_00411d90", "role": "Dispatch table entry for cmd 20; parses mode/title/text payload and builds the text dialog window" },
+      "Cmd20_BuildDialog":      { "binary": "FUN_00411a10", "role": "Shared text-dialog builder used by cmd 20 and sibling text-only prompt paths" },
+      "Cmd36_TextEntryPrompt":  { "binary": "FUN_004161a0", "role": "Dispatch table entry for cmd 36; parses [type4 dialog_id][prompt string] and builds an editable text-entry dialog" },
+      "Cmd21_SendTextReply":    { "binary": "FUN_00418760", "role": "Submit handler for editable text-entry dialogs; sends client cmd 21 with dialog id, optional type4 values, and typed text" },
+      "TextEntry_InitState":    { "binary": "FUN_00416fe0", "role": "Allocate/reset text-entry dialog state buffers and control metadata" },
+      "TextEntry_DecodeMarkup": { "binary": "FUN_00416520", "role": "Decode inline [p........]/[r........] markup used by text-entry prompt strings" },
+      "TextEntry_LocalPrompt":  { "binary": "FUN_00416db0", "role": "Sibling local prompt builder that can populate optional type4 selection values for cmd 21 replies" },
 
       "Cmd26_ParseMechList":    { "binary": "FUN_0043A370", "role": "Parse cmd 26 mech list payload; populate g_cmd26_* arrays" },
       "Cmd26_ReadTypeFlag":     { "binary": "FUN_0040d4c0", "role": "Read 2-byte type_flag via Frame_DecodeArg(1)" },
@@ -76,7 +81,7 @@
       "g_lobby_WelcomeStrMMW":   { "binary": "DAT_00474d48",    "role": "Literal: \"\\x1b?MMW Copyright Kesmai Corp. 1991\" (normal Windows login path)" },
       "g_lobby_WelcomeStrMMC":   { "binary": "DAT_00474d70",    "role": "Literal: \"\\x1b?MMC ...\" (direct-connect alternate path)" },
 
-      "g_cmd7_ListIdTable":      { "binary": "DAT_00472c94",    "role": "Per-list-id callback/state array; index [0x512] used by menu dialog" },
+      "g_activeDialogWindow":    { "binary": "DAT_00472c94",    "role": "Pointer to the current active dialog window object; fields [0x512]/[0x513]/[0x516] drive menu/text-reply state" },
 
       "g_cmd26_TypeFlag":        { "binary": "DAT_004dc8dc",    "role": "Set by Cmd26_ParseMechList to received typeFlag value" },
       "g_cmd26_MechIdArr":       { "binary": "DAT_004dc560",    "role": "mech_id values array, indexed by entry i" },
