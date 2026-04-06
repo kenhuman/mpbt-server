@@ -333,7 +333,7 @@ Full table: 0x4C (76) entries × 4 bytes = 304 bytes.  Confirmed non-null entrie
 | Index | Canonical Name | Binary Address | Role |
 |:---:|---------|---------|------|
 | 0 | — | `NULL` | Crashes with "Invalid RPS command: 0" |
-| 3 | `Cmd3_Thunk` | `FUN_0040C190` | Calls `Cmd3_SendCapabilities` (`FUN_0040d3c0`): sends `[1,6,3,0]` |
+| 3 | `Cmd3_TextBroadcast` | `FUN_0040C190` | Server text message → displays string in chat window (see §18 correction note) |
 | 7 | `Cmd7_ParseMenuDialog` | `FUN_004112B0` | Server menu dialog renderer |
 | 20 | `Cmd20_ParseTextDialog` | `FUN_00411D90` | Server text dialog with mech stats (see §14) |
 | 26 | `Cmd26_ParseMechList` | `FUN_0043A370` | Mech list parser → `MechWin_Create` (`FUN_00439f70`) |
@@ -1098,6 +1098,40 @@ Server → Client: game world command frames (RPS table, cmd 0–76)
 5. **Receive cmd-3** from client (capabilities, 4 bytes: `[1, 6, 3, 0]`)
 6. **Send world initialization commands** via same ESC-framed format with CRC seed `0x0a5c25`
 7. All subsequent data: same frame encoding as lobby (ESC‐framed, 19-bit LFSR CRC)
+
+### World Command Semantics — RPS Table (Confirmed First 13 Entries)
+
+**Confirmed by decompiling each handler in MPBTWIN.EXE via Ghidra (M2 RE).**
+Frame-reading helpers referenced below:
+
+| Helper | Address | Role |
+|--------|---------|------|
+| `Frame_ReadByte` | `FUN_00402f40` | Read one decoded byte (raw − 5) |
+| `Frame_ReadInt(n)` | `FUN_00402b10` | Read n-byte integer |
+| `Frame_ReadArg(buf)` | `FUN_0040c0d0` | Read variable-length encoded arg into buffer |
+| `Frame_ReadString(buf)` | `FUN_0040c130` | Read base-85-decoded text string into buffer |
+
+| Cmd | Wire | Handler | Canonical Name | Semantics |
+|-----|------|---------|----------------|-----------|
+| 1 | `0x22` | `FUN_0040C030` | `Cmd1_PingAck` | Reads one seq byte; if it matches `g_expectedSeq` (`DAT_004e2c44`): records RTT elapsed (`FUN_004292b0`) and advances the round-robin seq slot (`FUN_00429380`). Silently drops frame on seq mismatch. |
+| 2 | `0x23` | `FUN_0040C060` | `Cmd2_PingRequest` | If `g_expectedSeq ≠ 0`: records current RTT, then calls `FUN_00429280(connObj, newSeq)` which sets a new expected-ack value, fires `COMMEG32.Ordinal_7` to send the reply packet to the server, and resets the RTT timer. Server is requesting a latency probe reply. |
+| 3 | `0x24` | `FUN_0040C190` | `Cmd3_TextBroadcast` | **Corrects §8 label.** In RPS mode: `Frame_ReadString` → display received text in chat scroll-window (`DAT_00472c90`); only effective after `g_chatReady` (`DAT_00472c84 ≠ 0`). In combat mode: reads data and XOR-processes it. Server sends a plain text announcement to the client. |
+| 4 | `0x25` | `FUN_00414B70` | `Cmd4_SceneInit` | Large UI-initialization command (~2836 bytes). Reads: 1-byte session-flags (bit `0x10` = has-opponents, `0x20` = clear-arena-data), 1-byte player-slot, 1-byte player-ID; optionally up to 4 opponent entries (type byte + ID byte each) then player callsign and scene name strings; 1-byte arena-option count then option strings. Creates main game window and fills arena labels, mech-slot buttons, chat scroll-window, scoreboard boxes. Sets `g_chatReady = 1` at completion. This is the principal "enter arena" command. |
+| 5 | `0x26` | `FUN_0040C2F0` | `Cmd5_CursorNormal` | Calls `FUN_00433ec0` → loads `IDC_ARROW` cursor (`0x7f00`), clears `DAT_00474d00`. Server signals "loading complete; restore normal cursor". |
+| 6 | `0x27` | `FUN_0040C300` | `Cmd6_CursorBusy` | Calls `FUN_00433ef0` → loads `IDC_WAIT` cursor (`0x7f02`), sets `DAT_00474d00 = 1`. Server signals "processing; show hourglass". |
+| 7 | `0x28` | `FUN_004112B0` | `Cmd7_ParseMenuDialog` | Menu dialog renderer — documented in §11. |
+| 8 | `0x29` | `FUN_00413960` | `Cmd8_SessionData` | Reads connection object (`FUN_0040d4c0`), then `Frame_ReadArg` into `DAT_0048a070`. Passes buffer to `FUN_00413800(conn, buf, NULL)` — loads per-session binary data (mech load-out / team assignment). Updates two input-handler jump-table entries. |
+| 9 | `0x2a` | `FUN_0040C310` | `Cmd9_RoomPlayerList` | Reads sentinel byte; if `0x01`: reads 1-byte count, then for each player reads a `Frame_ReadArg` entry into `DAT_004de000` array. Calls `FUN_0042da40` to populate roster UI, sets `DAT_004ddfc0+0x44 = 8` (ready flag). Server sends the initial occupant list for the entered room. |
+| 10 | `0x2b` | `FUN_0040C370` | `Cmd10_TextFeed` | Reads records — each comprising a 4-byte session-ID, 1-byte type, and a `Frame_ReadArg` string — until a sentinel type byte `0x54` ('T'). Appends each record to the chat scroll-window with separator lines between records. Used for multi-line server announcements (welcome text, room history). |
+| 11 | `0x2c` | `FUN_0040C6C0` | `Cmd11_PlayerEvent` | Reads 4-byte session-ID + 1-byte status code + callsign string. Finds/creates roster slot via `FUN_0040c590`. Status: `0`=left arena; `1–4`=tier/game-state (formatted via message table `DAT_00472a34[status]`); `5`=moved to spectator; `0x54`=match-end score update; other=game-state N−5. Appends formatted event line to chat. |
+| 12 | `0x2d` | `FUN_0040C5C0` | `Cmd12_PlayerRename` | Reads 4-byte session-ID + new callsign string. Looks up existing roster slot, formats "{old} is now {new}" message (MSG `0x13`), overwrites stored name in player table, appends to chat. |
+| 13 | `0x2e` | `FUN_0040C920` | `Cmd13_PlayerArrival` | Reads 4-byte session-ID + callsign string. Searches player table for matching session-ID (update) or first free slot (insert). Sets active flag, stores callsign, resets timer field to 0, appends "{callsign} entered" line (MSG `0x19`) to chat. |
+
+**Correction note for §8**: The lobby dispatch table entry at index 3 was previously labelled
+`Cmd3_Thunk — Calls Cmd3_SendCapabilities (FUN_0040d3c0)`.  Decompilation of `FUN_0040C190`
+confirms it does **not** call `FUN_0040d3c0`.  `FUN_0040d3c0` is called directly from the welcome
+gate handlers `FUN_00429870` and `FUN_00429a00` — it fires when the client receives the
+`"\x1b?MM[WC]..."` welcome string, not in response to a server cmd-3 frame.
 
 ---
 
