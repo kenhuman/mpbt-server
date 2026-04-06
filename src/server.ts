@@ -23,8 +23,9 @@ import * as os from 'os';
 import { ARIES_PORT, Msg } from './protocol/constants.js';
 import { PacketParser, buildPacket, hexDump } from './protocol/aries.js';
 import { parseLoginPayload, buildLoginRequest, buildSyncAck, buildWelcomePacket } from './protocol/auth.js';
-import { buildMechListPacket, buildMenuDialogPacket, buildRedirectPacket, parseClientCmd7, type MechEntry } from './protocol/game.js';
+import { buildMechListPacket, buildMenuDialogPacket, buildRedirectPacket, buildCmd20Packet, parseClientCmd7, decodeArgType4, type MechEntry } from './protocol/game.js';
 import { loadMechs } from './data/mechs.js';
+import { MECH_STATS } from './data/mech-stats.js';
 import { PlayerRegistry, ClientSession } from './state/players.js';
 import { Logger } from './util/logger.js';
 import { CaptureLogger } from './util/capture.js';
@@ -33,13 +34,86 @@ import { CaptureLogger } from './util/capture.js';
 
 const log = new Logger('server', 'debug', path.join('logs', 'server.log'));
 const players = new PlayerRegistry();
-const MECH_SEND_LIMIT = 4; // client UI shows 4 mech slots; cap until roster assignment is implemented.
+
+// Advertised host sent in REDIRECT packets.
+// Set SERVER_HOST env var to the server's LAN/public IP for non-local clients.
+// Defaults to 127.0.0.1 (loopback only — works when client is on the same machine).
+const SERVER_HOST = process.env['SERVER_HOST'] ?? '127.0.0.1';
+
+const MECH_SEND_LIMIT = 20; // Client (FUN_0043A370) stores mechs in parallel static arrays.
+                           // Array stride analysis (Ghidra RE):
+                           //   DAT_004dc510 (slot_info, int×N) + N×4 = DAT_004dc560 (mech_id)
+                           //   gap = 0x4DC560 - 0x4DC510 = 0x50 = 80 bytes / 4 = 20 entries.
+                           //   Entry 21 writes slot_info[20] into mech_id[0] → immediate corruption.
+                           // All parallel arrays (typeString/variant@ stride 40, name@ stride 20)
+                           // confirm the same 20-entry capacity.  Hard limit: do not exceed 20.
+                           // TODO (M9): replace with player-specific roster assignment.
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function send(socket: net.Socket, pkt: Buffer, capture: CaptureLogger, label: string): void {
   capture.logSend(pkt);
   socket.write(pkt);
+}
+
+/**
+ * Build the examine-dialog text for cmd-20 (X key / Examine button).
+ *
+ * Returns a ≤84-byte string ready for buildCmd20Args().  Lines are separated by
+ * '\\' (0x5C).  FUN_00433310 (lobby text renderer) treats '\\' as a forced line
+ * break: it NULs it in the staging buffer before passing to FUN_00431f10, so no
+ * backslash is ever rendered.  Only NUL and '\\' terminate a line; 0x8D is NOT
+ * handled and causes signed-char wrap (index -460) in FUN_00431e00's font table.
+ *
+ * The returned string MUST NOT contain 0x1B (ESC) because the client's ESC
+ * accumulator (FUN_00429510) would prematurely terminate the inner frame.
+ *
+ * We send the text DIRECTLY instead of the legacy "#NNN" shortcode.  The "#NNN"
+ * path does a client-side lookup in DAT_00473ad8[mech_id] → MPBT.MSG line → stats
+ * string, but the MPBT.MSG in this distribution has "Mechs now in use:" at the
+ * expected line (252) rather than actual mech stats.  Sending the formatted text
+ * from the server bypasses the broken lookup entirely.
+ */
+function buildMechExamineText(mech: MechEntry): string {
+  const SEP = '\x5c'; // 0x5C ('\') — lobby dialog line-break in FUN_00433310.
+                      // FUN_00433310 NULs the '\' in the line buffer before calling
+                      // FUN_00431f10, so it forces a new line without being rendered.
+                      // 0x8D was wrong: FUN_00431e00 indexes the font-width table with
+                      // signed-char arithmetic → 0x8D = -115 → offset -460 → bad memory.
+  // Strip 0x1B (ESC) from any field that feeds into the packet.  buildCmd20Args
+  // (and encodeString) now check the encoded Buffer for 0x1B and throw, which
+  // would propagate as an uncaught exception and crash the server process.
+  const sanitize = (s: string) => s.replace(/\x1b/g, '');
+
+  const stats = MECH_STATS.get(mech.typeString);
+
+  if (!stats || stats.disabled) {
+    // No documented stats: show designation and weight class if known.
+    const safeType = sanitize(mech.typeString);
+    const cls = stats ? sanitize(stats.weightClass.charAt(0).toUpperCase() + stats.weightClass.slice(1)) : '';
+    return cls ? `${safeType}${SEP}${cls} Class` : safeType;
+  }
+
+  // Known mech: build a compact but informative summary.
+  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  const safeType = sanitize(mech.typeString);
+  const safeName = stats.name ? sanitize(stats.name) : '';
+  const title = safeName ? `${safeType}  ${safeName}` : safeType;
+  const specParts: string[] = [sanitize(cap(stats.weightClass))];
+  if (stats.tonnage != null) specParts.push(`${stats.tonnage}T`);
+  if (stats.maxSpeedKph != null) specParts.push(`${stats.maxSpeedKph}kph`);
+  if (stats.jumpMeters != null) specParts.push(`Jump:${stats.jumpMeters}m`);
+  const specs = specParts.join('  ');
+  const arms  = Array.isArray(stats.armament) && stats.armament.length > 0
+    ? sanitize(stats.armament.join(' '))
+    : '';
+
+  const lines = [title];
+  if (specs) lines.push(specs);
+  if (arms) lines.push(arms);
+  const full  = lines.join(SEP);
+  // Truncate to 84 bytes if the armament list is very long (safety guard).
+  return Buffer.byteLength(full, 'latin1') <= 84 ? full : Buffer.from(full, 'latin1').subarray(0, 84).toString('latin1');
 }
 
 // ── Connection handler ────────────────────────────────────────────────────────
@@ -317,8 +391,28 @@ function handleGameData(
         // Item 1 = "Launch!" → redirect to game world.
         // COMMEG32.DLL case 3: 120-byte payload [addr40|internet40|pw40],
         // then FUN_100011c0 opens a new TCP connection to addr.
-        connLog.info('[game] confirmed (Launch!) → sending REDIRECT');
-        const redir = buildRedirectPacket('127.0.0.1');
+        // No world listener exists yet (TODO M3). Redirect back to ARIES_PORT
+        // so the client re-connects to this server rather than hitting a dead port.
+        // When M3 is implemented, change this to WORLD_PORT and open a second listener.
+        connLog.info('[game] confirmed (Launch!) → sending REDIRECT to %s:%d (ARIES_PORT; world listener not yet implemented)', SERVER_HOST, ARIES_PORT);
+        // IMPORTANT: addr must be "host:port" format.
+        // Aries_OpenSocket (COMMEG32.DLL) calls strchr(addr, ':') and returns -1
+        // immediately if ':' is not found, silently failing the secondary connection.
+        // SERVER_HOST defaults to 127.0.0.1 (loopback); set the SERVER_HOST env var
+        // to the server's LAN/public IP for clients connecting from another machine.
+        const redirectAddr = `${SERVER_HOST}:${ARIES_PORT}`;
+        const redirectColonCount = (redirectAddr.match(/:/g) || []).length;
+        const redirectAddrLength = Buffer.byteLength(redirectAddr, 'ascii');
+        if (redirectColonCount !== 1 || redirectAddrLength > 39) {
+          connLog.error(
+            '[game] invalid REDIRECT addr "%s" (expected exactly one ":" and max 39 ASCII bytes, got %d ":" and %d bytes); check SERVER_HOST/ARIES_PORT configuration',
+            redirectAddr,
+            redirectColonCount,
+            redirectAddrLength,
+          );
+          throw new Error(`Invalid REDIRECT addr "${redirectAddr}": expected host:port with exactly one ":" and max 39 ASCII bytes`);
+        }
+        const redir = buildRedirectPacket(redirectAddr);
         send(session.socket, redir, capture, 'REDIRECT');
         session.phase = 'closing';
       } else if (selection === 2) {
@@ -352,13 +446,50 @@ function handleGameData(
     send(session.socket, mechPkt, capture, 'MECH_LIST');
 
   } else if (cmdIdx === 20) {
-    // cmd 20 = 'X' key — examine mech (requests mech stats from server).
-    // WARNING: sending no response locks the client (it waits indefinitely for
-    // the reply). Tracked in issues #3 (RE) and #4 (implementation). SKIP for M1.
-    // TODO: respond with mech detail data once format is understood.
-    // RE target: Cmd20_ParseTextDialog (FUN_00411D90) — see RESEARCH.md.
-    // (FUN_00401c90 is CombatTick_Mover, an unrelated function.)
-    connLog.debug('[game] cmd 20 (examine mech) — noop (client will lock; see issues #3/#4)');
+    // cmd 20 = 'X' key / Examine button — client requests stats for the highlighted mech.
+    //
+    // CLIENT PAYLOAD (CONFIRMED by capture analysis — RESEARCH.md §16):
+    //   type4(slot + 1) at payload[3..7]  — 5-byte base-85 encoding, identical to
+    //   the cmd-7 mech-selection encoding; slot is 0-based, value is 1-indexed.
+    //
+    // SERVER RESPONSE — direct text (NOT the legacy "#NNN" shortcode):
+    //   ONE packet: mode=2, text = mech stats built by buildMechExamineText().
+    //
+    //   String encoding: encodeB85_1(len) + raw bytes — NOT encodeString.
+    //   FUN_00411D90 reads the string via FUN_0040c130 → FUN_00402b10(1) (base-85 2-byte
+    //   length prefix).  encodeString's 1-byte prefix caused the client to decode 2 bytes
+    //   as a 1732-byte length, fail the bounds check → return -1 ("RPS command 20 failed.").
+    //
+    //   The legacy "#NNN" path (confirmed by RE of FUN_00411a10, FUN_00473ad8) does a
+    //   client-side lookup: DAT_00473ad8[mech_id] → MPBT.MSG line → stats string.
+    //   Unfortunately our MPBT.MSG has "Mechs now in use:" at the expected line (252)
+    //   for mech_id=156 (ANH-1A) instead of the actual mech stats.  Sending the stats
+    //   text directly from the server bypasses this broken lookup entirely.
+    //
+    // IMPORTANT: Do NOT send mode=0 or mode=1 packets.
+    //   FUN_00411a10 creates a NEW independent dialog object for EVERY call. Modes 0 and 1
+    //   produce "Yes"/"No" button dialogs (unrelated to stats) that stack under mode=2 and
+    //   were never closed by the server, causing the UI to appear frozen (T1 failure).
+    const CMD20_DIALOG_ID = 5;
+    if (MECHS.length === 0) {
+      connLog.warn('[game] cmd 20: MECHS empty, cannot examine');
+      return;
+    }
+    const maxSlot = MECHS.length - 1;
+    let slot = 0;
+    if (payload.length >= 8) {
+      const [slotPlusOne] = decodeArgType4(payload, 3);
+      const requestedSlot = Number.isFinite(slotPlusOne) ? slotPlusOne - 1 : 0;
+      slot = Math.min(maxSlot, Math.max(0, requestedSlot));
+      if (slot !== requestedSlot) {
+        connLog.warn('[game] cmd 20: clamped invalid slot %d to %d (max=%d)', requestedSlot, slot, maxSlot);
+      }
+    }
+    const mech = MECHS[slot];
+    const examineText = buildMechExamineText(mech);
+    connLog.info('[game] cmd 20 (examine): slot=%d mech_id=%d (%s) → %j',
+      slot, mech.id, mech.typeString, examineText);
+    send(session.socket, buildCmd20Packet(CMD20_DIALOG_ID, 2, examineText, nextSeq(session)), capture, 'CMD20_STATS');
 
   } else {
     connLog.debug('[game] cmd=%d ignored (mechListSent=%s)', cmdIdx, session.mechListSent);

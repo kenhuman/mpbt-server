@@ -32,10 +32,25 @@ This is a long-haul reverse-engineering project. Every milestone below is blocke
 | 19-bit LFSR CRC (lobby init `0x0A5C25`) | ✅ |
 | Cmd 26 — mech list window | ✅ |
 | Cmd 7 — menu dialog (select + confirm) | ✅ |
+| Cmd 0x1D — cancel/ESC re-sends mech list | ✅ |
+| Cmd 20 — examine mech text-dialog response | ✅ |
 | `REDIRECT` packet (type `0x03`) | ✅ |
 | Post-redirect game world | 🔬 |
 
 The client reaches the mech selection screen, browses mechs, confirms selection, and receives a `REDIRECT`. That is the furthest any known public attempt has reached.
+
+---
+
+## Reference Materials
+
+These files are gitignored — place them in `research/` for local use.
+
+| File | Contents | Project use |
+|---|---|---|
+| `BT-MAN.decrypted.txt` | Full game manual: world navigation, chat channels, combat controls, mech stat tables | Design reference for M4–M9; source for `src/data/mech-stats.ts` |
+| `SOLARIS.MAP` | Solaris city venue locations, rooms 146+, 189 KB. Format: sequential room-ID records with 18-byte fixed header + LE-prefixed name string + LE-prefixed description string. Confirmed rooms: Solaris Starport, Ishiyama Arena, Government House, White Lotus | M5 world map reconstruction |
+| `IS.MAP` | Inner Sphere sector locations, rooms 1–145, 40 KB. Identical layout format to SOLARIS.MAP. Together the two files form a **global room namespace** | M5 world map; full-sector navigation |
+| `Gnum*.txt / Gnum*.md` | Firsthand gameplay observations: 4v4 lances, fixed spawns, travel times, team/all-chat | Sanity-check for RE findings |
 
 ---
 
@@ -49,12 +64,12 @@ The client reaches the mech selection screen, browses mechs, confirms selection,
 
 | Task | Status | Notes |
 |---|---|---|
-| Parse real `.MEC` files → `src/data/mechs.ts` | ❌ | 117 files in `mechdata/`; replace hardcoded `SAMPLE_MECHS` |
-| Cmd 20 — mech examine/stats response | 🔬 | RE `FUN_00401c90` (`Cmd20_MouseHandler`) for server response format |
-| Cmd `0x1D` — cancel/ESC in menu dialogs | 🔬 | Format partially known; server-side handler unknown |
+| Parse real `.MEC` files → `src/data/mechs.ts` | ✅ | `loadMechs()` scans `mechdata/*.MEC`, assigns correct `mech_id` from MPBT.MSG variant table; `mechType` field hardcoded to 0 pending M2 binary RE; `variant`/`name` empty → client falls back to its own MPBT.MSG lookup |
+| Cmd 20 — mech examine/stats response | ✅ | Single mode=2 packet with direct stats text built by `buildMechExamineText()` from `MECH_STATS`; `0x5C` (`\`) is the line separator (`FUN_00433310` NULs it before rendering); `#NNN` shortcode is NOT used — our MPBT.MSG has incomplete/stale stats data |
+| Cmd `0x1D` — cancel/ESC in menu dialogs | ✅ | Resolved — server re-sends mech list; sending nothing freezes client |
 | ACK reply for seq > 42 | 🔬 | Trigger condition documented in RESEARCH.md §9; reply format unknown |
 
-**Verification:** Connect real `MPBTWIN.EXE`; press `X` on a mech (stats appear), press `ESC` in dialog (no disconnect), browse all 117 mechs without crash.
+**Verification:** Connect real `MPBTWIN.EXE`; press `X` on a mech (stats appear), press `ESC` in dialog (no disconnect), browse the first 20 mechs without crash.
 
 ---
 
@@ -64,16 +79,17 @@ The client reaches the mech selection screen, browses mechs, confirms selection,
 
 This milestone is pure Ghidra work. No code is written here — findings go into `RESEARCH.md`.
 
-| RE Target | Binary | Notes |
-|---|---|---|
-| `FUN_100014e0` case 0 | `COMMEG32.DLL` | Secondary connection data handler — entry point for everything post-REDIRECT |
-| World command dispatch table | `MPBTWIN.EXE` | Analogous to `g_lobby_DispatchTable`; find equivalent for game-world connection |
-| Initial world handshake | `COMMEG32.DLL` | What does the server send first on the new connection? What does the client need before it renders the game world? |
-| `g_aries_GameWorldConn` (`DAT_1001a080`) | `COMMEG32.DLL` | Secondary Aries connection object; how is it initialized? |
-| Combat CRC crossover point | `MPBTWIN.EXE` | When does the client switch from lobby CRC seed (`0x0A5C25`) to combat (`0x0A5C45`)? |
-| First 10+ world commands | `MPBTWIN.EXE` | Position, movement, chat, damage, turn timer, UI updates |
+| RE Target | Binary | Status | Notes |
+|---|---|---|---|
+| `Aries_RecvHandler` case 0 & REDIRECT | `COMMEG32.DLL` | ✅ | §17: REDIRECT handler confirmed; case 0 sends WM_0x7f0 to game window |
+| World command dispatch table | `MPBTWIN.EXE` | ✅ | §18: two tables — RPS (0x00470198, cmd 0–76) and Combat (0x00470408, cmd 0–79); full address table |
+| Initial world handshake | `COMMEG32.DLL` + `MPBTWIN.EXE` | ✅ | §18: LOGIN_REQUEST→LOGIN→`"\x1b?MMW Copyright Kesmai Corp. 1991"`→cmd-3; same sequence as lobby |
+| `g_aries_GameWorldConn` (`DAT_1001a080`) | `COMMEG32.DLL` | ✅ | §17: created by `Aries_Connect`; secondary connection object |
+| Combat CRC crossover point | `MPBTWIN.EXE` | ✅ | §18: `Frame_VerifyCRC` uses `g_combatMode` to select seed; RPS=`0x0a5c25`, Combat=`0x0a5c45` |
+| First 10+ world commands | `MPBTWIN.EXE` | 🔬 | Dispatch table addresses confirmed; individual command semantics not yet decompiled |
+| World frame format | `MPBTWIN.EXE` | ✅ | §18: identical to lobby — ESC-delimited, 19-bit LFSR CRC, same base-85 encoding |
 
-**Deliverable:** New RESEARCH.md sections (§16+) documenting all of the above with confirmed wire formats.
+**Deliverable:** RESEARCH.md §17 (COMMEG32.DLL RE) and §18 (world protocol RE) — COMPLETE.
 
 ---
 
@@ -95,35 +111,61 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 
 ---
 
-### M4 — World Navigation
+### M4 — Chat and Presence
 
-**Goal:** A single player can move around the game world (Solaris sectors / arenas) from the server's perspective.
+**Goal:** Players see each other and communicate across the full world — not just within a room.
 
 *Depends on M3.*
 
 | Task | Status | Notes |
 |---|---|---|
-| RE movement protocol | 🔬 | Client → server movement commands; server → client position updates |
-| Real world map | ❌ | Replace fictional 3-room `World` with actual Solaris sector/arena layout, reconstructed from `MPBT.MSG` strings and RE |
-| Server-side position tracking | ❌ | Extend `src/state/world.ts` with real rooms, exits, and coordinates |
-| Position sync to client | ❌ | Server → client position/environment packets |
+| Room broadcast | ❌ | Players see who is in their current location |
+| Player join / leave events | ❌ | Notify room occupants when someone arrives or departs |
+| F7 — team / lance channel | 🔬 | Wire format for scoped team broadcast unknown |
+| F8 — all-comm / chat-window toggle | 🔬 | May share a command code with the chat-window open/close packet |
+| ComStar DM — store and deliver | ❌ | Async private messages; server must persist unread messages per player |
+| All-roster query | 🔬 | Global presence query: returns every online player's ComStar ID, handle, current sector, and location; supports "send ComStar" and "view personnel record" from the list; triggered via KP5 |
 
-**Verification:** Single client can navigate between areas; environment updates correctly.
+**Verification:** Two clients in different rooms; each sees the other on the all-roster; a ComStar message is delivered even after the recipient moves rooms.
 
 ---
 
-### M5 — Single-Client Combat Loop
+### M5 — World Navigation
+
+**Goal:** A single player can move around the game world (Solaris sectors / arenas) from the server's perspective.
+
+*Depends on M4.*
+
+The world uses two distinct room types: **bar** (social spaces, Tier Ranking terminals, ComStar facilities) and **arena** (combat venues). Source topology: `SOLARIS.MAP` (rooms 146+, partly decoded) and `IS.MAP` (rooms 1–145) — both gitignored; see Reference Materials above.
+
+| Task | Status | Notes |
+|---|---|---|
+| `SOLARIS.MAP` binary format RE | 🔬 | Fully decode record structure to extract room IDs, type flags, exits, and map coordinates |
+| RE movement protocol | 🔬 | Client → server movement commands; server → client position/environment updates |
+| Tram / monorail RE | 🔬 | Cross-sector navigation shortcut — client command format unknown |
+| Room model from `SOLARIS.MAP` | ❌ | Replace stub `World` with real rooms (bar / arena types), exits, and coordinates decoded from map files |
+| Server-side position tracking | ❌ | Extend `src/state/world.ts`; track current room + coordinates per player |
+| Position sync to client | ❌ | Server → client position / environment packets |
+
+**Verification:** Single client can navigate between areas; room type (bar vs. arena) is correctly identified by the server.
+
+---
+
+### M6 — Single-Client Combat Loop
 
 **Goal:** One player in an arena can engage with the combat system (even against a scripted dummy opponent).
 
-*Depends on M4.*
+*Depends on M5.*
 
 | Task | Status | Notes |
 |---|---|---|
 | RE weapon fire packets | 🔬 | Client → server fire command; server → client hit/miss result |
-| RE damage model | 🔬 | Location-based armor/internal structure; heat buildup |
-| RE turn timer / initiative | 🔬 | How does the server pace combat rounds? |
-| RE win/lose condition | 🔬 | How does the server signal mech destruction / match end? |
+| RE TIC system | 🔬 | Three Targeting Interlock Circuits (A/B/C); `[`/`]`/`\\` fire each; Space fires selected single weapon — wire format unknown |
+| RE damage model | 🔬 | Location-based armor/internal structure; heat states: green → yellow (system degradation) → red → shutdown |
+| RE jump jets | 🔬 | Fuel-based: depletes on jump, regenerates over time; also consumed while turning/accelerating in-flight; damaged jets reduce max jump for the match; **Z (altitude)** is tracked server state |
+| RE torso/leg independence | 🔬 | Legs = heading (KP4/6/2/8); torso = facing (WASD); server must track both; compass shows both simultaneously |
+| RE turn timer / match end | 🔬 | 15-minute server-enforced limit; how does server signal mech destruction / match end? |
+| RE physical combat | 🔬 | Death-from-above (DFA) and alpha strike — dedicated commands or derived from positional data? |
 | Implement `src/protocol/combat.ts` | ❌ | All combat packet builders and parsers |
 | Scripted dummy opponent | ❌ | Server-controlled bot mech that fires back, for single-player testing |
 
@@ -131,40 +173,61 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 
 ---
 
-### M6 — Multi-Client Combat
+### M7 — Multi-Client Combat
 
 **Goal:** Two human players can fight each other in real time.
 
-*Depends on M5.*
+*Depends on M6.*
+
+8 sides available; players cannot all enter on the same side. **Sanctioned matches** use only arenas #1 and #2 per sector — results feed SCentEx (M9). The primary full-match use case is a **4v4 lance (8 total players)**.
 
 | Task | Status | Notes |
 |---|---|---|
-| Room broadcast | ❌ | `PlayerRegistry.broadcast()` — sync combat state to all clients in a room |
-| Player enter/leave events | ❌ | Notify existing clients when a new player joins or leaves |
+| Room broadcast | ❌ | Sync combat state to all clients in the same arena |
+| Player enter / leave events | ❌ | Notify existing clients when a player joins or leaves |
+| Side assignment enforcement | ❌ | Cannot assign all players to the same side |
 | Synchronized position | ❌ | Each client sees other mechs move in real time |
 | Synchronized damage | ❌ | Damage dealt by one client is reflected in all clients' views |
-| Match orchestration | ❌ | Server manages match lifecycle: ready-up, start, end, scoring |
+| Match orchestration | ❌ | Ready-up, start, 15-min timer, end, sanctioned-match flag |
 
 **Verification:** Two `MPBTWIN.EXE` instances connect, enter the same arena, see each other, and fight to completion.
 
 ---
 
-### M7 — Playable Game
+### M8 — Playable Game
 
 **Goal:** The emulator is complete enough for a real play session.
 
-*Depends on M6.*
+*Depends on M7.*
 
 | Task | Status | Notes |
 |---|---|---|
-| All 117+ mechs loaded from real `.MEC` files | ❌ | M1 prerequisite |
-| Real Solaris arena layouts | ❌ | From M4 RE work |
+| All 161 mechs loaded from real `.MEC` files | 🔧 | `loadMechs()` scans/parses `mechdata/*.MEC` in M1; remaining work is validating and integrating all 161 mechs for actual gameplay |
+| Real Solaris arena layouts | ❌ | From M5 RE work |
 | Correct mech stat handling (armor, weapons, heat) | ❌ | From `.MEC` parser + damage model |
 | Client launcher — `play.pcgi` generator | ✅ | `npm run gen-pcgi` already works |
 | Basic observability (logs, session captures) | ✅ | Already implemented |
 | Graceful disconnect / reconnect handling | ❌ | Client timeout, mid-match drop |
 
 **Verification:** Full play session — two humans, real mechs, real arena, fight to conclusion — with no manual intervention.
+
+---
+
+### M9 — SCentEx / Persistence
+
+**Goal:** Sanctioned matches produce persistent ranking results, matching original game behaviour.
+
+*Depends on M8. Not optional — SCentEx existed in the original game.*
+
+| Task | Status | Notes |
+|---|---|---|
+| SCentEx ranking model | ❌ | Damage inflicted vs. damage sustained determines rank change after each sanctioned match |
+| Player fame stat | ❌ | Per-character fame tracked (BT-MAN p. 9) |
+| Tier Ranking display | ❌ | Displayed at bar terminals; served by the world navigation layer |
+| Personnel record | ❌ | Per-character record viewable by other players via the all-roster |
+| SCentEx result reporting protocol | 🔬 | How does the server communicate sanctioned match results to the ranking system? |
+
+**Verification:** Two players complete a sanctioned match; both observe updated rankings at a bar terminal.
 
 ---
 
@@ -177,9 +240,14 @@ Work these in order when sitting down with Ghidra:
 3. **Initial world handshake** — the first bytes the client expects from the world server before entering the render loop.
 4. **Cmd 20 server response** (`FUN_00401c90`) — needed for M1; can be worked in parallel with items 1–3.
 5. **Combat CRC crossover** — when/how the client switches to the combat CRC seed.
-6. **Movement packets** (M4 prerequisite).
-7. **Weapon fire / damage packets** (M5 prerequisite).
-8. **Turn timer / match lifecycle** (M5 prerequisite).
+6. **`SOLARIS.MAP` / `IS.MAP` exit graph** — decode room-to-room connections from the map files (unlocks M5 world map without full world-server RE).
+7. **F7 / F8 chat channel wire format** — are team and all-comm differentiated by command code or a flag in the packet? (M4 prerequisite).
+8. **Movement packets** (M5 prerequisite).
+9. **Weapon fire / damage packets** (M6 prerequisite).
+10. **TIC circuit wire format** (M6 prerequisite).
+11. **Jump jet / altitude state packets** (M6 prerequisite).
+12. **Turn timer / match lifecycle** (M6 prerequisite).
+13. **SCentEx result reporting** (M9 prerequisite).
 
 ---
 
@@ -192,7 +260,11 @@ These are gaps we know exist. They are not bugs — they are the RE frontier.
 - **Cmd `0x1D` server handling** — whether the server needs to acknowledge a cancel, or silently ignore it.
 - **ACK reply format for seq > 42** — the trigger is documented (RESEARCH.md §9) but the reply packet format is not.
 - **Combat CRC crossover point** — the server currently always uses lobby CRC init; the transition rule is unknown.
-- **Real Solaris world map** — the actual sector/arena layout has not been reconstructed.
+- **`SOLARIS.MAP` / `IS.MAP` exit graph** — room topology source files identified and partially decoded (shared global room namespace confirmed: IS.MAP rooms 1–145, SOLARIS.MAP rooms 146+); full exit connections and room-type classification still unknown.
+- **F7 / F8 chat channel differentiation** — two distinct broadcast channels exist (team and all-comm); wire-format difference is unknown.
+- **Bar booth terminal commands** — what packets does the client send when activating Tier Ranking / ComStar terminals at a bar?
+- **Tram / monorail command** — protocol for the cross-sector navigation shortcut is unknown.
+- **SCentEx result-reporting protocol** — how does the server communicate sanctioned match results?
 - **`.MEC` file format** — the binary format of mech definition files has not been analyzed.
 
 ---

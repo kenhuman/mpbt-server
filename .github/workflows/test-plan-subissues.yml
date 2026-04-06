@@ -2,16 +2,18 @@ name: Create Test Plan Subissues
 
 on:
   issues:
-    types: [opened]
+    types: [labeled]
 
 permissions:
   issues: write
 
 jobs:
   create-subissues:
-    # Only run for Test Plan issues (identified by the 'type: testing' label
-    # that the issue form applies automatically).
-    if: contains(github.event.issue.labels.*.name, 'type: testing')
+    # Fires when 'type: testing' is applied to an issue.
+    # Uses labeled (not opened) because the GitHub API fires the opened event
+    # before labels are attached, so the label check would always fail on opened.
+    # Guards against duplicates by skipping if subissues already exist.
+    if: "github.event.label.name == 'type: testing'"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/github-script@v7
@@ -21,6 +23,27 @@ jobs:
             const parentNumber = context.payload.issue.number;
             const owner        = context.repo.owner;
             const repo         = context.repo.repo;
+
+            // ── 0. Guard: skip if subissues already exist (re-labeling safety) ──
+            try {
+              const existing = await github.request(
+                'GET /repos/{owner}/{repo}/issues/{issue_number}/sub_issues',
+                {
+                  owner,
+                  repo,
+                  issue_number: parentNumber,
+                  headers: { 'X-GitHub-Api-Version': '2022-11-28' },
+                }
+              );
+              if (existing.data.length > 0) {
+                core.info(`Issue #${parentNumber} already has ${existing.data.length} subissue(s) — skipping`);
+                return;
+              }
+            } catch (err) {
+              core.warning(
+                `Could not check existing subissues for #${parentNumber}: ${err.message}. Continuing with subissue creation.`
+              );
+            }
 
             // ── 1. Extract the "### Test Cases" section ─────────────────────
             const sectionMatch = body.match(
