@@ -14,7 +14,6 @@
  *   Client → Server: SYNC          (type 0x00, cmd-3 capabilities frame)
  *   Server → Client: Cmd6 CursorBusy   (show hourglass while loading)
  *   Server → Client: Cmd4 SceneInit    (create arena window; sets g_chatReady=1)
- *   Server → Client: Cmd9 RoomList     (set roster ready flag)
  *   Server → Client: Cmd3 Broadcast    (welcome message; requires g_chatReady=1)
  *   Server → Client: Cmd5 CursorNormal (restore cursor)
  *
@@ -40,7 +39,6 @@ import {
   buildCmd4SceneInitPacket,
   buildCmd5CursorNormalPacket,
   buildCmd6CursorBusyPacket,
-  buildCmd9RoomPlayerListPacket,
 } from './protocol/world.js';
 import { PlayerRegistry, ClientSession } from './state/players.js';
 import { launchRegistry } from './state/launch.js';
@@ -90,18 +88,6 @@ function nextSeq(session: ClientSession): number {
 
 function getDisplayName(session: ClientSession): string {
   return ((session.displayName ?? session.username) || 'Pilot').slice(0, 84);
-}
-
-function currentRoomRosterEntries(players: PlayerRegistry, session: ClientSession): string[] {
-  return players
-    .inRoom(session.roomId)
-    .filter(other =>
-      other.id !== session.id &&
-      other.phase === 'world' &&
-      other.worldInitialized &&
-      !other.socket.destroyed,
-    )
-    .map(getDisplayName);
 }
 
 function notifyRoomArrival(
@@ -309,10 +295,12 @@ function handleWorldGameData(
  * Order:
  *   1. Cmd6 — show busy cursor (hourglass)
  *   2. Cmd4 — SceneInit (creates game window and sets g_chatReady=1)
- *   3. Cmd9 — RoomPlayerList (currently sent tentatively; newer RE suggests
- *      this may actually drive an inquiry popup rather than passive init)
- *   4. Cmd3 — TextBroadcast (welcome message; requires g_chatReady=1)
- *   5. Cmd5 — restore normal cursor
+ *   3. Cmd3 — TextBroadcast (welcome message; requires g_chatReady=1)
+ *   4. Cmd5 — restore normal cursor
+ *
+ * Cmd9 is intentionally omitted here. Newer RE ties it to a room-occupant
+ * inquiry flow (`FUN_0040C310 -> FUN_0042DA40 -> FUN_0040CA70 -> FUN_00412980`)
+ * rather than a passive world-entry roster sync.
  */
 function sendWorldInitSequence(
   players: PlayerRegistry,
@@ -347,16 +335,6 @@ function sendWorldInitSequence(
   );
   connLog.info('[world] sending Cmd4 SceneInit (mech_id=%d callsign="%s")', mechId, callsign);
   send(socket, sceneInit, capture, 'CMD4_SCENE_INIT');
-
-  // Cmd9 — RoomPlayerList. This is currently sent as a best-effort placeholder,
-  // but newer RE suggests the client may treat it as an inquiry popup flow
-  // (`FUN_0042DA40/FUN_00413A60`) rather than passive world-entry presence.
-  send(
-    socket,
-    buildCmd9RoomPlayerListPacket(currentRoomRosterEntries(players, session), nextSeq(session)),
-    capture,
-    'CMD9_ROOM_LIST',
-  );
 
   // Cmd3 — TextBroadcast: welcome message (only visible after g_chatReady=1, set by Cmd4).
   send(

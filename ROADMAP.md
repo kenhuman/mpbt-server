@@ -102,10 +102,10 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 | Task | Status | Notes |
 |---|---|---|
 | `src/server-world.ts` — second TCP listener | ✅ | Port 2001; same `PacketParser` (ARIES); RPS CRC seed 0x0A5C25 |
-| `src/protocol/world.ts` — world command builders | ✅ | Cmd3 TextBroadcast, Cmd4 SceneInit, Cmd5/6 cursor, Cmd9 RoomList |
+| `src/protocol/world.ts` — world command builders | ✅ | Cmd3 TextBroadcast, Cmd4 SceneInit, Cmd5/6 cursor, Cmd9 inquiry list prototype |
 | `src/state/launch.ts` — mech launch registry | ✅ | Bridges lobby→world: records selected mech before REDIRECT, consumed on world LOGIN |
 | `ClientSession` — add `'world'` phase | ✅ | Extended `src/state/players.ts`; `selectedMechId?` / `selectedMechSlot?` added |
-| Initial world handshake | ✅ | LOGIN_REQUEST → LOGIN → SYNC ack → MMW welcome → cmd-3 → Cmd6+Cmd4+Cmd9+Cmd3+Cmd5 |
+| Initial world handshake | ✅ | LOGIN_REQUEST → LOGIN → SYNC ack → MMW welcome → cmd-3 → Cmd6+Cmd4+Cmd3+Cmd5 |
 | Fix REDIRECT target to WORLD_PORT | ✅ | Lobby now redirects to port 2001; launch record stored before REDIRECT sends |
 | `gen-pcgi.ts` — separate lobby/world ports | N/A | `play.pcgi` always points to lobby (2000); REDIRECT carries the world address. Combat server is a separate dynamic spin-up (M6/M7). |
 
@@ -124,7 +124,7 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 | Display name entry (name selection dialog) | 🔬 | Text-input wire format not yet RE'd. Current placeholder: login username is used as display name. See issue #26 for RE tasks. |
 
 **Known M3 limitations / M4 work:**
-- `Cmd9` roster entries sent as empty (count=0); full per-player entry format TBD (M4 RE).
+- Initial room-sync packet is still unresolved; the earlier `Cmd9(count=0)` placeholder was removed after stronger RE tied `Cmd9` to a player-inquiry workflow.
 - `Cmd8` (session binary data / mech loadout) not yet sent; client mech stats display may be absent.
 - Arena navigation and movement not yet implemented (M5).
 - World server does not yet bounce a second REDIRECT to a combat server (M6/M7).
@@ -145,8 +145,8 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 
 | Task | Status | Notes |
 |---|---|---|
-| Room broadcast | ❌ | Players see who is in their current location. Current caution: `Cmd9` now looks like an on-demand inquiry UI path, so do not assume it is the passive world-entry roster packet. |
-| Player join / leave events | ❌ | Notify room occupants when someone arrives or departs |
+| Room broadcast | 🔬 | Same-room presence is partially implemented with `Cmd13` arrival and `Cmd11(status=0)` departure. Initial room-sync packet is still unresolved; do not assume `Cmd9` fills that role. |
+| Player join / leave events | 🔬 | Same-room `Cmd13` / `Cmd11(status=0)` path is implemented on the branch; needs real-client validation against room changes and world entry |
 | F7 — team / lance channel | 🔬 | Wire format for scoped team broadcast unknown |
 | F8 — all-comm / chat-window toggle | 🔬 | May share a command code with the chat-window open/close packet |
 | ComStar DM — store and deliver | ❌ | Async private messages; server must persist unread messages per player |
