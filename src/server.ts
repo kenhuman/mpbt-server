@@ -400,7 +400,19 @@ function handleGameData(
         // immediately if ':' is not found, silently failing the secondary connection.
         // SERVER_HOST defaults to 127.0.0.1 (loopback); set the SERVER_HOST env var
         // to the server's LAN/public IP for clients connecting from another machine.
-        const redir = buildRedirectPacket(`${SERVER_HOST}:${ARIES_PORT}`);
+        const redirectAddr = `${SERVER_HOST}:${ARIES_PORT}`;
+        const redirectColonCount = (redirectAddr.match(/:/g) || []).length;
+        const redirectAddrLength = Buffer.byteLength(redirectAddr, 'ascii');
+        if (redirectColonCount !== 1 || redirectAddrLength > 39) {
+          connLog.error(
+            '[game] invalid REDIRECT addr "%s" (expected exactly one ":" and max 39 ASCII bytes, got %d ":" and %d bytes); check SERVER_HOST/ARIES_PORT configuration',
+            redirectAddr,
+            redirectColonCount,
+            redirectAddrLength,
+          );
+          throw new Error(`Invalid REDIRECT addr "${redirectAddr}": expected host:port with exactly one ":" and max 39 ASCII bytes`);
+        }
+        const redir = buildRedirectPacket(redirectAddr);
         send(session.socket, redir, capture, 'REDIRECT');
         session.phase = 'closing';
       } else if (selection === 2) {
@@ -459,16 +471,21 @@ function handleGameData(
     //   produce "Yes"/"No" button dialogs (unrelated to stats) that stack under mode=2 and
     //   were never closed by the server, causing the UI to appear frozen (T1 failure).
     const CMD20_DIALOG_ID = 5;
-    let slot = 0;
-    if (payload.length >= 8) {
-      const [slotPlusOne] = decodeArgType4(payload, 3);
-      slot = Math.max(0, slotPlusOne - 1);
-    }
-    const mech = MECHS[slot] ?? MECHS[0];
-    if (!mech) {
+    if (MECHS.length === 0) {
       connLog.warn('[game] cmd 20: MECHS empty, cannot examine');
       return;
     }
+    const maxSlot = MECHS.length - 1;
+    let slot = 0;
+    if (payload.length >= 8) {
+      const [slotPlusOne] = decodeArgType4(payload, 3);
+      const requestedSlot = Number.isFinite(slotPlusOne) ? slotPlusOne - 1 : 0;
+      slot = Math.min(maxSlot, Math.max(0, requestedSlot));
+      if (slot !== requestedSlot) {
+        connLog.warn('[game] cmd 20: clamped invalid slot %d to %d (max=%d)', requestedSlot, slot, maxSlot);
+      }
+    }
+    const mech = MECHS[slot];
     const examineText = buildMechExamineText(mech);
     connLog.info('[game] cmd 20 (examine): slot=%d mech_id=%d (%s) → %j',
       slot, mech.id, mech.typeString, examineText);
