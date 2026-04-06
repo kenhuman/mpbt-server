@@ -101,13 +101,39 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 
 | Task | Status | Notes |
 |---|---|---|
-| `src/server-world.ts` — second TCP listener | ❌ | Separate port; same `PacketParser` (ARIES); combat CRC init |
-| `src/protocol/world.ts` — world command stubs | ❌ | One handler per command discovered in M2 |
-| Update `gen-pcgi.ts` — separate lobby + world ports | ❌ | `play.pcgi` needs to route the REDIRECT to the right address/port |
-| `ClientSession` — add `'world'` phase | ❌ | Extend `src/state/players.ts` |
-| Initial world handshake response | ❌ | Whatever M2 reveals the client expects first |
+| `src/server-world.ts` — second TCP listener | ✅ | Port 2001; same `PacketParser` (ARIES); RPS CRC seed 0x0A5C25 |
+| `src/protocol/world.ts` — world command builders | ✅ | Cmd3 TextBroadcast, Cmd4 SceneInit, Cmd5/6 cursor, Cmd9 RoomList |
+| `src/state/launch.ts` — mech launch registry | ✅ | Bridges lobby→world: records selected mech before REDIRECT, consumed on world LOGIN |
+| `ClientSession` — add `'world'` phase | ✅ | Extended `src/state/players.ts`; `selectedMechId?` / `selectedMechSlot?` added |
+| Initial world handshake | ✅ | LOGIN_REQUEST → LOGIN → SYNC ack → MMW welcome → cmd-3 → Cmd6+Cmd4+Cmd9+Cmd3+Cmd5 |
+| Fix REDIRECT target to WORLD_PORT | ✅ | Lobby now redirects to port 2001; launch record stored before REDIRECT sends |
+| `gen-pcgi.ts` — separate lobby/world ports | N/A | `play.pcgi` always points to lobby (2000); REDIRECT carries the world address. Combat server is a separate dynamic spin-up (M6/M7). |
 
-**Verification:** Client connects after REDIRECT, game world renders, no immediate crash or disconnect.
+**M3 additions — Persistence, Character Creation, Direct World Entry (#25 / #26 / #27):**
+
+| Task | Status | Notes |
+|---|---|---|
+| PostgreSQL persistence layer | ✅ | `pg` + `bcryptjs`; `src/db/{client,schema.sql,accounts,characters,migrate}.ts`; `docker-compose.yml` |
+| `accounts` table + bcrypt password auth | ✅ | Auto-register on first login; verify password on subsequent logins; rejects wrong passwords |
+| `characters` table + allegiance enum | ✅ | One character per account; `display_name UNIQUE`; allegiance CHECK constraint `Davion\|Steiner\|Liao\|Marik\|Kurita` |
+| `npm run db:migrate` — idempotent schema apply | ✅ | Reads `src/db/schema.sql`; safe to re-run |
+| `ClientSession` — add `accountId`, `displayName`, `allegiance` | ✅ | Set from DB after login; `'char-creation'` phase added |
+| Character creation flow (first login) | ✅ | cmd-3 → no character in DB → send House allegiance dialog (cmd-7) → persist → REDIRECT |
+| Post-login direct world entry (returning player) | ✅ | cmd-3 → character found → REDIRECT to port 2001 immediately; no mech-select shown |
+| World server uses `displayName` as Cmd4 callsign | ✅ | Falls back to `username` if character data unavailable (e.g. test direct-connect) |
+| Display name entry (name selection dialog) | 🔬 | Text-input wire format not yet RE'd. Current placeholder: login username is used as display name. See issue #26 for RE tasks. |
+
+**Known M3 limitations / M4 work:**
+- `Cmd9` roster entries sent as empty (count=0); full per-player entry format TBD (M4 RE).
+- `Cmd8` (session binary data / mech loadout) not yet sent; client mech stats display may be absent.
+- Arena navigation and movement not yet implemented (M5).
+- World server does not yet bounce a second REDIRECT to a combat server (M6/M7).
+
+**Verification:**
+- *New player:* connect, select House allegiance, enter world — Cmd4 callsign shows username; allegiance persisted to DB.
+- *Returning player:* connect, skip allegiance dialog, enter world directly — no mech-select screen shown.
+- *Wrong password:* second login with wrong credentials → connection closed.
+- *Mech select (M6 path):* cmd-26 visible only when explicitly triggered; pre-combat flow unaffected.
 
 ---
 

@@ -20,15 +20,19 @@ import * as crypto from 'crypto';
 import * as path from 'path';
 import * as os from 'os';
 
-import { ARIES_PORT, Msg } from './protocol/constants.js';
+import { ARIES_PORT, WORLD_PORT, Msg } from './protocol/constants.js';
 import { PacketParser, buildPacket, hexDump } from './protocol/aries.js';
 import { parseLoginPayload, buildLoginRequest, buildSyncAck, buildWelcomePacket } from './protocol/auth.js';
 import { buildMechListPacket, buildMenuDialogPacket, buildRedirectPacket, buildCmd20Packet, parseClientCmd7, decodeArgType4, type MechEntry } from './protocol/game.js';
 import { loadMechs } from './data/mechs.js';
 import { MECH_STATS } from './data/mech-stats.js';
 import { PlayerRegistry, ClientSession } from './state/players.js';
+import { launchRegistry } from './state/launch.js';
+import { startWorldServer } from './server-world.js';
 import { Logger } from './util/logger.js';
 import { CaptureLogger } from './util/capture.js';
+import { verifyOrRegister } from './db/accounts.js';
+import { findCharacter, createCharacter, type Allegiance, ALLEGIANCES } from './db/characters.js';
 
 // ── Global state ──────────────────────────────────────────────────────────────
 
@@ -252,43 +256,64 @@ function handleLogin(
   }
 
   const { login } = result;
-  session.username = login.username || '(unknown)';
-  session.phase = 'lobby';
+  const rawUsername = login.username || '(unknown)';
+  session.username = rawUsername;
 
   connLog.info(
-    '[login] accepted: user="%s" service="%s" clientVer="%s"',
-    login.username,
+    '[login] credentials received: user="%s" service="%s" clientVer="%s"',
+    rawUsername,
     login.serviceId,
     login.clientVer,
   );
 
-  // Send SYNC acknowledgment (type 0x00, empty payload) — establishes timing.
-  // COMMEG32 case-0 fires WM 0x7f0 with length=0; FUN_00429a00 does nothing
-  // (param_2=0 skips the byte loop) but stores timing state for subsequent packets.
-  const syncAck = buildSyncAck(Date.now());
-  connLog.info('[login] sending SYNC ack — %d bytes', syncAck.length);
-  send(session.socket, syncAck, capture, 'SYNC');
+  // DB authentication: auto-register on first login, verify password on subsequent.
+  verifyOrRegister(rawUsername, login.password ?? '').then(authResult => {
+    if (!authResult.ok) {
+      connLog.warn('[login] rejected by DB: %s (user="%s")', authResult.reason, rawUsername);
+      session.socket.destroy();
+      return;
+    }
 
-  // Send welcome data (type 0x00, payload = "\x1b?MMW Copyright Kesmai Corp. 1991").
-  // COMMEG32 fires WM 0x7f0 again; this time FUN_00429a00 accumulates the ESC
-  // sequence, strcmp-matches DAT_00474d48, sets DAT_004e2de8=1, and the game
-  // advances to the main loop (FUN_00433ef0 + FUN_00429580 + ...).
-  const welcomePkt = buildWelcomePacket();
-  connLog.info('[login] sending WELCOME escape — %d bytes', welcomePkt.length);
-  send(session.socket, welcomePkt, capture, 'WELCOME');
+    session.accountId = authResult.account.id;
+    session.phase = 'lobby';
+
+    if (authResult.created) {
+      connLog.info('[login] new account created for "%s" (id=%d)', rawUsername, session.accountId);
+    } else {
+      connLog.info('[login] authenticated: user="%s" (id=%d)', rawUsername, session.accountId);
+    }
+
+    // Send SYNC acknowledgment (type 0x00, empty payload) — establishes timing.
+    const syncAck = buildSyncAck(Date.now());
+    connLog.info('[login] sending SYNC ack — %d bytes', syncAck.length);
+    send(session.socket, syncAck, capture, 'SYNC');
+
+    // Send welcome data (type 0x00, payload = "\x1b?MMW Copyright Kesmai Corp. 1991").
+    const welcomePkt = buildWelcomePacket();
+    connLog.info('[login] sending WELCOME escape — %d bytes', welcomePkt.length);
+    send(session.socket, welcomePkt, capture, 'WELCOME');
+  }).catch((err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    connLog.error('[login] DB error during auth: %s', msg);
+    session.socket.destroy();
+  });
 }
 
 // ── Game-data handler ─────────────────────────────────────────────────────────
-// Handles type-0x00 packets in 'lobby' phase.
+// Handles type-0x00 packets in 'lobby' and 'char-creation' phases.
 //
-// Lobby command flow (client → server → client):
-//   cmd  3 (client-ready)   → server sends cmd 26 (mech list)
-//   cmd 20 (examine mech)   → server TODO: send mech stats
-//   cmd  7 (mech select)    → server sends cmd  7 (confirm dialog)
-//   cmd  7 (confirm pick)   → server sends type-0x03 REDIRECT — game world
+// Login → character lookup → branch:
+//   character exists  → REDIRECT immediately to WORLD_PORT (issue #27)
+//   no character      → allegiance dialog → create character → REDIRECT (issue #26)
+//
+// Pre-combat mech select (cmd-26 / cmd-7 confirm) is kept in place for the
+// M6 combat-entry path but is no longer triggered on initial login.
 
 // ARIES list-id used for our mech-confirm dialog (any value ≠ client special IDs).
 const CONFIRM_DIALOG_ID = 2;
+
+// List-id used for the House-allegiance selection dialog during char creation.
+const ALLEGIANCE_DIALOG_ID = 3;
 
 // Sample mech roster — one Shadowhawk entry so the UI has something to show.
 // Mech roster loaded from mechdata/*.MEC at startup.
@@ -322,7 +347,8 @@ function handleGameData(
   connLog: Logger,
   capture: CaptureLogger,
 ): void {
-  if (session.phase !== 'lobby') {
+  // Accept packets in 'lobby' (initial post-auth) and 'char-creation' phases.
+  if (session.phase !== 'lobby' && session.phase !== 'char-creation') {
     connLog.debug('[game] type-0 in phase=%s (len=%d) — ignoring', session.phase, payload.length);
     return;
   }
@@ -339,8 +365,6 @@ function handleGameData(
   const seq = payload[1] - 0x21;
 
   // ACK request: client uses seq > 42 to request server acknowledgment.
-  // Lobby_SendAck (FUN_0040c280) confirmed: reply = raw bytes [0x22, val+0x2b]
-  // wrapped in ARIES type-0. val = seq byte - 0x21, which is `seq` here.
   if (seq > 42) {
     const ackPayload = Buffer.from([0x22, seq + 0x2b]);
     connLog.debug('[game] seq=%d > 42 → sending ACK [0x22, 0x%s]', seq, (seq + 0x2b).toString(16));
@@ -349,75 +373,133 @@ function handleGameData(
   }
 
   const cmdIdx = payload[2] - 0x21;
-  connLog.info('[game] client seq=%d cmd=%d', seq, cmdIdx);
+  connLog.info('[game] client seq=%d cmd=%d phase=%s', seq, cmdIdx, session.phase);
 
-  if (cmdIdx === 3 && !session.mechListSent) {
-    // cmd 3 = client-ready (FUN_0040d3c0): send mech list exactly once.
-    // FUN_0043A370 reads it → FUN_00439f70 creates the mech-selection window.
+  if (cmdIdx === 3 && session.phase === 'lobby') {
+    // cmd 3 = client-ready signal.
     //
-    // The client stores mech entries in fixed-size static arrays; the UI shows
-    // 4 slots. Cap at MECH_SEND_LIMIT until player-specific roster assignment is implemented.
-    // TODO: load player-specific mech assignments rather than the global catalog.
-    const mechsToSend = MECHS.slice(0, MECH_SEND_LIMIT);
-    connLog.info('[game] client-ready → sending MECH LIST (cmd 26) — %d mechs (capped at %d)', mechsToSend.length, MECH_SEND_LIMIT);
-    const mechPkt = buildMechListPacket(mechsToSend, 0, '', nextSeq(session));
-    send(session.socket, mechPkt, capture, 'MECH_LIST');
-    session.mechListSent = true;
+    // NEW POST-M3 FLOW (issues #26/#27):
+    //   Look up the player's character in the DB.
+    //   - Character exists → REDIRECT immediately to world port (issue #27).
+    //   - No character     → send House allegiance dialog to start creation (issue #26).
+    //
+    // The pre-combat mech select (cmd-26) is NOT sent here anymore; it belongs
+    // to the M6 combat-entry path, not the initial login flow.
+    const accountId = session.accountId;
+    if (accountId === undefined) {
+      connLog.error('[game] cmd-3 received but session has no accountId — possible auth race');
+      session.socket.destroy();
+      return;
+    }
+
+    findCharacter(accountId).then(character => {
+      if (character) {
+        // Returning player: character on file → straight to world.
+        session.displayName = character.display_name;
+        session.allegiance  = character.allegiance;
+        connLog.info(
+          '[game] character found: displayName="%s" allegiance=%s → REDIRECT to world',
+          character.display_name, character.allegiance,
+        );
+        issueWorldRedirect(session, connLog, capture);
+      } else {
+        // First login: no character → prompt for House allegiance.
+        connLog.info('[game] no character for account %d — starting char creation', accountId);
+        session.phase = 'char-creation';
+        sendAllegianceDialog(session, connLog, capture);
+      }
+    }).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      connLog.error('[game] DB error during character lookup: %s', msg);
+      session.socket.destroy();
+    });
 
   } else if (cmdIdx === 7) {
-    // cmd 7: mech-window selection (listId=typeFlag=0) or confirm-dialog reply.
+    // cmd 7: dialog reply.  Handles three distinct sub-cases:
+    //   A) Allegiance selection during char creation     (listId = ALLEGIANCE_DIALOG_ID)
+    //   B) Mech-window selection (M6 pre-combat, future) (listId = 0)
+    //   C) Launch-confirm dialog (M6 pre-combat, future) (listId = CONFIRM_DIALOG_ID)
     const parsed = parseClientCmd7(payload);
     if (!parsed) {
       connLog.warn('[game] cmd 7 parse failed (len=%d)', payload.length);
       return;
     }
     const { listId, selection } = parsed;
-    connLog.info('[game] cmd 7: listId=%d selection=%d awaitConfirm=%s',
-      listId, selection, session.awaitingMechConfirm);
+    connLog.info('[game] cmd 7: listId=%d selection=%d phase=%s', listId, selection, session.phase);
 
-    if (listId === 0 && selection > 0 && session.mechListSent && !session.awaitingMechConfirm) {
-      // Mech-window selection: user picked a mech (selection = mech.slot + 1).
-      // Send server cmd-7 confirmation dialog — FUN_004112b0 shows a numbered menu.
-      // Two options: 1=Launch! 2=Cancel. ESC from inside this dialog type sends
-      // cmd 0x1D (handled below); both ESC and the Cancel item re-send the mech
-      // list so the client returns to the mech selection screen.
-      connLog.info('[game] mech selected (slot=%d) → sending CONFIRM dialog', selection - 1);
+    if (session.phase === 'char-creation' && listId === ALLEGIANCE_DIALOG_ID && selection > 0) {
+      // Allegiance selected (1-based index into ALLEGIANCES array).
+      const allegianceIndex = selection - 1;
+      if (allegianceIndex >= ALLEGIANCES.length) {
+        connLog.warn('[game] char-creation: invalid allegiance index %d — re-prompting', allegianceIndex);
+        sendAllegianceDialog(session, connLog, capture);
+        return;
+      }
+      const allegiance = ALLEGIANCES[allegianceIndex] as Allegiance;
+      // Display name: use the login username for now.
+      // TODO(#26): RE the text-input wire format so players can choose their own
+      // callsign.  Once known, add a name-entry step before this dialog.
+      const displayName = session.username.slice(0, 64);
+      const accountId   = session.accountId!;
+
+      connLog.info(
+        '[game] char-creation: allegiance=%s displayName="%s" → persisting to DB',
+        allegiance, displayName,
+      );
+
+      createCharacter(accountId, displayName, allegiance).then(character => {
+        session.displayName = character.display_name;
+        session.allegiance  = character.allegiance;
+        connLog.info('[game] character created (id=%d) → REDIRECT to world', character.id);
+        issueWorldRedirect(session, connLog, capture);
+      }).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        // Handle duplicate display_name (UNIQUE violation — code 23505).
+        const pgErr = err as { code?: string };
+        if (pgErr.code === '23505') {
+          connLog.warn('[game] display name "%s" already taken — retrying with suffix', displayName);
+          const fallback = `${displayName.slice(0, 60)}_${accountId}` as string;
+          createCharacter(accountId, fallback, allegiance).then(character => {
+            session.displayName = character.display_name;
+            session.allegiance  = character.allegiance;
+            connLog.info('[game] character created with fallback name "%s" → REDIRECT', fallback);
+            issueWorldRedirect(session, connLog, capture);
+          }).catch((err2: unknown) => {
+            const msg2 = err2 instanceof Error ? err2.message : String(err2);
+            connLog.error('[game] failed to create character with fallback: %s', msg2);
+            session.socket.destroy();
+          });
+          return;
+        }
+        connLog.error('[game] char-creation DB error: %s', msg);
+        session.socket.destroy();
+      });
+
+    } else if (listId === 0 && selection > 0 && session.mechListSent && !session.awaitingMechConfirm) {
+      // M6 pre-combat mech-window selection.
+      const chosenSlot = selection - 1;
+      (session as ClientSession & { _pendingSlot?: number })._pendingSlot = chosenSlot;
+      connLog.info('[game] mech selected (slot=%d) → sending CONFIRM dialog', chosenSlot);
       const confirmPkt = buildMenuDialogPacket(CONFIRM_DIALOG_ID, 'CONFIRM', ['Launch!', 'Cancel'], nextSeq(session));
       send(session.socket, confirmPkt, capture, 'CONFIRM_DIALOG');
       session.awaitingMechConfirm = true;
 
     } else if (listId === CONFIRM_DIALOG_ID && selection > 0 && session.awaitingMechConfirm) {
+      // M6 pre-combat launch-confirm dialog.
       if (selection === 1) {
-        // Item 1 = "Launch!" → redirect to game world.
-        // COMMEG32.DLL case 3: 120-byte payload [addr40|internet40|pw40],
-        // then FUN_100011c0 opens a new TCP connection to addr.
-        // No world listener exists yet (TODO M3). Redirect back to ARIES_PORT
-        // so the client re-connects to this server rather than hitting a dead port.
-        // When M3 is implemented, change this to WORLD_PORT and open a second listener.
-        connLog.info('[game] confirmed (Launch!) → sending REDIRECT to %s:%d (ARIES_PORT; world listener not yet implemented)', SERVER_HOST, ARIES_PORT);
-        // IMPORTANT: addr must be "host:port" format.
-        // Aries_OpenSocket (COMMEG32.DLL) calls strchr(addr, ':') and returns -1
-        // immediately if ':' is not found, silently failing the secondary connection.
-        // SERVER_HOST defaults to 127.0.0.1 (loopback); set the SERVER_HOST env var
-        // to the server's LAN/public IP for clients connecting from another machine.
-        const redirectAddr = `${SERVER_HOST}:${ARIES_PORT}`;
-        const redirectColonCount = (redirectAddr.match(/:/g) || []).length;
-        const redirectAddrLength = Buffer.byteLength(redirectAddr, 'ascii');
-        if (redirectColonCount !== 1 || redirectAddrLength > 39) {
-          connLog.error(
-            '[game] invalid REDIRECT addr "%s" (expected exactly one ":" and max 39 ASCII bytes, got %d ":" and %d bytes); check SERVER_HOST/ARIES_PORT configuration',
-            redirectAddr,
-            redirectColonCount,
-            redirectAddrLength,
-          );
-          throw new Error(`Invalid REDIRECT addr "${redirectAddr}": expected host:port with exactly one ":" and max 39 ASCII bytes`);
-        }
-        const redir = buildRedirectPacket(redirectAddr);
-        send(session.socket, redir, capture, 'REDIRECT');
-        session.phase = 'closing';
+        const pendingSlot = (session as ClientSession & { _pendingSlot?: number })._pendingSlot ?? 0;
+        const selectedMech = MECHS.find(m => m.slot === pendingSlot) ?? MECHS[0];
+        launchRegistry.record(session.username, {
+          mechId:         selectedMech.id,
+          mechSlot:       selectedMech.slot,
+          mechTypeString: selectedMech.typeString,
+        });
+        connLog.info(
+          '[game] confirmed (Launch!) → recording launch mech=%s (id=%d) and REDIRECT to %s:%d',
+          selectedMech.typeString, selectedMech.id, SERVER_HOST, WORLD_PORT,
+        );
+        issueWorldRedirect(session, connLog, capture);
       } else if (selection === 2) {
-        // Item 2 = "Cancel" → dismiss dialog, re-send mech list so client returns
-        // to mech selection screen.
         connLog.info('[game] cancelled → re-sending mech list');
         session.awaitingMechConfirm = false;
         const mechsToSend = MECHS.slice(0, MECH_SEND_LIMIT);
@@ -428,48 +510,27 @@ function handleGameData(
       }
 
     } else {
-      connLog.debug('[game] cmd 7 ignored (listId=%d sel=%d mechSent=%s awaitConfirm=%s)',
-        listId, selection, session.mechListSent, session.awaitingMechConfirm);
+      connLog.debug('[game] cmd 7 ignored (listId=%d sel=%d phase=%s)', listId, selection, session.phase);
     }
 
   } else if (cmdIdx === 0x1D) {
     // cmd 0x1D (29) = ESC/cancel pressed in a menu dialog.
-    // Client format confirmed: [Frame_ReadByte(p1)] [type1 2B: p2] [type4 5B: p3]
-    // Response: re-send the mech list so the client dismisses the dialog and
-    // returns to the mech selection screen. Sending nothing leaves the dialog
-    // frozen (client waits indefinitely for a server packet to close it).
     const p1 = payload.length > 3 ? payload[3] - 0x21 : -1;
-    connLog.info('[game] cmd 0x1D (cancel/ESC): p1=%d — re-sending mech list to dismiss dialog', p1);
-    session.awaitingMechConfirm = false;
-    const mechsToSend = MECHS.slice(0, MECH_SEND_LIMIT);
-    const mechPkt = buildMechListPacket(mechsToSend, 0, '', nextSeq(session));
-    send(session.socket, mechPkt, capture, 'MECH_LIST');
+    if (session.phase === 'char-creation') {
+      // Re-send allegiance dialog — player cannot skip character creation.
+      connLog.info('[game] cmd 0x1D in char-creation: p1=%d — re-sending allegiance dialog', p1);
+      sendAllegianceDialog(session, connLog, capture);
+    } else {
+      connLog.info('[game] cmd 0x1D (cancel/ESC): p1=%d — re-sending mech list to dismiss dialog', p1);
+      session.awaitingMechConfirm = false;
+      const mechsToSend = MECHS.slice(0, MECH_SEND_LIMIT);
+      const mechPkt = buildMechListPacket(mechsToSend, 0, '', nextSeq(session));
+      send(session.socket, mechPkt, capture, 'MECH_LIST');
+    }
 
   } else if (cmdIdx === 20) {
     // cmd 20 = 'X' key / Examine button — client requests stats for the highlighted mech.
-    //
-    // CLIENT PAYLOAD (CONFIRMED by capture analysis — RESEARCH.md §16):
-    //   type4(slot + 1) at payload[3..7]  — 5-byte base-85 encoding, identical to
-    //   the cmd-7 mech-selection encoding; slot is 0-based, value is 1-indexed.
-    //
-    // SERVER RESPONSE — direct text (NOT the legacy "#NNN" shortcode):
-    //   ONE packet: mode=2, text = mech stats built by buildMechExamineText().
-    //
-    //   String encoding: encodeB85_1(len) + raw bytes — NOT encodeString.
-    //   FUN_00411D90 reads the string via FUN_0040c130 → FUN_00402b10(1) (base-85 2-byte
-    //   length prefix).  encodeString's 1-byte prefix caused the client to decode 2 bytes
-    //   as a 1732-byte length, fail the bounds check → return -1 ("RPS command 20 failed.").
-    //
-    //   The legacy "#NNN" path (confirmed by RE of FUN_00411a10, FUN_00473ad8) does a
-    //   client-side lookup: DAT_00473ad8[mech_id] → MPBT.MSG line → stats string.
-    //   Unfortunately our MPBT.MSG has "Mechs now in use:" at the expected line (252)
-    //   for mech_id=156 (ANH-1A) instead of the actual mech stats.  Sending the stats
-    //   text directly from the server bypasses this broken lookup entirely.
-    //
-    // IMPORTANT: Do NOT send mode=0 or mode=1 packets.
-    //   FUN_00411a10 creates a NEW independent dialog object for EVERY call. Modes 0 and 1
-    //   produce "Yes"/"No" button dialogs (unrelated to stats) that stack under mode=2 and
-    //   were never closed by the server, causing the UI to appear frozen (T1 failure).
+    // Only meaningful when the mech list is visible (pre-combat M6 path).
     const CMD20_DIALOG_ID = 5;
     if (MECHS.length === 0) {
       connLog.warn('[game] cmd 20: MECHS empty, cannot examine');
@@ -492,8 +553,52 @@ function handleGameData(
     send(session.socket, buildCmd20Packet(CMD20_DIALOG_ID, 2, examineText, nextSeq(session)), capture, 'CMD20_STATS');
 
   } else {
-    connLog.debug('[game] cmd=%d ignored (mechListSent=%s)', cmdIdx, session.mechListSent);
+    connLog.debug('[game] cmd=%d ignored (phase=%s)', cmdIdx, session.phase);
   }
+}
+
+// ── Character creation helpers ────────────────────────────────────────────────
+
+/** Send the House allegiance selection dialog during character creation. */
+function sendAllegianceDialog(
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const items = ALLEGIANCES as readonly string[];
+  const pkt = buildMenuDialogPacket(
+    ALLEGIANCE_DIALOG_ID,
+    'Choose your House allegiance:',
+    items.slice(),
+    nextSeq(session),
+  );
+  connLog.info('[game] sending allegiance dialog (%s)', ALLEGIANCES.join('/'));
+  send(session.socket, pkt, capture, 'ALLEGIANCE_DIALOG');
+}
+
+/**
+ * Issue a REDIRECT packet to the game world server (WORLD_PORT).
+ * Validates the addr string, sends the packet, and sets phase='closing'.
+ */
+function issueWorldRedirect(
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const redirectAddr = `${SERVER_HOST}:${WORLD_PORT}`;
+  const colonCount   = (redirectAddr.match(/:/g) ?? []).length;
+  const addrLen      = Buffer.byteLength(redirectAddr, 'ascii');
+  if (colonCount !== 1 || addrLen > 39) {
+    connLog.error(
+      '[game] invalid REDIRECT addr "%s" (%d ":" chars, %d bytes); check SERVER_HOST/WORLD_PORT',
+      redirectAddr, colonCount, addrLen,
+    );
+    throw new Error(`Invalid REDIRECT addr "${redirectAddr}"`);
+  }
+  const redir = buildRedirectPacket(redirectAddr);
+  connLog.info('[game] sending REDIRECT → %s', redirectAddr);
+  send(session.socket, redir, capture, 'REDIRECT');
+  session.phase = 'closing';
 }
 
 // ── Server startup ────────────────────────────────────────────────────────────
@@ -520,6 +625,10 @@ server.on('error', (err: Error) => {
   log.error('Server error: %s', err.message);
   process.exit(1);
 });
+
+// Start the world server (M3) — listens on WORLD_PORT (2001).
+// Shares the same player registry and logger as the lobby server.
+startWorldServer(log, players);
 
 server.listen(ARIES_PORT, '0.0.0.0', () => {
   const addr = server.address() as net.AddressInfo;

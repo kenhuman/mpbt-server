@@ -5,10 +5,12 @@
 import type { Socket } from 'net';
 
 export type SessionPhase =
-  | 'connected'   // TCP accepted, waiting for first bytes
-  | 'auth'        // parsing login packet
-  | 'lobby'       // in the role-play shell, navigating rooms
-  | 'closing';    // disconnect in progress
+  | 'connected'     // TCP accepted, waiting for first bytes
+  | 'auth'          // parsing login packet
+  | 'lobby'         // authenticated; about to look up or create character
+  | 'char-creation' // first-login character creation in progress (allegiance dialog)
+  | 'world'         // in the game world (RPS/arena) after REDIRECT
+  | 'closing';      // disconnect in progress
 
 export interface ClientSession {
   /** Unique session ID (UUID). */
@@ -34,6 +36,32 @@ export interface ClientSession {
   awaitingMechConfirm: boolean;
   /** Server→client sequence number 0..41, incremented per game frame. */
   serverSeq: number;
+  /**
+   * Mech ID selected in the lobby and used to initialize the world arena.
+   * Set on world-server sessions (via launchRegistry.consume); undefined on lobby sessions.
+   */
+  selectedMechId?: number;
+  /**
+   * 0-based mech slot (sort position) for the selected mech.
+   * Set on world-server sessions; undefined on lobby sessions.
+   */
+  selectedMechSlot?: number;
+
+  // ── Persistence fields (set after DB lookup / character creation) ─────────
+
+  /** Database account row ID; set after successful login & DB auth. */
+  accountId?: number;
+  /**
+   * Character display name (callsign shown to other players and in Cmd4).
+   * Set from the characters table after login; also set at end of char creation.
+   * Falls back to `username` if not yet populated (pre-character-creation sessions).
+   */
+  displayName?: string;
+  /**
+   * House allegiance chosen during character creation: one of
+   * Davion | Steiner | Liao | Marik | Kurita.
+   */
+  allegiance?: string;
 }
 
 export class PlayerRegistry {
