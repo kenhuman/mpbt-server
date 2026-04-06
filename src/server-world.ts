@@ -40,6 +40,7 @@ import {
   buildCmd6CursorBusyPacket,
   buildCmd9RoomPlayerListPacket,
 } from './protocol/world.js';
+import { buildMenuDialogPacket } from './protocol/game.js';
 import { PlayerRegistry, ClientSession } from './state/players.js';
 import { launchRegistry } from './state/launch.js';
 import { loadMechs } from './data/mechs.js';
@@ -66,6 +67,14 @@ const FALLBACK_MECH_ID = WORLD_MECHS.length > 0 ? WORLD_MECHS[0].id : 0;
 // Default arena name shown in the window title.
 const DEFAULT_SCENE_NAME = 'Solaris Arena';
 const WELCOME_TEXT       = 'Welcome to the game world.';
+
+/**
+ * listId sent in the server Cmd7 allegiance-picker dialog.
+ * The client echoes it back in its cmd-7 reply so we can identify the response.
+ * Must be a small integer (< 85) and must NOT be one of the special-cased IDs
+ * that the client handles differently (0x22, 0x34, 0x0c, 0x25, 8, 0x3E8).
+ */
+const ALLEGIANCE_LIST_ID = 5;
 
 /**
  * Map of player-typed text → canonical allegiance.
@@ -265,6 +274,42 @@ function handleWorldGameData(
     connLog.info('[world] cmd-5 (allegiance-pick): player chose %s', allegiance);
     applyAllegiancePick(session, allegiance, 'cmd-5', connLog, capture);
 
+  } else if (cmdIdx === 7) {
+    // Cmd-7: player selected an item in a server-sent menu dialog (FUN_0040d2f0).
+    // Wire format: [listId: B85_1 (2B)] [selectedValue: B85_4 (5B)]
+    //   listId     = (payload[3]-0x21)*85 + (payload[4]-0x21)
+    //   value      = (payload[5]-0x21)*85^4 + ... + (payload[9]-0x21)
+    //   allegiance = ALLEGIANCES[value - 1]  (client sends item_index+1)
+    if (payload.length < 10) {
+      connLog.debug('[world] cmd-7 (menu-select): payload too short');
+      return;
+    }
+    const listId = (payload[3] - 0x21) * 85 + (payload[4] - 0x21);
+    if (listId !== ALLEGIANCE_LIST_ID) {
+      connLog.debug('[world] cmd-7: unrecognised listId=%d — ignoring', listId);
+      return;
+    }
+    if (session.allegiance !== undefined) {
+      connLog.debug('[world] cmd-7: allegiance already set — ignoring');
+      return;
+    }
+    // Decode B85_4 selection value (5 bytes, payload[5..9]).
+    // For small values 1-5 only the last byte is non-zero.
+    const selectionValue =
+      (payload[5] - 0x21) * 52326577 +
+      (payload[6] - 0x21) * 614125 +
+      (payload[7] - 0x21) * 7225 +
+      (payload[8] - 0x21) * 85 +
+      (payload[9] - 0x21);
+    const allegianceIdx = selectionValue - 1;   // client sends 1-based
+    if (allegianceIdx < 0 || allegianceIdx >= ALLEGIANCES.length) {
+      connLog.warn('[world] cmd-7: selectionValue=%d out of range', selectionValue);
+      return;
+    }
+    const allegiance = ALLEGIANCES[allegianceIdx] as Allegiance;
+    connLog.info('[world] cmd-7 (allegiance dialog): player chose %s', allegiance);
+    applyAllegiancePick(session, allegiance, 'cmd-7', connLog, capture);
+
   } else if (cmdIdx === 4) {
     // Cmd-4: chat text from the player (FUN_0040d280 in MPBTWIN.EXE).
     // The player types text in the chat box and presses Enter; the client
@@ -445,29 +490,9 @@ function sendWorldInitSequence(
   //   sessionFlags 0x30 = has-opponents (0x10) + clear-arena-data (0x20).
   //   All 4 opponent slots are absent → wire values of 0 → stored as -1 → buttons hidden.
   //   callsign and sceneName are provided via the has-opponents (0x10) branch reads.
-  // arenaOptions items render as a horizontal row at the top of the arena screen.
-  // Item 0 (tag 0x100) is always routed to Help by the client; clicking it does not
-  // send cmd-5.  Items 1-5 (tags 0x101-0x105) send cmd-5 with type=0..4 respectively.
-  // Use the Great House family names so each label fits within the ~79-pixel button
-  // width that the client computes for a 6-item row.
-  const arenaOptions: Array<{ type: number; label: string }> =
-    session.allegiance === undefined
-      ? [
-          // index 0 → button tag 0x100 → Help (spacer; not selectable)
-          { type: 0, label: '< Choose >' },
-          // index 1 → button tag 0x101 → cmd-5 type=0 → ALLEGIANCES[0]='Davion'
-          { type: 0, label: 'Davion' },
-          // index 2 → button tag 0x102 → cmd-5 type=1 → ALLEGIANCES[1]='Steiner'
-          { type: 1, label: 'Steiner' },
-          // index 3 → button tag 0x103 → cmd-5 type=2 → ALLEGIANCES[2]='Liao'
-          { type: 2, label: 'Liao' },
-          // index 4 → button tag 0x104 → cmd-5 type=3 → ALLEGIANCES[3]='Marik'
-          { type: 3, label: 'Marik' },
-          // index 5 → button tag 0x105 → cmd-5 type=4 → ALLEGIANCES[4]='Kurita'
-          { type: 4, label: 'Kurita' },
-        ]
-      : []; // returning player — allegiance already set, no wizard needed
-
+  // arenaOptions (type-7 items) are NOT sent: the client renders them in DAT_004ddf60
+  // which is NOT in the click-dispatcher's window list (DAT_004ddf70), so they appear
+  // but are NEVER clickable.  We use a Cmd7 dialog instead for new players.
   const sceneInit = buildCmd4SceneInitPacket(
     {
       sessionFlags:     0x30,   // has-opponents + clear-arena resets
@@ -476,7 +501,7 @@ function sendWorldInitSequence(
       opponents:        [],     // all 4 slots = "no opponent" (wire 0x21 / [0x21,0x21])
       callsign,
       sceneName:        DEFAULT_SCENE_NAME,
-      arenaOptions,
+      arenaOptions:     [],     // always empty — see note above
     },
     nextSeq(session),
   );
@@ -491,17 +516,31 @@ function sendWorldInitSequence(
     'CMD9_ROOM_LIST',
   );
 
-  // Cmd3 — TextBroadcast: welcome message (only visible after g_chatReady=1, set by Cmd4).
-  // For new players send multiple lines listing the house options with numbers so
-  // the player can type their choice in the chat box and press Enter.
-  // The client also renders a horizontal row of arenaOptions buttons at the top of
-  // the arena panel; clicking a house button sends cmd-5 as an alternative path.
+  // Cmd7 — MenuDialog: allegiance-picker popup for new players only.
+  // Creates a clickable bordered dialog at screen (256,221)-(640,480) — the right-side
+  // panel that overlaps the "Choose your allegiance" background art.  Items are type-0
+  // (text rows), fully clickable via the standard window dispatcher (DAT_004ddf70).
+  // When the player clicks a house row the client sends cmd-7 back with the listId
+  // (ALLEGIANCE_LIST_ID) and the 1-based item index.
   if (session.allegiance === undefined) {
-    send(socket, buildCmd3BroadcastPacket('NEW PILOT: Choose your house allegiance by typing a number or name below, then press Enter:', nextSeq(session)), capture, 'CMD3_WELCOME');
-    send(socket, buildCmd3BroadcastPacket('  1. Davion   2. Steiner   3. Liao   4. Marik   5. Kurita', nextSeq(session)), capture, 'CMD3_OPTIONS');
-  } else {
-    send(socket, buildCmd3BroadcastPacket(WELCOME_TEXT, nextSeq(session)), capture, 'CMD3_WELCOME');
+    send(
+      socket,
+      buildMenuDialogPacket(
+        ALLEGIANCE_LIST_ID,
+        'Choose your allegiance',
+        ['Davion', 'Steiner', 'Liao', 'Marik', 'Kurita'],
+        nextSeq(session),
+      ),
+      capture,
+      'CMD7_ALLEGIANCE_DIALOG',
+    );
   }
+
+  // Cmd3 — TextBroadcast: welcome message (visible in the chat scroll at top of screen).
+  const welcomeMsg = session.allegiance === undefined
+    ? 'NEW PILOT: Click your Great House in the dialog, or type 1-5 below and press Enter.'
+    : WELCOME_TEXT;
+  send(socket, buildCmd3BroadcastPacket(welcomeMsg, nextSeq(session)), capture, 'CMD3_WELCOME');
 
   // Cmd5 — CursorNormal: restore the arrow cursor.
   send(socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
