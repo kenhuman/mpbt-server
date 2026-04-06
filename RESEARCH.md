@@ -482,21 +482,39 @@ sends type4(item_data[k-1] + 1)
 → picking item 1 sends type4(1), picking item 2 sends type4(2), etc.
 ```
 
-### Special list_id Values to Avoid
+### Special list_id Values / Shared Callback Cases
 
-These values cause the client to keep the dialog open after a pick (special
-sub-menu logic):
+The numbered-list selection callback used by `Cmd7`, `Cmd16`, `Cmd19`, and
+`Cmd48` has a few hard-coded `list_id` branches:
 
 | Value (decimal) | Hex | Notes |
 |:---:|:---:|-------|
-| 8 | `0x08` | — |
-| 12 | `0x0c` | — |
-| 34 | `0x22` | — |
-| 37 | `0x25` | — |
-| 52 | `0x34` | — |
-| 1000 | `0x3E8` | Triggers sub-menu logic |
+| 8 | `0x08` | Shared keep-open path; exact feature still unresolved. |
+| 12 | `0x0c` | Shared keep-open path; exact feature still unresolved. |
+| 34 | `0x22` | Shared keep-open path; additionally, if the selected `item_id == 100`, the client opens the exit-confirmation MessageBox via `FUN_00404410()`. |
+| 37 | `0x25` | Shared keep-open path; exact feature still unresolved. |
+| 46 | `0x2e` | `Cmd48`-specific builder special case: installs `FUN_00411e00`, which just synthesizes an Enter/close path (`FUN_0042ffe0(..., 0x0d)` -> `FUN_00419370()`). This looks like modal boilerplate, not the KP5 inquiry fork. |
+| 52 | `0x34` | Shared keep-open path; exact feature still unresolved. |
+| 1000 | `0x3E8` | Local synthetic `Personal inquiry on:` submenu built by `FUN_00412980()`, not a proven server-assigned `Cmd48` list id. |
 
 Use any other positive integer as `list_id` to get a simple dismiss-on-pick dialog.
+
+### Local Inquiry Submenu (`list_id = 1000`)
+
+`FUN_00412980()` builds a two-option local submenu using:
+
+- `MPBT.MSG[0x90]` = `Personal inquiry on:`
+- `MPBT.MSG[0x91]` = `Send a ComStar message`
+- `MPBT.MSG[0x92]` = `Access personnel data`
+
+The follow-up actions are now confirmed:
+
+- Option 1 (`Send a ComStar message`) opens the editable dialog builder
+  `FUN_00416db0(target_id, NULL)`. Pressing its `Send` button (`MPBT.MSG[0xA5]`)
+  emits client `cmd 21` with `type4(target_id)` followed by the typed message
+  string via `FUN_00416b90()`.
+- Option 2 (`Access personnel data`) emits `Cmd7(0x3f2, target_id + 1)` from
+  `FUN_00412190()`.
 
 ### ESC / Cancel Handling (`Cmd7_OnMenuEsc` / `FUN_004122d0`)
 
@@ -1141,7 +1159,9 @@ Additional world-client senders confirmed after the first real-client M4 pass:
 - `FUN_0040d280` is the outbound world `cmd-4` free-text sender. In RPS mode (`DAT_004e2cd0 == 0`) it emits `cmd 4` followed by `FUN_00403100(param_1)`, which is `type1(length) + raw text`. Caller `FUN_00405080` feeds it from a local line-edit buffer when `DAT_004f3648 == 1`.
 - The room roster menu uses `FUN_00412e60` + `FUN_004134f0`. Corrected against the local `MPBT.MSG`, message ids `0x120..0x128` are `All`, `Stand`, `New Booth`, `Join`, `Mech Warriors at the current location:`, `Hit ESC to cancel, A for roster of all Mech Warriors.`, `Standing`, `Booth %2d`, `Hit ESC to cancel, n to grab a new booth, s to stand.`.
 - In that menu, `FUN_004134f0` emits `Cmd7(listId=3, selection=1)` for `All`, `selection=2` for `Stand`, `selection=0` for `New Booth`, and `selection = booth + 2` when joining a listed booth entry. Combined with `Cmd11` storing `status - 5` into `DAT_004e1872`, this pins the live social-room presence encoding as `5 = Standing`, `6..12 = Booth 1..7`.
-- The `selection=1` (`All`) path does **not** have a direct local client continuation. The strongest current server-side candidate is `Cmd48_KeyedTripleStringList` (`0x51`), which is self-contained and carries `item_id + three strings` per row. The older `Cmd45`/`Cmd58` family is now understood as a separate scroll-list shell/list-id mechanism and is less likely to be the minimal all-roster reply because `Cmd45` itself carries no row payload.
+- The `selection=1` (`All`) path does **not** have a direct local client continuation. The strongest current server-side candidate is still `Cmd48_KeyedTripleStringList` (`0x51`), which is self-contained and carries `item_id + three strings` per row.
+- Tracing the shared list callback further narrows the downstream behavior: the proven `Send a ComStar message` / `Access personnel data` fork is the local synthetic `list_id = 1000` submenu from `FUN_00412980()`, not hidden logic inside `Cmd48` itself. That submenu emits either client `cmd 21` compose-send (`type4(target_id) + string`) or `Cmd7(0x3f2, target_id + 1)` for personnel data.
+- The only `Cmd48`-specific hard-coded `list_id` branch found so far is `0x2e`, which installs modal close boilerplate (`FUN_00411e00`) rather than a personal-inquiry action split. Inference: if KP5/all-roster really reuses `Cmd48`, the first row pick likely goes straight back to the server as `Cmd7(list_id, item_id + 1)`, and any later `ComStar vs personnel` split is either server-driven or implemented as a separate local follow-up packet sequence.
 
 ---
 
