@@ -174,9 +174,11 @@ export function buildMechListArgs(
   typeFlag = 0,
   footer   = '',
 ): Buffer {
-  if (mechs.length > 84) {
+  if (mechs.length > 127) {
     throw new RangeError(
-      `buildMechListArgs: mechs.length=${mechs.length} exceeds the ARIES protocol limit of 84 entries per frame.`,
+      `buildMechListArgs: mechs.length=${mechs.length} exceeds 127 — ` +
+      'Cmd26_ParseMechList casts the count byte to a signed char; ' +
+      'count=128+ yields a negative value and the client parses zero entries.',
     );
   }
   const parts: Buffer[] = [

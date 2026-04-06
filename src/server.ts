@@ -33,7 +33,11 @@ import { CaptureLogger } from './util/capture.js';
 
 const log = new Logger('server', 'debug', path.join('logs', 'server.log'));
 const players = new PlayerRegistry();
-const MECH_SEND_LIMIT = 4; // client UI shows 4 mech slots; cap until roster assignment is implemented.
+const MECH_SEND_LIMIT = 84; // Cmd26_ParseMechList stores count via (int)(char)uVar3;
+                           // count byte encodes as count+0x21; must be ≤127 to keep
+                           // signed-char cast positive. 84 (raw 0x75) is safe and
+                           // wide enough for meaningful roster play.
+                           // TODO (M9): replace with player-specific roster assignment.
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
