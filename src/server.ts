@@ -25,6 +25,7 @@ import { PacketParser, buildPacket, hexDump } from './protocol/aries.js';
 import { parseLoginPayload, buildLoginRequest, buildSyncAck, buildWelcomePacket } from './protocol/auth.js';
 import { buildMechListPacket, buildMenuDialogPacket, buildRedirectPacket, buildCmd20Packet, parseClientCmd7, decodeArgType4, type MechEntry } from './protocol/game.js';
 import { loadMechs } from './data/mechs.js';
+import { MECH_STATS } from './data/mech-stats.js';
 import { PlayerRegistry, ClientSession } from './state/players.js';
 import { Logger } from './util/logger.js';
 import { CaptureLogger } from './util/capture.js';
@@ -44,6 +45,44 @@ const MECH_SEND_LIMIT = 84; // Cmd26_ParseMechList stores count via (int)(char)u
 function send(socket: net.Socket, pkt: Buffer, capture: CaptureLogger, label: string): void {
   capture.logSend(pkt);
   socket.write(pkt);
+}
+
+/**
+ * Build the examine-dialog text for cmd-20 (X key / Examine button).
+ *
+ * Returns a ≤84-byte string ready for encodeString().  Lines are separated by
+ * 0x8D (MPBT dialog line separator — the client's renderer swaps 0x8D ↔ NUL).
+ *
+ * The returned string MUST NOT contain 0x1B (ESC) because the client's ESC
+ * accumulator (FUN_00429510) would prematurely terminate the inner frame.
+ *
+ * We send the text DIRECTLY instead of the legacy "#NNN" shortcode.  The "#NNN"
+ * path does a client-side lookup in DAT_00473ad8[mech_id] → MPBT.MSG line → stats
+ * string, but the MPBT.MSG in this distribution has "Mechs now in use:" at the
+ * expected line (252) rather than actual mech stats.  Sending the formatted text
+ * from the server bypasses the broken lookup entirely.
+ */
+function buildMechExamineText(mech: MechEntry): string {
+  const SEP = '\x8d'; // 0x8D — MPBT dialog line separator (confirmed by FUN_00433d00 RE)
+  const stats = MECH_STATS.get(mech.typeString);
+
+  if (!stats || stats.disabled) {
+    // No documented stats: show designation and weight class if known.
+    const cls = stats ? stats.weightClass.charAt(0).toUpperCase() + stats.weightClass.slice(1) : '';
+    return cls ? `${mech.typeString}${SEP}${cls} Class` : mech.typeString;
+  }
+
+  // Known mech: build a compact but informative summary.
+  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  const title = stats.name ? `${mech.typeString}  ${stats.name}` : mech.typeString;
+  const specs = `${cap(stats.weightClass)}  ${stats.tonnage}T  ${stats.maxSpeedKph}kph` +
+                (stats.jumpMeters ? `  Jump:${stats.jumpMeters}m` : '');
+  const arms  = stats.armament.length > 0 ? stats.armament.join(' ') : '';
+
+  const lines = arms ? [title, specs, arms] : [title, specs];
+  const full  = lines.join(SEP);
+  // Truncate to 84 bytes if the armament list is very long (safety guard).
+  return Buffer.byteLength(full, 'latin1') <= 84 ? full : Buffer.from(full, 'latin1').subarray(0, 84).toString('latin1');
 }
 
 // ── Connection handler ────────────────────────────────────────────────────────
@@ -365,11 +404,14 @@ function handleGameData(
     //   type4(slot + 1) at payload[3..7]  — 5-byte base-85 encoding, identical to
     //   the cmd-7 mech-selection encoding; slot is 0-based, value is 1-indexed.
     //
-    // SERVER RESPONSE (CONFIRMED by RE of FUN_00411D90 + FUN_00411a10 — RESEARCH.md §14):
-    //   ONE packet: mode=2, text="#NNN" where NNN = zero-padded mech_id (3 ASCII digits).
-    //   The client detects '*param_2 == 0x23' ('#'), looks up DAT_00473ad8[mech_id] to get
-    //   the MPBT.MSG line number for the mech's pre-formatted stats string, fetches it,
-    //   and renders it in a modal "Ok" dialog (flags=9, callback FUN_00419370).
+    // SERVER RESPONSE — direct text (NOT the legacy "#NNN" shortcode):
+    //   ONE packet: mode=2, text = mech stats built by buildMechExamineText().
+    //
+    //   The legacy "#NNN" path (confirmed by RE of FUN_00411a10, FUN_00473ad8) does a
+    //   client-side lookup: DAT_00473ad8[mech_id] → MPBT.MSG line → stats string.
+    //   Unfortunately our MPBT.MSG has "Mechs now in use:" at the expected line (252)
+    //   for mech_id=156 (ANH-1A) instead of the actual mech stats.  Sending the stats
+    //   text directly from the server bypasses this broken lookup entirely.
     //
     // IMPORTANT: Do NOT send mode=0 or mode=1 packets.
     //   FUN_00411a10 creates a NEW independent dialog object for EVERY call. Modes 0 and 1
@@ -386,8 +428,8 @@ function handleGameData(
       connLog.warn('[game] cmd 20: MECHS empty, cannot examine');
       return;
     }
-    const examineText = `#${String(mech.id).padStart(3, '0')}`;
-    connLog.info('[game] cmd 20 (examine): slot=%d mech_id=%d (%s) → %s',
+    const examineText = buildMechExamineText(mech);
+    connLog.info('[game] cmd 20 (examine): slot=%d mech_id=%d (%s) → %j',
       slot, mech.id, mech.typeString, examineText);
     send(session.socket, buildCmd20Packet(CMD20_DIALOG_ID, 2, examineText, nextSeq(session)), capture, 'CMD20_STATS');
 

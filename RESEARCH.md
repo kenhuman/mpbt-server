@@ -594,7 +594,7 @@ When the player presses `X` (examine) in the mech window, the server responds wi
 [string    ] text          "#NNN" where NNN is the zero-padded mech_id (3 ASCII digits)
 ```
 
-### `#NNN` Text Format
+### `#NNN` Text Format — Broken with This MPBT.MSG
 
 The client's `FUN_00411a10` inspects `text[0]`:
 - If `text[0] == '#'` (0x23): decodes a 3-digit decimal mech_id from `text[1..3]`
@@ -604,10 +604,20 @@ The client's `FUN_00411a10` inspects `text[0]`:
   uses the expanded string as the dialog content.
 - If `text[0] != '#'`: the text is used as-is (arbitrary string in the dialog).
 
-The `#NNN` path is the **correct** path for mech stats.  The client has all stats
-embedded in MPBT.MSG; the server only provides the 3-digit mech_id redirect.
+**T1 Bug Root Cause:** The `#NNN` path relies on the correct MPBT.MSG having
+pre-formatted mech stats at specific line numbers (pointed to by `DAT_00473ad8`).
+In our distribution, `DAT_00473ad8[156]` (ANH-1A) = 252, but MPBT.MSG line 252
+= `"Mechs now in use:"` — not the mech stats.  The original MPBT.MSG would have
+had the actual stats at that line; our copy is incomplete.
 
-**Example:** `examineText = "#156"` for ANH-1A (mech_id 156).
+**Fix Applied:** The server now sends the stats text directly (not as `#NNN`).
+`buildMechExamineText()` in `src/server.ts` builds a compact stats string from
+`MECH_STATS` (src/data/mech-stats.ts), using `0x8D` (0x8D — the MPBT dialog
+line separator, swapped with NUL by the renderer in `FUN_00433d00`) between
+lines.  The `encodeString()` function was updated to use `'latin1'` encoding so
+that `0x8D` passes through faithfully.  The only forbidden byte in text content
+is `0x1B` (ESC), which would prematurely terminate the ESC accumulator
+(`FUN_00429510`) in the client.
 
 ### Mode Values — Independent Dialog Objects
 
@@ -698,8 +708,10 @@ These areas have not yet been reverse-engineered.
 Capture evidence: client sent `21 21 21 21 22` at payload[3..7] for mech at slot 0
 → `decodeArgType4` → 1 → slot = 0 (ANH-1A, s first sorted mech).
 
-**Server response:** ONE cmd-20 packet, mode=2, `text="#NNN"` (3-digit mech_id).
-See §14 for full details.
+**Server response:** ONE cmd-20 packet, mode=2.  The emulator now sends the
+stats text directly from `buildMechExamineText()` (see §14) rather than the
+legacy `"#NNN"` shortcode, because our MPBT.MSG does not have the correct
+pre-formatted stats at the expected line numbers.
 
 ### Post-Redirect Game World Protocol
 

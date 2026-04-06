@@ -53,12 +53,18 @@ export function encodeAsByte(v: number): Buffer {
 
 /**
  * Encode a string via FUN_00403160 wire format:
- *   [length_byte = len + 0x21]  [raw ASCII bytes]
+ *   [length_byte = len + 0x21]  [raw bytes]
  * Strings must be ≤ 84 bytes (length byte would hit 0x6D max; ESC = 0x1B never reached).
+ *
+ * Uses 'latin1' (single-byte) encoding so that 0x80–0xFF values pass through unchanged.
+ * In particular 0x8D is the MPBT dialog line-separator (swapped with NUL by the renderer).
+ * The only byte that MUST NOT appear in text is 0x1B (ESC), which would prematurely
+ * terminate the ARIES inner frame in the client's ESC accumulator (FUN_00429510).
  */
 export function encodeString(s: string): Buffer {
-  const raw = Buffer.from(s, 'ascii');
-  if (raw.length > 84) throw new RangeError(`encodeString: string too long (${raw.length}>`);
+  if (s.includes('\x1b')) throw new RangeError('encodeString: text must not contain ESC (0x1B)');
+  const raw = Buffer.from(s, 'latin1');
+  if (raw.length > 84) throw new RangeError(`encodeString: string too long (${raw.length} > 84)`);
   return Buffer.concat([Buffer.from([raw.length + 0x21]), raw]);
 }
 
