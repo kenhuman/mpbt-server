@@ -46,6 +46,17 @@ export function encodeB85_2(v: number): Buffer {
   return Buffer.from([d0 + 0x21, d1 + 0x21, d2 + 0x21]);
 }
 
+/** Encode v with FUN_00402be0(3, v) → 4 raw bytes (range 0..52,200,624). */
+export function encodeB85_3(v: number): Buffer {
+  const d0 = Math.floor(v / (85 * 85 * 85));
+  let r    = v % (85 * 85 * 85);
+  const d1 = Math.floor(r / (85 * 85));
+  r %= 85 * 85;
+  const d2 = Math.floor(r / 85);
+  const d3 = r % 85;
+  return Buffer.from([d0 + 0x21, d1 + 0x21, d2 + 0x21, d3 + 0x21]);
+}
+
 /** Encode v with FUN_00402f40 encoding → 1 raw byte. */
 export function encodeAsByte(v: number): Buffer {
   return Buffer.from([v + 0x21]);

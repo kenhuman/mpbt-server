@@ -15,6 +15,7 @@ import {
   buildGamePacket,
   encodeAsByte,
   encodeB85_1,
+  encodeB85_3,
   encodeString,
 } from './game.js';
 
@@ -341,4 +342,99 @@ export function buildCmd13PlayerArrivalPacket(
     false,
     seq,
   );
+}
+
+// ── Cmd 14 — Personnel Record ────────────────────────────────────────────────
+// CONFIRMED: FUN_00415700.
+//
+// Wire args:
+//   [type4: comstar id]
+//   [type3: battles to date]
+//   [type4: legacy/unused]
+//   [type4: legacy/unused]
+//   [Frame_ReadArg × 6: body lines]
+//
+// The client formats its own header lines for handle / ComStar ID / battles,
+// then appends the six payload strings verbatim as the record body.
+
+export interface Cmd14PersonnelRecordOptions {
+  comstarId: number;
+  battlesToDate?: number;
+  legacyA?: number;
+  legacyB?: number;
+  lines: string[];
+}
+
+function buildCmd14Args(opts: Cmd14PersonnelRecordOptions): Buffer {
+  const lines = opts.lines.slice(0, 6);
+  while (lines.length < 6) lines.push('');
+
+  return Buffer.concat([
+    encodeB85_4(opts.comstarId),
+    encodeB85_3(opts.battlesToDate ?? 0),
+    encodeB85_4(opts.legacyA ?? 0),
+    encodeB85_4(opts.legacyB ?? 0),
+    ...lines.map(line => encodeString(line.slice(0, 84))),
+  ]);
+}
+
+/** Build a Cmd14 personnel-record page packet. */
+export function buildCmd14PersonnelRecordPacket(
+  opts: Cmd14PersonnelRecordOptions,
+  seq = 0,
+): Buffer {
+  return buildGamePacket(14, buildCmd14Args(opts), false, seq);
+}
+
+// ── Cmd 48 — Keyed Triple-String List ────────────────────────────────────────
+// CONFIRMED: FUN_00411DF0 -> FUN_00411E20(1).
+//
+// Wire args:
+//   [type1: list_id]
+//   [Frame_ReadArg: title]
+//   [byte: count]
+//   [repeat count times:
+//      type4 item_id
+//      Frame_ReadArg col1
+//      Frame_ReadArg col2
+//      Frame_ReadArg col3
+//   ]
+//
+// The client renders each row as "N. <item_id> <col1> <col2> <col3>" and
+// sends Cmd7(list_id, item_id + 1) when the user selects a row.
+
+export interface Cmd48ListEntry {
+  itemId: number;
+  col1: string;
+  col2: string;
+  col3: string;
+}
+
+function buildCmd48Args(listId: number, title: string, entries: Cmd48ListEntry[]): Buffer {
+  const parts: Buffer[] = [
+    encodeB85_1(listId),
+    encodeString(title.slice(0, 84)),
+    encodeAsByte(entries.length),
+  ];
+
+  for (const entry of entries) {
+    parts.push(
+      encodeB85_4(entry.itemId),
+      encodeString(entry.col1.slice(0, 84)),
+      encodeString(entry.col2.slice(0, 84)),
+      encodeString(entry.col3.slice(0, 84)),
+    );
+  }
+
+  return Buffer.concat(parts);
+}
+
+/** Build a Cmd48 keyed triple-string list packet. */
+export function buildCmd48KeyedTripleStringListPacket(
+  listId: number,
+  title: string,
+  entries: Cmd48ListEntry[],
+  seq = 0,
+): Buffer {
+  return buildGamePacket(48, buildCmd48Args(listId, title, entries), false, seq);
 }

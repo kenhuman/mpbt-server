@@ -41,6 +41,8 @@ import {
   buildCmd10RoomPresenceSyncPacket,
   buildCmd11PlayerEventPacket,
   buildCmd13PlayerArrivalPacket,
+  buildCmd14PersonnelRecordPacket,
+  buildCmd48KeyedTripleStringListPacket,
   buildCmd4SceneInitPacket,
   buildCmd5CursorNormalPacket,
   buildCmd6CursorBusyPacket,
@@ -72,6 +74,9 @@ const FALLBACK_MECH_ID = WORLD_MECHS.length > 0 ? WORLD_MECHS[0].id : 0;
 const DEFAULT_SCENE_NAME = 'Solaris Arena';
 const WELCOME_TEXT       = 'Welcome to the game world.';
 const DEFAULT_ROOM_ID    = 'world_default_room';
+const ALL_ROSTER_LIST_ID = 0x3F4;
+const PERSONNEL_LIST_ID  = 0x3F2;
+const PERSONNEL_MORE_ID  = 0x95;
 let nextWorldRosterId    = 1;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -97,6 +102,20 @@ function getDisplayName(session: ClientSession): string {
 
 function getPresenceStatus(session: ClientSession): number {
   return session.worldPresenceStatus ?? 5;
+}
+
+function getComstarId(session: ClientSession): number {
+  if (session.accountId !== undefined) {
+    return 100000 + session.accountId;
+  }
+  return 900000 + (session.worldRosterId ?? 0);
+}
+
+function getPresenceLocation(session: ClientSession): string {
+  const status = getPresenceStatus(session);
+  if (status <= 5) return 'Standing';
+  if (status <= 12) return `Booth ${status - 5}`;
+  return `Status ${status}`;
 }
 
 function currentRoomPresenceEntries(players: PlayerRegistry, session: ClientSession) {
@@ -131,6 +150,115 @@ function currentRoomPresenceEntries(players: PlayerRegistry, session: ClientSess
   }
 
   return entries;
+}
+
+function findWorldTargetBySelectionId(
+  players: PlayerRegistry,
+  targetId: number,
+): ClientSession | undefined {
+  return players.worldSessions().find(other =>
+    getComstarId(other) === targetId || other.worldRosterId === targetId,
+  );
+}
+
+function buildAllRosterEntries(players: PlayerRegistry) {
+  return players.worldSessions()
+    .slice()
+    .sort((a, b) => getComstarId(a) - getComstarId(b))
+    .map(other => ({
+      itemId: getComstarId(other),
+      col1:   getDisplayName(other),
+      col2:   DEFAULT_SCENE_NAME,
+      col3:   getPresenceLocation(other),
+    }));
+}
+
+function buildPersonnelRecordLines(target: ClientSession, page: number): string[] {
+  if (page <= 1) {
+    return [
+      'Rank     : Warrior',
+      `House    : ${target.allegiance ?? 'Unaffiliated'}`,
+      `Sector   : ${DEFAULT_SCENE_NAME}`,
+      `Location : ${getPresenceLocation(target)}`,
+      'Status   : Online',
+      `Account  : ${target.username || 'Unknown'}`,
+    ];
+  }
+
+  return [
+    'Stable   : Independent',
+    `Mech ID  : ${target.selectedMechId ?? FALLBACK_MECH_ID}`,
+    `Roster   : ${target.worldRosterId ?? 0}`,
+    'Standing : 0',
+    'Winnings : 0 cb',
+    'Record   : Prototype page 2',
+  ];
+}
+
+function sendAllRosterList(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const entries = buildAllRosterEntries(players);
+  connLog.info('[world] sending Cmd48 all-roster list (%d entries)', entries.length);
+  send(
+    session.socket,
+    buildCmd48KeyedTripleStringListPacket(
+      ALL_ROSTER_LIST_ID,
+      'All Personnel Online',
+      entries,
+      nextSeq(session),
+    ),
+    capture,
+    'CMD48_ALL_ROSTER',
+  );
+}
+
+function sendPersonnelRecord(
+  players: PlayerRegistry,
+  session: ClientSession,
+  targetId: number,
+  page: number,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const target = findWorldTargetBySelectionId(players, targetId);
+  if (!target) {
+    connLog.warn('[world] personnel record target not found: id=%d page=%d', targetId, page);
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket('Personnel record unavailable.', nextSeq(session)),
+      capture,
+      'CMD3_PERSONNEL_MISSING',
+    );
+    return;
+  }
+
+  const resolvedTargetId = getComstarId(target);
+  session.worldInquiryTargetId = resolvedTargetId;
+  session.worldInquiryPage = page;
+
+  connLog.info(
+    '[world] sending Cmd14 personnel record: target=%d handle="%s" page=%d',
+    resolvedTargetId,
+    getDisplayName(target),
+    page,
+  );
+  send(
+    session.socket,
+    buildCmd14PersonnelRecordPacket(
+      {
+        comstarId:     resolvedTargetId,
+        battlesToDate: 0,
+        lines:         buildPersonnelRecordLines(target, page),
+      },
+      nextSeq(session),
+    ),
+    capture,
+    page <= 1 ? 'CMD14_PERSONNEL_P1' : 'CMD14_PERSONNEL_P2',
+  );
 }
 
 function nextAvailableBooth(players: PlayerRegistry, roomId: string, excludeId: string): number {
@@ -203,9 +331,11 @@ function handleRoomMenuSelection(
   session: ClientSession,
   selection: number,
   connLog: Logger,
+  capture: CaptureLogger,
 ): void {
   if (selection === 1) {
-    connLog.info('[world] room menu: all-roster request received (selection=1, not yet implemented)');
+    connLog.info('[world] room menu: all-roster request');
+    sendAllRosterList(players, session, connLog, capture);
     return;
   }
 
@@ -472,7 +602,26 @@ function handleWorldGameData(
 
     connLog.info('[world] cmd-7 menu reply: listId=%d selection=%d', parsed.listId, parsed.selection);
     if (parsed.listId === 3) {
-      handleRoomMenuSelection(players, session, parsed.selection, connLog);
+      handleRoomMenuSelection(players, session, parsed.selection, connLog, capture);
+      return;
+    }
+
+    if (parsed.listId === ALL_ROSTER_LIST_ID && parsed.selection > 0) {
+      sendPersonnelRecord(players, session, parsed.selection - 1, 1, connLog, capture);
+      return;
+    }
+
+    if (parsed.listId === PERSONNEL_LIST_ID && parsed.selection > 0) {
+      sendPersonnelRecord(players, session, parsed.selection - 1, 1, connLog, capture);
+      return;
+    }
+
+    if (parsed.listId === PERSONNEL_MORE_ID && parsed.selection === 2) {
+      if (session.worldInquiryTargetId === undefined) {
+        connLog.warn('[world] cmd-7 personnel more with no active record target');
+        return;
+      }
+      sendPersonnelRecord(players, session, session.worldInquiryTargetId, 2, connLog, capture);
       return;
     }
 

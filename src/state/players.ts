@@ -50,6 +50,13 @@ export interface ClientSession {
    */
   worldPresenceStatus?: number;
   /**
+   * Most recent world inquiry target, used to page follow-up record requests
+   * such as Cmd7(0x95, 2) after Cmd14_PersonnelRecord.
+   */
+  worldInquiryTargetId?: number;
+  /** Current personnel-record page number for the active inquiry target. */
+  worldInquiryPage?: number;
+  /**
    * Mech ID selected in the lobby and used to initialize the world arena.
    * Set on world-server sessions (via launchRegistry.consume); undefined on lobby sessions.
    */
@@ -92,9 +99,22 @@ export class PlayerRegistry {
     this.sessions.delete(id);
   }
 
+  all(): ClientSession[] {
+    return [...this.sessions.values()];
+  }
+
   /** Sessions currently in a given room. */
   inRoom(roomId: string): ClientSession[] {
-    return [...this.sessions.values()].filter(s => s.roomId === roomId);
+    return this.all().filter(s => s.roomId === roomId);
+  }
+
+  /** World sessions that are currently live and initialized. */
+  worldSessions(): ClientSession[] {
+    return this.all().filter(
+      session => session.phase === 'world' &&
+        session.worldInitialized &&
+        !session.socket.destroyed,
+    );
   }
 
   /** Broadcast raw bytes to all sessions in a room except the sender. */
