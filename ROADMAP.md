@@ -121,7 +121,7 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 | Character creation flow (first login) | ✅ | cmd-3 → no character in DB → send House allegiance dialog (cmd-7) → persist → REDIRECT |
 | Post-login direct world entry (returning player) | ✅ | cmd-3 → character found → REDIRECT to port 2001 immediately; no mech-select shown |
 | World server uses `displayName` as Cmd4 callsign | ✅ | Falls back to `username` if character data unavailable (e.g. test direct-connect) |
-| Display name entry (name selection dialog) | 🔬 | Still unresolved. Stronger RE rules out the earlier `Cmd36` assumption: `Cmd36` is the read/reply viewer, `Cmd37` opens the ComStar compose editor, and `FUN_00416db0` remains ComStar-specific even with target `0`. `MPBT.MSG` still contains `Character Generation`, `Enter your character's name`, `Choose your allegiance:`, and `Enter choice:`, but no live online caller has been traced yet. Current placeholder: login username is used as display name. See issue #26 for RE tasks. |
+| Display name entry (name selection dialog) | 🔬 | Still unresolved, but the boundary is tighter now. Stronger RE rules out the earlier `Cmd36` assumption: `Cmd36` is the read/reply viewer, `Cmd37` opens the ComStar compose editor, and `FUN_00416db0` remains ComStar-specific even with target `0`. A live GUI packet-capture on 2026-04-06 proved that an instrumented first-login `Cmd37(0)` probe does elicit a real client `cmd 21` text reply and can bridge into House selection + REDIRECT, but the visible editor still behaves like the ComStar compose window rather than a confirmed original callsign dialog. `MPBT.MSG` still contains `Character Generation`, `Enter your character's name`, `Choose your allegiance:`, and `Enter choice:`, but no live online caller has been traced yet. Current placeholder: login username is used as display name. See issue #26 for RE tasks. |
 
 **Known M3 limitations / M4 work:**
 - Initial room-sync packet is still unresolved; the earlier `Cmd9(count=0)` placeholder was removed after stronger RE tied `Cmd9` to a player-inquiry workflow.
@@ -134,6 +134,7 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 - *Returning player:* connect, skip allegiance dialog, enter world directly — no mech-select screen shown.
 - *Wrong password:* second login with wrong credentials → connection closed.
 - *Mech select (M6 path):* cmd-26 visible only when explicitly triggered; pre-combat flow unaffected.
+- *First-login `Cmd37(0)` probe:* live GUI client returned `cmd 21(dialogId=0, text=...)`, then accepted House selection and REDIRECT. This confirms a workable probe path, not yet the authentic original name-entry UI.
 
 ---
 
