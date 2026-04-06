@@ -214,7 +214,7 @@ export function buildCmd6CursorBusyPacket(seq = 0): Buffer {
   return buildGamePacket(6, Buffer.alloc(0), false, seq);
 }
 
-// ── Cmd 9 — Room Player List ─────────────────────────────────────────────────
+// ── Cmd 9 — Character Name + Allegiance Prompt ───────────────────────────────
 // CONFIRMED: FUN_0040C310.
 //
 // Wire args:
@@ -223,15 +223,18 @@ export function buildCmd6CursorBusyPacket(seq = 0): Buffer {
 //   [count × Frame_ReadArg]   FUN_0040c0d0 = encodeString format per entry
 //
 // Each entry is stored into DAT_004de000[i] as a null-terminated string in a
-// 40-byte slot. FUN_0042daa0 later formats the entries as "%d. %s", so the
-// initial room list is a plain string roster rather than a richer binary
-// struct.
+// 40-byte slot. The client then opens FUN_00413800(0x3fd, MPBT.MSG[5], NULL),
+// i.e. "Enter your character's name". After Enter, FUN_0042daa0 formats these
+// entries as "%d. %s" under MPBT.MSG[6], "Choose your allegiance:".
+//
+// Selecting an entry sends client cmd 9 subcmd 1:
+//   [0x09] [0x01] [typed-name string] [selected-index byte]
 
 /**
- * Build a Cmd9 (RoomPlayerList) packet.
- * @param entries  Raw player entry strings (format TBD; leave empty for M3).
+ * Build a Cmd9 character-creation prompt packet.
+ * @param entries  Allegiance/choice strings shown after the player enters a name.
  */
-export function buildCmd9RoomPlayerListPacket(entries: string[] = [], seq = 0): Buffer {
+export function buildCmd9CharacterCreationPromptPacket(entries: string[] = [], seq = 0): Buffer {
   const parts: Buffer[] = [
     encodeAsByte(1),              // sentinel = 1 (gate: == '\x01')
     encodeAsByte(entries.length), // count
