@@ -180,16 +180,18 @@ export function buildMechListArgs(
   typeFlag = 0,
   footer   = '',
 ): Buffer {
-  if (mechs.length > 127) {
+  if (mechs.length > 20) {
     throw new RangeError(
-      `buildMechListArgs: mechs.length=${mechs.length} exceeds 127 — ` +
-      'Cmd26_ParseMechList casts the count byte to a signed char; ' +
-      'count=128+ yields a negative value and the client parses zero entries.',
+      `buildMechListArgs: mechs.length=${mechs.length} exceeds 20 — ` +
+      'FUN_0043A370 writes into parallel static arrays (stride 4/40/20 bytes). ' +
+      'Array gap analysis: DAT_004dc510→DAT_004dc560 = 0x50 = 20 int slots. ' +
+      'Entry 21 writes slot_info[20] into mech_id[0], corrupting the first mech. ' +
+      'Cap sender at MECH_SEND_LIMIT=20 in server.ts.',
     );
   }
   const parts: Buffer[] = [
     encodeB85_1(typeFlag),          // 2 bytes: type_flag
-    encodeAsByte(mechs.length),     // 1 byte:  count (FUN_00402f40 confirmed by capture; max 84)
+    encodeAsByte(mechs.length),     // 1 byte:  count (FUN_00402f40 confirmed by capture; max 20)
   ];
 
   for (const m of mechs) {

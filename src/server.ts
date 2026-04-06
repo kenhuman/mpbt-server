@@ -34,10 +34,13 @@ import { CaptureLogger } from './util/capture.js';
 
 const log = new Logger('server', 'debug', path.join('logs', 'server.log'));
 const players = new PlayerRegistry();
-const MECH_SEND_LIMIT = 84; // Cmd26_ParseMechList stores count via (int)(char)uVar3;
-                           // count byte encodes as count+0x21; must be ≤127 to keep
-                           // signed-char cast positive. 84 (raw 0x75) is safe and
-                           // wide enough for meaningful roster play.
+const MECH_SEND_LIMIT = 20; // Client (FUN_0043A370) stores mechs in parallel static arrays.
+                           // Array stride analysis (Ghidra RE):
+                           //   DAT_004dc510 (slot_info, int×N) + N×4 = DAT_004dc560 (mech_id)
+                           //   gap = 0x4DC560 - 0x4DC510 = 0x50 = 80 bytes / 4 = 20 entries.
+                           //   Entry 21 writes slot_info[20] into mech_id[0] → immediate corruption.
+                           // All parallel arrays (typeString/variant@ stride 40, name@ stride 20)
+                           // confirm the same 20-entry capacity.  Hard limit: do not exceed 20.
                            // TODO (M9): replace with player-specific roster assignment.
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
