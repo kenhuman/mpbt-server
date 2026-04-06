@@ -727,19 +727,65 @@ stats text directly from `buildMechExamineText()` (see §14) rather than the
 legacy `"#NNN"` shortcode, because our MPBT.MSG does not have the correct
 pre-formatted stats at the expected line numbers.
 
-### Post-Redirect Game World Protocol
+### Post-Redirect Game World Protocol — RESOLVED (see §18)
 
-- After REDIRECT, the client opens a new TCP connection to the address in the
-  REDIRECT payload
-- The game world protocol has not been analysed; a second capture session
-  against the live server (or further Ghidra work on `FUN_100014e0` case 0 for
-  the new connection) is needed
+### Secondary Connection (`DAT_1001a080`) — RESOLVED (see §17–§18)
 
-### Secondary Connection (`DAT_1001a080`)
+### Client cmd-5 — Allegiance Selection — RESOLVED
 
-- Set by `Aries_Connect` (`FUN_100011c0`) after REDIRECT
-- The data arriving on this connection is fed to a different game window/loop
-- Relationship to the lobby connection is not fully understood
+**Confirmed by decompiling `FUN_00413790` (arena-window click handler) and
+`FUN_0040d2d0` in MPBTWIN.EXE.**
+
+When the player clicks an allegiance button in the Cmd4 arena UI:
+
+| Button ID | Source | Action |
+|-----------|--------|--------|
+| `0x100` | `FUN_00413790` | Intercepts as **Help**: calls `FUN_00404450` → opens `SOLARIS.HLP` |
+| `0x101`–`0x105` | `FUN_00413790` | Allegiance selection: calls `FUN_0040d2d0(option_type_byte)` |
+
+`FUN_0040d2d0`:
+```c
+void FUN_0040d2d0(char type_byte) {
+    FUN_00403030('\x05');  // write cmd index 5 (wire 0x26)
+    FUN_00403050(type_byte); // write type_byte raw (type_byte + 0x21 on wire)
+    FUN_00429440();          // flush / finalize frame
+}
+```
+
+### Client cmd-5 Wire Format (Client → Server)
+
+```
+\x1B  [seq+0x21]  \x26  [type_byte+0x21]  \x20  [CRC×3]  \x1B
+                  ^^^   ^^^^^^^^^^^^^^^^
+                  cmd=5 allegiance type index
+```
+
+`type_byte` = the `type` field the SERVER wrote into the Cmd4 arena-option entry
+for that button:
+- `type = 0` → `ALLEGIANCES[0]` = `'Davion'`
+- `type = 1` → `ALLEGIANCES[1]` = `'Steiner'`
+- `type = 2` → `ALLEGIANCES[2]` = `'Liao'`
+- `type = 3` → `ALLEGIANCES[3]` = `'Marik'`
+- `type = 4` → `ALLEGIANCES[4]` = `'Kurita'`
+
+### Cmd4 Arena-Options — Character-Creation Allegiance Buttons — RESOLVED
+
+**Confirmed by decompiling `FUN_00414b70` (Cmd4_SceneInit handler) in MPBTWIN.EXE.**
+
+The `arena_option_count` + option entries at the end of the Cmd4 wire format
+create the allegiance-picker buttons in the character-creation UI:
+
+- Count stored in `DAT_004e6a70`.
+- Option strings (40 bytes each) stored in `DAT_004816e8`.
+- Each option creates a button with ID `option_index + 0x100`.
+- **Button 0x100 is always intercepted as a Help button** (opens `SOLARIS.HLP`).
+  The first option in the list must therefore be a dummy placeholder.
+- Effective allegiance buttons: IDs **0x101–0x105** (options 1–5).
+
+**Server sends 6 options** (dummy at index 0, five houses at indices 1–5);
+client displays six buttons but only five are selectable as allegiances.
+
+Button width: `0x78` (120 px) if ≤ 5 options; `0x4f` (79 px) if > 5 (max 6).
 
 ### Command 0x1D (Cancel/Close) — RESOLVED
 

@@ -8,7 +8,6 @@ export type SessionPhase =
   | 'connected'     // TCP accepted, waiting for first bytes
   | 'auth'          // parsing login packet
   | 'lobby'         // authenticated; about to look up or create character
-  | 'char-creation' // first-login character creation in progress (allegiance dialog)
   | 'world'         // in the game world (RPS/arena) after REDIRECT
   | 'closing';      // disconnect in progress
 
@@ -58,8 +57,9 @@ export interface ClientSession {
    */
   displayName?: string;
   /**
-   * House allegiance chosen during character creation: one of
-   * Davion | Steiner | Liao | Marik | Kurita.
+   * House allegiance — one of Davion | Steiner | Liao | Marik | Kurita.
+   * Set from the characters table after login, or persisted from cmd-5 during
+   * the first-login allegiance-picker wizard (wire format confirmed via RE).
    */
   allegiance?: string;
 }

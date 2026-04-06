@@ -45,7 +45,7 @@ import { launchRegistry } from './state/launch.js';
 import { loadMechs } from './data/mechs.js';
 import { Logger } from './util/logger.js';
 import { CaptureLogger } from './util/capture.js';
-import { findCharacter } from './db/characters.js';
+import { findCharacter, createCharacter, ALLEGIANCES, type Allegiance, updateCharacterAllegiance } from './db/characters.js';
 
 // ── Shared mech catalog (same on-disk data as lobby) ─────────────────────────
 // Loaded once at module import time.  Provides a fallback when a player's
@@ -117,6 +117,9 @@ async function handleWorldLogin(
   if (launch) {
     session.selectedMechId   = launch.mechId;
     session.selectedMechSlot = launch.mechSlot;
+    if (launch.accountId !== undefined) session.accountId   = launch.accountId;
+    if (launch.displayName !== undefined) session.displayName = launch.displayName;
+    if (launch.allegiance !== undefined) session.allegiance  = launch.allegiance;
     connLog.info(
       '[world-login] launch record found: mech=%s (id=%d slot=%d)',
       launch.mechTypeString, launch.mechId, launch.mechSlot,
@@ -224,9 +227,121 @@ function handleWorldGameData(
     // COMMEG32 Ordinal_7 sends the reply directly; server does not need to act.
     connLog.debug('[world] cmd-2 (ping-request) — client handles reply via COMMEG32');
 
+  } else if (cmdIdx === 5) {
+    // Cmd-5: allegiance selection from the character-creation wizard.
+    // Triggered by FUN_0040d2d0 in MPBTWIN.EXE when the player clicks one of the
+    // arenaOptions items (button IDs 0x101-0x105) in the Cmd4-driven picker UI.
+    //
+    // Wire format (args after seq+cmd):
+    //   [1 byte: type+0x21]  — decoded as ALLEGIANCES array index (0-4)
+    //
+    // arenaOptions[0] (button 0x100) is hardcoded to Help and never sends cmd-5.
+    // arenaOptions[1..5] have types 0..4 mapping directly to ALLEGIANCES indices:
+    //   0=Davion, 1=Steiner, 2=Liao, 3=Marik, 4=Kurita
+    if (payload.length < 4) {
+      connLog.debug('[world] cmd-5 (allegiance-pick): payload too short');
+      return;
+    }
+    const allegianceType = payload[3] - 0x21;
+    if (allegianceType < 0 || allegianceType >= ALLEGIANCES.length) {
+      connLog.warn('[world] cmd-5 (allegiance-pick): type=%d out of range', allegianceType);
+      return;
+    }
+    const allegiance = ALLEGIANCES[allegianceType] as Allegiance;
+    session.allegiance = allegiance;
+    connLog.info('[world] cmd-5 (allegiance-pick): player chose %s', allegiance);
+
+    if (session.accountId !== undefined) {
+      const displayName = session.displayName ?? session.username;
+      // For first-time players the character does not yet exist in the DB (the
+      // lobby deferred creation to here).  Try to INSERT; if the record already
+      // exists (reconnect race / returning player edge-case) fall back to UPDATE.
+      createCharacter(session.accountId, displayName, allegiance)
+        .then(() => connLog.info(
+          '[world] cmd-5: character created (displayName="%s" allegiance=%s)',
+          displayName, allegiance,
+        ))
+        .catch((err: unknown) => {
+          const pgErr = err as { code?: string };
+          if (pgErr.code === '23505') {
+            // Character already exists — just update allegiance.
+            updateCharacterAllegiance(session.accountId!, allegiance).catch((err2: unknown) => {
+              const m2 = err2 instanceof Error ? err2.message : String(err2);
+              connLog.error('[world] cmd-5: failed to update allegiance: %s', m2);
+            });
+          } else {
+            const msg = err instanceof Error ? err.message : String(err);
+            connLog.error('[world] cmd-5: failed to create character: %s', msg);
+          }
+        });
+    } else {
+      connLog.warn('[world] cmd-5: no accountId — allegiance not persisted to DB');
+    }
+
+    // After allegiance is chosen the client shows a hourglass (FUN_00433ef0) and
+    // waits for a server response.  Re-send the init sequence WITHOUT arenaOptions
+    // (sessionFlags 0x20 only — clear-arena, no new-char branch) so the client
+    // tears down the character-creation wizard and shows the normal arena.
+    connLog.info('[world] cmd-5: sending post-allegiance reinit (no wizard)');
+    sendPostAllegianceReinit(session, allegiance, connLog, capture);
+
   } else {
     connLog.debug('[world] cmd=%d — not yet handled (M3 stub)', cmdIdx);
   }
+}
+
+/**
+ * Respond to the client after it sends cmd-5 (allegiance picked).
+ *
+ * The client calls FUN_00433ef0 (hourglass) right after sending cmd-5 and then
+ * waits for the server.  We re-initialize the arena window WITHOUT arenaOptions
+ * (sessionFlags=0x20 only — "clear arena data" but NOT the has-opponents/new-char
+ * branch).  This causes the Cmd4 handler (FUN_00414b70) to re-enter without the
+ * character-creation wizard, using the callsign already stored client-side from
+ * the initial Cmd4 we sent.
+ */
+function sendPostAllegianceReinit(
+  session:   ClientSession,
+  allegiance: string,
+  connLog:   Logger,
+  capture:   CaptureLogger,
+): void {
+  const { socket } = session;
+  const mechId = session.selectedMechId ?? FALLBACK_MECH_ID;
+
+  // Cmd6 — hourglass while the arena reloads.
+  send(socket, buildCmd6CursorBusyPacket(nextSeq(session)), capture, 'CMD6_BUSY');
+
+  // Cmd4 — reinit WITHOUT arenaOptions and WITHOUT flag 0x10 (no new-char branch).
+  // The client reads the stored callsign from its own memory (set by the first Cmd4).
+  send(
+    socket,
+    buildCmd4SceneInitPacket(
+      {
+        sessionFlags:    0x20,  // clear-arena only; client uses stored callsign
+        playerScoreSlot: 0,
+        playerMechId:    mechId,
+        // No opponents, no arenaOptions → wizard is gone.
+      },
+      nextSeq(session),
+    ),
+    capture,
+    'CMD4_REINIT',
+  );
+
+  // Cmd9 — reset roster ready flag.
+  send(socket, buildCmd9RoomPlayerListPacket([], nextSeq(session)), capture, 'CMD9_ROOM_LIST');
+
+  // Cmd3 — notify the player of their allegiance.
+  send(
+    socket,
+    buildCmd3BroadcastPacket(`Allegiance set to ${allegiance}.`, nextSeq(session)),
+    capture,
+    'CMD3_ALLEGIANCE',
+  );
+
+  // Cmd5 — restore arrow cursor (clears the hourglass).
+  send(socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
 }
 
 /**
@@ -257,6 +372,29 @@ function sendWorldInitSequence(
   //   sessionFlags 0x30 = has-opponents (0x10) + clear-arena-data (0x20).
   //   All 4 opponent slots are absent → wire values of 0 → stored as -1 → buttons hidden.
   //   callsign and sceneName are provided via the has-opponents (0x10) branch reads.
+  // arenaOptions items render as a horizontal row at the top of the arena screen.
+  // Item 0 (tag 0x100) is always routed to Help by the client; clicking it does not
+  // send cmd-5.  Items 1-5 (tags 0x101-0x105) send cmd-5 with type=0..4 respectively.
+  // Use the Great House family names so each label fits within the ~79-pixel button
+  // width that the client computes for a 6-item row.
+  const arenaOptions: Array<{ type: number; label: string }> =
+    session.allegiance === undefined
+      ? [
+          // index 0 → button tag 0x100 → Help (spacer; not selectable)
+          { type: 0, label: '< Choose >' },
+          // index 1 → button tag 0x101 → cmd-5 type=0 → ALLEGIANCES[0]='Davion'
+          { type: 0, label: 'Davion' },
+          // index 2 → button tag 0x102 → cmd-5 type=1 → ALLEGIANCES[1]='Steiner'
+          { type: 1, label: 'Steiner' },
+          // index 3 → button tag 0x103 → cmd-5 type=2 → ALLEGIANCES[2]='Liao'
+          { type: 2, label: 'Liao' },
+          // index 4 → button tag 0x104 → cmd-5 type=3 → ALLEGIANCES[3]='Marik'
+          { type: 3, label: 'Marik' },
+          // index 5 → button tag 0x105 → cmd-5 type=4 → ALLEGIANCES[4]='Kurita'
+          { type: 4, label: 'Kurita' },
+        ]
+      : []; // returning player — allegiance already set, no wizard needed
+
   const sceneInit = buildCmd4SceneInitPacket(
     {
       sessionFlags:     0x30,   // has-opponents + clear-arena resets
@@ -265,7 +403,7 @@ function sendWorldInitSequence(
       opponents:        [],     // all 4 slots = "no opponent" (wire 0x21 / [0x21,0x21])
       callsign,
       sceneName:        DEFAULT_SCENE_NAME,
-      arenaOptions:     [],
+      arenaOptions,
     },
     nextSeq(session),
   );
@@ -281,9 +419,13 @@ function sendWorldInitSequence(
   );
 
   // Cmd3 — TextBroadcast: welcome message (only visible after g_chatReady=1, set by Cmd4).
+  // For new players (no allegiance yet), add instructions pointing them at the house buttons.
+  const welcomeMsg = session.allegiance === undefined
+    ? 'NEW PILOT: Select your Great House from the row of buttons at the top of the screen. Click Davion, Steiner, Liao, Marik, or Kurita.'
+    : WELCOME_TEXT;
   send(
     socket,
-    buildCmd3BroadcastPacket(WELCOME_TEXT, nextSeq(session)),
+    buildCmd3BroadcastPacket(welcomeMsg, nextSeq(session)),
     capture,
     'CMD3_WELCOME',
   );

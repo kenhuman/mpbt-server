@@ -16,6 +16,12 @@ export interface PendingLaunch {
   mechSlot: number;
   /** Mech designation string (e.g. "AS7-D"). */
   mechTypeString: string;
+  /** Database account ID — used by the world server to update character data. */
+  accountId?: number;
+  /** Character display name set by the lobby. */
+  displayName?: string;
+  /** House allegiance set by the lobby. */
+  allegiance?: string;
 }
 
 class LaunchRegistry {
