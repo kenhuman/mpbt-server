@@ -86,7 +86,7 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 | Initial world handshake | `COMMEG32.DLL` + `MPBTWIN.EXE` | ✅ | §18: LOGIN_REQUEST→LOGIN→`"\x1b?MMW Copyright Kesmai Corp. 1991"`→cmd-3; same sequence as lobby |
 | `g_aries_GameWorldConn` (`DAT_1001a080`) | `COMMEG32.DLL` | ✅ | §17: created by `Aries_Connect`; secondary connection object |
 | Combat CRC crossover point | `MPBTWIN.EXE` | ✅ | §18: `Frame_VerifyCRC` uses `g_combatMode` to select seed; RPS=`0x0a5c25`, Combat=`0x0a5c45` |
-| First 10+ world commands | `MPBTWIN.EXE` | 🔬 | Dispatch table addresses confirmed; individual command semantics not yet decompiled |
+| First 10+ world commands | `MPBTWIN.EXE` | ✅ | §18: first 13 RPS cmds decompiled — ping/ack (1–2), text broadcast (3), scene init (4), cursor (5–6), menu (7), session data (8), room list (9), text feed (10), player events (11–13) |
 | World frame format | `MPBTWIN.EXE` | ✅ | §18: identical to lobby — ESC-delimited, 19-bit LFSR CRC, same base-85 encoding |
 
 **Deliverable:** RESEARCH.md §17 (COMMEG32.DLL RE) and §18 (world protocol RE) — COMPLETE.
