@@ -15,9 +15,18 @@ import {
   buildGamePacket,
   encodeAsByte,
   encodeB85_1,
-  encodeB85_4,
   encodeString,
 } from './game.js';
+
+function encodeB85_4(v: number): Buffer {
+  const digits = new Array<number>(5);
+  let current = v;
+  for (let i = 4; i >= 0; i -= 1) {
+    digits[i] = current % 85;
+    current = Math.floor(current / 85);
+  }
+  return Buffer.from(digits.map(digit => digit + 0x21));
+}
 
 // ── Cmd 3 — Text Broadcast ────────────────────────────────────────────────────
 // CONFIRMED: FUN_0040C190 handler; RPS mode only.
