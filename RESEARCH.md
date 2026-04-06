@@ -24,7 +24,10 @@ contributors who want to extend or audit the server emulator.
 14. [Command 20 — Text Dialog (Server→Client)](#14-command-20--text-dialog-serverclient)
 15. [MPBT.MSG — Mech String Table](#15-mpbtmsg--mech-string-table)
 16. [Open Questions](#16-open-questions)
-17. [Methodology](#17-methodology)
+17. [COMMEG32.DLL — Secondary Connection Protocol (M2 RE)](#17-commeg32dll--secondary-connection-protocol-m2-re)
+18. [Game World Protocol — MPBTWIN.EXE RE](#18-game-world-protocol--mpbtwinexe-re)
+19. [Methodology](#19-methodology)
+20. [MEC File Binary Format](#20-mec-file-binary-format)
 
 ---
 
@@ -1171,6 +1174,142 @@ gate handlers `FUN_00429870` and `FUN_00429a00` — it fires when the client rec
   different `n` values — always check what integer is passed to identify the wire width.
 - String reader `Frame_ReadString` (`FUN_00403160`) reads one length byte then copies that many raw
   bytes; `Frame_CopyString` (`FUN_0040c0d0`) is the caller that also null-terminates the destination.
+
+---
+
+## 20. MEC File Binary Format
+
+**Source**: `mechdata/*.MEC` (161 files, 552 bytes each)  
+**Loader**: `FUN_004387f0` (`MecFile_Load`) @ `0x004387f0`, MPBTWIN.EXE  
+**Confirmed against**: AS7-D (Atlas 100t), BJ-1 (Blackjack 45t), SDR-5V (Spider 30t)
+
+### 20.1 Encryption
+
+Every `.MEC` file is XOR-encrypted with a deterministic pseudo-random key stream
+derived from the mech's variant name (the filename stem, lowercased).
+
+**Seed derivation** (`FUN_0042f5a0`, "GetSeedID"):
+1. Lowercase the stem (e.g. `"AS7-D.MEC"` → stem `"as7-d"`)
+2. Take the last 4 characters of the stem, in reverse order: `'d', '-', '7', 's'`
+3. Pack them as a little-endian uint32 → seed = `0x73372D64` for AS7-D
+
+**PRNG step** (`FUN_0042f690`):
+```python
+def prng_step(state: int) -> int:          # all arithmetic mod 2^32
+    uvar1    = (state * 0xF0F1 + 1) & 0xFFFFFFFF
+    rotated  = ((uvar1 << 16) | (uvar1 >> 16)) & 0xFFFFFFFF
+    return   (uvar1 + rotated) & 0xFFFFFFFF
+```
+The new state is returned in EAX and stored back to `DAT_00479980`.
+
+**XOR decryption loop** (`FUN_0042f660`):
+```python
+def decrypt_mec(data: bytes, seed: int) -> bytearray:
+    buf   = bytearray(data)
+    state = seed
+    n     = len(buf)          # 552
+    for k in range(n - 3):   # 549 iterations (0 … 548)
+        state = prng_step(state)
+        for j in range(4):   # XOR 4 bytes at 1-byte stride
+            if k + j < n:
+                buf[k + j] ^= (state >> (8 * j)) & 0xFF
+    return buf
+```
+This is an overlapping 4-byte XOR stream: each interior byte is XORed 4 times
+by different PRNG outputs, giving a strong obfuscation.  Inner bytes 3–548 each
+receive 4 XOR contributions; the first 3 and last 3 bytes receive fewer.
+
+**Post-load transform** (inside `MecFile_Load`):
+```c
+struct->speed_raw = (struct->speed_raw * 2) / 3;
+```
+The field at offset `0x2E` is scaled down immediately after decryption; the stored
+file value is the *raw* speed-related parameter.
+
+### 20.2 Struct Layout
+
+All fields are little-endian.  Offsets are from the start of the decrypted buffer.
+
+| Offset | Size | Field | Notes |
+|--------|------|-------|-------|
+| `0x00` | u32  | `unk_combat_rating_a` | Bounded check: must be ≤ 0xAA (170); purpose unknown; correlates with mech capability |
+| `0x04` | u32  | `unk_combat_rating_b` | Companion value to `0x00`; purpose unknown |
+| `0x08` | u32  | `unk_point_value`     | Unknown large value (varies widely by mech) |
+| `0x0C` | u32  | `unk_battle_value`    | Correlates with mech BV (~1800 Atlas, ~800 Spider) |
+| `0x10` | u32  | `unk_modified_bv`     | Slightly lower than `0x0C`; purpose unknown |
+| `0x14` | u16  | *(reserved/zero)*     | Always `0` in all tested files |
+| `0x16` | u16  | `walk_mp`             | Walk hexes-per-turn (tabletop MP) |
+| `0x18` | u16  | `tonnage`             | Mech mass in tons |
+| `0x1A` | u16  | `armor_la`            | Left Arm armor |
+| `0x1C` | u16  | `armor_ra`            | Right Arm armor |
+| `0x1E` | u16  | `armor_ll`            | Left Leg armor |
+| `0x20` | u16  | `armor_rl`            | Right Leg armor |
+| `0x22` | u16  | `armor_ct_front`      | Center Torso front armor |
+| `0x24` | u16  | `armor_lt_front`      | Left Torso front armor |
+| `0x26` | u16  | `armor_rt_front`      | Right Torso front armor |
+| `0x28` | u16  | `armor_ct_rear`       | Center Torso rear armor |
+| `0x2A` | u16  | `armor_lt_rear`       | Left Torso rear armor |
+| `0x2C` | u16  | `armor_rt_rear`       | Right Torso rear armor |
+| `0x2E` | u16  | `speed_raw`           | Speed parameter, scaled to `speed_raw × 2/3` by loader |
+| `0x30` | u16  | *(zero)*              | — |
+| `0x32` | u16  | *(zero)*              | — |
+| `0x34` | u16  | `heat_sinks`          | Total heat sink count |
+| `0x36` | u16  | *(zero)*              | — |
+| `0x38` | u16  | `jump_mp`             | Jump hexes-per-turn (0 if no jump jets) |
+| `0x3A` | u16  | `weapon_count`        | Number of weapon slots |
+| `0x3C` | u16[] | `weapon_ids[weapon_count]` | Array of weapon type IDs (see §20.3) |
+| *var*  | …    | *(unknown fields)*    | Critical-hit slot data, ammo tracking; see §20.4 |
+| `0xDE` | u16[45] | `crit_slot_table` | Critical-hit slot assignments; 0xFFFF = empty |
+| `0x1EC` | u16 | `ammo_bin_count`      | Number of ammo bin records that follow |
+| `0x1EE` | u16[] | `ammo_bin_qty[ammo_bin_count]` | Quantity per ammo bin |
+| `0x202` | u16[] | `ammo_bin_type[ammo_bin_count]` | Weapon type ID for each ammo bin |
+
+**Not stored in the file** (computed or hardcoded at runtime):
+- Head armor: hardcoded as `9` for all mechs (`FUN_00438750` case 7)
+- Internal structure per section: computed from `tonnage` via lookup table (`FUN_00438750`)
+- Run MP: not stored; standard BattleTech formula `⌊walk_mp × 5/3⌋` applies
+
+### 20.3 Weapon Type IDs
+
+| ID | Weapon | Evidence |
+|----|--------|---------|
+| `3`  | Medium Laser | Present in Atlas ×4, Blackjack ×3, Spider ×1; most ubiquitous energy weapon in 3025 |
+| `6`  | AC/2 (Autocannon/2) | Appears in BJ-1 weapon list and matched ammo bin type |
+| `8`  | Unconfirmed (missile?) | Atlas position 0, BJ-1 position 0; presumed SRM variant |
+| `9`  | Unconfirmed (missile/beam?) | Atlas position 1, Spider position 0 |
+| `16` | AC/20 (Autocannon/20) | Atlas position 2; 2 ammo bins of 5 rounds each = 10 total ✓ |
+
+IDs `1`, `2`, `4`, `12` appear in other mechs and remain unresolved without
+cross-referencing the weapon global table at `DAT_00477b58` (stride `0x5C`, 0-indexed).
+
+### 20.4 Cross-Validation Table
+
+| Field | AS7-D (Atlas 100t) | BJ-1 (Blackjack 45t) | SDR-5V (Spider 30t) |
+|-------|--------------------|----------------------|---------------------|
+| Seed  | `0x73372D64` | `0x626A2D31` | `0x722D3576` |
+| `tonnage` (0x18) | **100** | **45** | **30** |
+| `walk_mp` (0x16) | **3** | **4** | **8** |
+| `jump_mp` (0x38) | **0** | **4** | **8** |
+| `heat_sinks` (0x34) | **20** | **11** | **10** |
+| `speed_raw` (0x2E) | 27 → 18 | 27 → 18 | 18 → 12 |
+| `armor_la` (0x1A) | **34** | **12** | **5** |
+| `armor_ra` (0x1C) | **34** | **12** | **5** |
+| `armor_ll` (0x1E) | **41** | **17** | **6** |
+| `armor_rl` (0x20) | **41** | **17** | **6** |
+| `armor_ct_front` (0x22) | **47** | **18** | **8** |
+| `armor_lt_front` (0x24) | **32** | **15** | **6** |
+| `armor_rt_front` (0x26) | **32** | **15** | **6** |
+| `armor_ct_rear` (0x28) | **14** | **9** | **4** |
+| `armor_lt_rear` (0x2A) | **10** | **6** | **2** |
+| `armor_rt_rear` (0x2C) | **10** | **6** | **2** |
+| `weapon_count` (0x3A) | 7 | 6 | 2 |
+| `weapon_ids` (0x3C+) | `[8,9,16,3,3,3,3]` | `[8,6,6,3,3,3]` | `[9,3]` |
+| `ammo_bin_count` (0x1EC) | 5 | 1 | 0 |
+
+**Variant name**: sourced from `MechWin_LookupMechName` (§Appendix A) which reads the
+mech string table at `MPBT.MSG` offset `(mech_id + 0x3AE) * 2` (§15).  The loader
+uses this name both to construct the filename `mechdata\<name>.MEC` and as the
+encryption seed source.
 
 ---
 
