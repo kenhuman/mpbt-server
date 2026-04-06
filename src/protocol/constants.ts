@@ -20,7 +20,7 @@
 export const ARIES_PORT = 2000; // CONFIRMED — controlled by play.pcgi product field
 
 /**
- * TCP port the game-world connection uses (post-REDIRECT).
+ * TCP port chosen for the game-world connection (post-REDIRECT).
  *
  * CONFIRMED by RE of Aries_OpenSocket (COMMEG32.DLL func_0x10001d80):
  *   func_0x10005ee0(addr, 0x3a) = strchr(addr, ':')   // splits "host:port"
@@ -28,9 +28,13 @@ export const ARIES_PORT = 2000; // CONFIRMED — controlled by play.pcgi product
  *   Port string is parsed via func_0x10011012 (strings → number)
  *
  * The addr field in REDIRECT must be in "host:port" format.
- * Our server listens on this port for the game world TCP connection.
+ *
+ * NOTE: No separate world listener exists yet.  REDIRECT currently points to
+ * ARIES_PORT so the client re-connects to the same server instead of a dead
+ * port.  This constant is reserved for future M3 world-server work.
+ * TODO (M3): open a second net.createServer on WORLD_PORT.
  */
-export const WORLD_PORT = 2001; // chosen; no hardcoded port found in binary (comes from REDIRECT addr)
+export const WORLD_PORT = 2001; // reserved; no hardcoded port in binary (value comes from REDIRECT addr)
 
 /**
  * Maximum raw receive buffer per read.

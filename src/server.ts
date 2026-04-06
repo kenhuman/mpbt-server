@@ -370,11 +370,14 @@ function handleGameData(
         // Item 1 = "Launch!" → redirect to game world.
         // COMMEG32.DLL case 3: 120-byte payload [addr40|internet40|pw40],
         // then FUN_100011c0 opens a new TCP connection to addr.
-        connLog.info('[game] confirmed (Launch!) → sending REDIRECT to game world port %d', WORLD_PORT);
+        // No world listener exists yet (TODO M3). Redirect back to ARIES_PORT
+        // so the client re-connects to this server rather than hitting a dead port.
+        // When M3 is implemented, change this to WORLD_PORT and open a second listener.
+        connLog.info('[game] confirmed (Launch!) → sending REDIRECT to %d (ARIES_PORT; world listener not yet implemented)', ARIES_PORT);
         // IMPORTANT: addr must be "host:port" format.
         // Aries_OpenSocket (COMMEG32.DLL) calls strchr(addr, ':') and returns -1
         // immediately if ':' is not found, silently failing the secondary connection.
-        const redir = buildRedirectPacket(`127.0.0.1:${WORLD_PORT}`);
+        const redir = buildRedirectPacket(`127.0.0.1:${ARIES_PORT}`);
         send(session.socket, redir, capture, 'REDIRECT');
         session.phase = 'closing';
       } else if (selection === 2) {
