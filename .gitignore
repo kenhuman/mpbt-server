@@ -9,6 +9,9 @@ captures
 logs
 play.pcgi
 
+# manual pdf to text
+BT-MAN.txt
+
 # Game data — must be copied from an original MPBT installation.
 # These files are proprietary to Kesmai/EA and must NOT be distributed.
 music/
