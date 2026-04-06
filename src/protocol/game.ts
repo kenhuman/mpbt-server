@@ -366,9 +366,15 @@ export function buildCmd20Args(dialogId: number, mode: number, text: string): Bu
 
 /**
  * Build a full ARIES packet for server command 20 (text dialog).
- * @param dialogId  Arbitrary panel identifier (avoid 8,12,34,37,52,1000 — see §11).
- * @param mode      0 = clear, 1 = append text line, 2 = finalise/show.
- * @param text      Text to append (mode 1); ignored for modes 0 and 2.
+ * @param dialogId  Dialog/panel identifier for this cmd-20 frame (see RE notes / §14).
+ *                  Do not apply cmd-7 list_id reserved-ID guidance here; cmd-20 reserved
+ *                  IDs are separate and not yet fully confirmed by RE.
+ * @param mode      Dialog mode (confirmed by FUN_00411a10 RE):
+ *                  0 and 1 create Yes/No dialog variants (not for stats display);
+ *                  2 creates a single-packet Ok-style text dialog — use this for mech stats.
+ * @param text      Dialog text payload. For mode 2 this is the stats text (use 0x5C
+ *                  '\\' as line separator); modes 0/1 produce Yes/No dialogs and this
+ *                  field is not used for stats display.
  * @param seq       Sequence number 0..42.
  */
 export function buildCmd20Packet(
