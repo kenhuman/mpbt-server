@@ -197,6 +197,14 @@ npm start
 
 The server listens on port 2000 by default.
 
+Runtime configuration is read from `.env`. Useful knobs for GUI validation:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SERVER_HOST` | `127.0.0.1` | Host advertised in world `REDIRECT` packets. |
+| `ARIES_KEEPALIVE_INTERVAL_MS` | `30000` | Server-initiated ARIES type-0x05 keepalive interval; set `0` to disable. |
+| `SOCKET_IDLE_TIMEOUT_MS` | `120000` | Lobby/world TCP idle timeout; set `0` to disable. |
+
 ### Generate a play.pcgi
 
 `MPBTWIN.EXE` reads a `play.pcgi` file at launch to find the server address and credentials. The game deletes the file after reading it, so it must be regenerated before each session.

@@ -236,7 +236,7 @@ The world uses two distinct room types: **bar** (social spaces, Tier Ranking ter
 | Correct mech stat handling (armor, weapons, heat) | ❌ | From `.MEC` parser + damage model |
 | Client launcher — `play.pcgi` generator | ✅ | `npm run gen-pcgi` already works |
 | Basic observability (logs, session captures) | ✅ | Already implemented |
-| Graceful disconnect / reconnect handling | ❌ | Client timeout, mid-match drop |
+| Graceful disconnect / reconnect handling | 🔬 | ARIES type-`0x05` keepalive is now sent periodically by the server and echoed by the client, matching COMMEG32.DLL `FUN_100014e0` case `5`. `ARIES_KEEPALIVE_INTERVAL_MS` and `SOCKET_IDLE_TIMEOUT_MS` are configurable so long GUI validation sessions are not cut off by the old hardcoded 120-second idle timeout. Mid-match reconnect/recovery is still unimplemented. |
 
 **Verification:** Full play session — two humans, real mechs, real arena, fight to conclusion — with no manual intervention.
 
