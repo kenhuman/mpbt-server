@@ -11,7 +11,7 @@
  * Confirmed by Ghidra RE of MPBTWIN.EXE; individual handlers documented below.
  */
 
-import { buildGamePacket, encodeAsByte, encodeB85_1, encodeString } from './game.js';
+import { buildGamePacket, encodeAsByte, encodeB85_1, encodeB85_4, encodeString } from './game.js';
 
 // ── Cmd 3 — Text Broadcast ────────────────────────────────────────────────────
 // CONFIRMED: FUN_0040C190 handler; RPS mode only.
@@ -224,4 +224,163 @@ export function buildCmd9RoomPlayerListPacket(entries: string[] = [], seq = 0): 
     parts.push(encodeString(e.slice(0, 84)));
   }
   return buildGamePacket(9, Buffer.concat(parts), false, seq);
+}
+
+// ── Cmd 10 — Room Presence ("Here You See") ──────────────────────────────────
+// CONFIRMED: FUN_0040C370.
+//
+// Describes the current occupants of the room.  Always reads at least one
+// player entry unconditionally (slot 0 = the receiving player themselves;
+// their entry is stored but NOT displayed in the "Here you see…" text).
+// Subsequent entries are displayed as "Here you see Alice, Bob and Charlie."
+//
+// Wire args:
+//   ─ Slot 0 (self) — always read first; not shown in description ─
+//   [type4  5B]  player_id       FUN_00402b10(4)  → DAT_004e1874
+//   [byte   1B]  status + 0x21   FUN_00402f40     → DAT_004e1872 = status - 5
+//   [string    ] name            FUN_0040c0d0     → DAT_004e1878
+//   ─ Additional players (loop until status byte == 0x54 + 0x21 = 0x75) ─
+//   [type4  5B]  player_id                        → slot 1, 2, …
+//   [byte   1B]  status byte  — if == 0x75, loop ends; no name follows
+//   [string    ] name            (only if status_byte != 0x75)
+//
+// Status values (wire = status + 0x21, stored = status - 5):
+//   5 = standing in the room (stored 0)  — use for normal presence
+//   6 = in booth 1 (stored 1), 7 = in booth 2, etc.
+//
+// Display strings (MPBT.MSG, 1-based):
+//   0x0f = "Here you see "   0x10 = " and "   0x11 = ", "   0x12 = "."
+//
+// For M4: send self slot then an immediate terminator for an empty room.
+
+export interface RoomPlayer {
+  /** Unique player ID (up to 32 bits, encoded as type4). */
+  id: number;
+  /** Callsign / display name (≤ 84 bytes). */
+  name: string;
+  /**
+   * Room status (raw value before +0x21 encoding).
+   *   5 = standing (not at a booth)
+   *   6 = at booth 1, 7 = at booth 2, etc.
+   */
+  status?: number;
+}
+
+/**
+ * Build a Cmd10 (RoomPresence / "Here You See") packet.
+ *
+ * @param self    The receiving player's own slot (always slot 0; not displayed).
+ * @param others  Additional players in the room (displayed in "Here you see…").
+ */
+export function buildCmd10RoomPresencePacket(
+  self:   RoomPlayer,
+  others: RoomPlayer[] = [],
+  seq     = 0,
+): Buffer {
+  const STANDING = 5;
+  const TERMINATOR_STATUS = 0x54; // wire byte 0x75 → loop exits, no name follows
+
+  const parts: Buffer[] = [
+    // Slot 0 — self (always read, never displayed)
+    encodeB85_4(self.id),
+    encodeAsByte(self.status ?? STANDING),
+    encodeString(self.name.slice(0, 84)),
+  ];
+
+  for (const p of others) {
+    parts.push(
+      encodeB85_4(p.id),
+      encodeAsByte(p.status ?? STANDING),
+      encodeString(p.name.slice(0, 84)),
+    );
+  }
+
+  // Terminator: any id + status byte 0x54 (wire 0x75) → loop stops, no name read
+  parts.push(encodeB85_4(0), encodeAsByte(TERMINATOR_STATUS));
+
+  return buildGamePacket(10, Buffer.concat(parts), false, seq);
+}
+
+// ── Cmd 11 — Player Status Change ────────────────────────────────────────────
+// CONFIRMED: FUN_0040C6C0.
+//
+// Notifies the client that a player in the room changed state (left the room,
+// moved to a booth, stood up, left for battle, etc.).
+//
+// Wire args:
+//   [type4  5B]  player_id       FUN_00402b10(4)  → lookup in DAT_004e1870 table
+//   [byte   1B]  status + 0x21   FUN_00402f40
+//   [string    ] player_name     FUN_0040c0d0     (read even if player unknown)
+//
+// Status values and the MPBT.MSG string displayed (1-based):
+//   0       → 0x14 = "%s leaves."
+//   1..4    → 0x15 = "%s leaves heading %s."  [direction strings at DAT_00472a34]
+//   5       → 0x16 = "%s stands."
+//   0x54    → 0x17 = "%s leaves for battle."
+//   6..N    → 0x18 = "%s goes to booth %d."  [booth = status - 5]
+
+export const PlayerStatus = {
+  LEAVES:          0,
+  LEAVES_NORTH:    1,
+  LEAVES_SOUTH:    2,
+  LEAVES_EAST:     3,
+  LEAVES_WEST:     4,
+  STANDS:          5,
+  LEAVES_BATTLE:   0x54,
+  BOOTH:           (n: number) => 5 + n,   // n = 1-based booth number
+} as const;
+
+/**
+ * Build a Cmd11 (PlayerStatusChange) packet.
+ *
+ * @param playerId  Must match the id sent in a prior Cmd10 or Cmd13.
+ * @param name      Player's callsign (≤ 84 bytes).
+ * @param status    One of the PlayerStatus constants.
+ */
+export function buildCmd11PlayerStatusPacket(
+  playerId: number,
+  name:     string,
+  status:   number,
+  seq       = 0,
+): Buffer {
+  return buildGamePacket(11, Buffer.concat([
+    encodeB85_4(playerId),
+    encodeAsByte(status),
+    encodeString(name.slice(0, 84)),
+  ]), false, seq);
+}
+
+// ── Cmd 13 — Player Enters Room ──────────────────────────────────────────────
+// CONFIRMED: FUN_0040C920.
+//
+// Announces that a player has entered the current room.  The client looks up
+// the player_id in its local table (DAT_004e1870) and either reuses an
+// existing slot or allocates a new one.  If the world is active (g_chatReady),
+// it appends "%s enters the room." to the chat scroll window.
+//
+// Wire args:
+//   [type4  5B]  player_id       FUN_00402b10(4)
+//   [string    ] player_name     FUN_0040c0d0
+//
+// MPBT.MSG string used: index 0x19 = "%s enters the room."
+//
+// Typical use: send Cmd13 AFTER Cmd10 to announce a new arrival to occupants
+// already in the room.  For the joining player themselves, skip Cmd13 and
+// instead use Cmd10 (slot 0 = self) to record their own slot.
+
+/**
+ * Build a Cmd13 (PlayerEnters) packet.
+ *
+ * @param playerId  Unique player ID (must be consistent with Cmd10/Cmd11).
+ * @param name      Player's callsign (≤ 84 bytes).
+ */
+export function buildCmd13PlayerEntersPacket(
+  playerId: number,
+  name:     string,
+  seq       = 0,
+): Buffer {
+  return buildGamePacket(13, Buffer.concat([
+    encodeB85_4(playerId),
+    encodeString(name.slice(0, 84)),
+  ]), false, seq);
 }

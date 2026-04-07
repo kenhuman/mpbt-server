@@ -1277,7 +1277,172 @@ gate handlers `FUN_00429870` and `FUN_00429a00` — it fires when the client rec
 
 ---
 
-## 19. Methodology
+## 18c. 2D World-Entry Commands — Cmd4, Cmd9, Cmd10, Cmd11, Cmd13 (M4 RE)
+
+**Confirmed by decompiling handlers in MPBTWIN.EXE via Ghidra.**
+
+This section corrects §18's command-table semantics for Cmd10/11/13 (the entry-game
+world-room commands) and documents the confirmed wire formats used in our M4 server init.
+
+---
+
+### Dispatcher Confirmed
+
+`Lobby_RecvDispatch` (`FUN_00402cf0`) converts the incoming command wire byte with
+`iVar2 = wire_byte - 0x21` before indexing `g_lobby_DispatchTable` (`DAT_00470198`).
+The **CmdN** label always means `iVar2 = N`, i.e. `wire_byte = N + 0x21`.
+
+---
+
+### Cmd4 — SceneInit (`FUN_00414B70`) — 2D World Frame
+
+Cmd4 creates the **main game window** used for both the 2D game-world view and the
+arena ready-room.  The distinction is controlled by the `arena_option_count` field:
+
+| `arena_option_count` | Result |
+|:---:|---------|
+| 0 | 2D world mode: chat/text scroll-window (no mech buttons or scoreboard) |
+| 1+ | Arena ready-room mode: mech-slot buttons and scoreboard |
+
+`FUN_00414b70` calls `FUN_00414160` first (teardown/create the static main window struct
+at `DAT_004ddf60`), then creates sub-windows via `FUN_00431880`:
+
+| Global | Sub-window | Description |
+|--------|-----------|-------------|
+| `DAT_00472ca4` | 40-byte scroll area | Player header (callsign + mech type title) |
+| `DAT_00472c90` | 600×144 scroll area | Main chat / text broadcast area |
+| `DAT_00472c98` | Input box | Chat input field |
+
+At completion: `g_chatReady` (`DAT_00472c84`) is set to `1`.  Cmd3 text-broadcast messages
+are silently discarded if `g_chatReady == 0`.
+
+**Wire format (M4 impl):**
+```
+[B85_1 2B: match_id]           always 0
+[byte  1B: session_flags]      0x30 = has-opponents | clear-arena
+[byte  1B: player_score_slot]  0
+[B85_1 2B: player_mech_id]     from launch record
+-- if flags & 0x10 --
+[byte × 4: opp_type + 1]       0x21 = "no opponent" for all 4 slots
+[B85_1 × 4: opp_mech_id + 1]  0x2121 = "no opponent" for all 4
+[string: callsign]             player display name
+[string: scene_name]           "Solaris Arena"
+[byte: arena_option_count]     0 → 2D world mode, no arena buttons
+```
+
+---
+
+### Cmd9 — RoomRoster (`FUN_0040C310`)
+
+Sets the roster ready flag (`DAT_004ddfc0+0x44 = 8`) which gates several UI elements.
+Send immediately after Cmd4 with count = 0 for an empty lobby.
+
+**Wire format:**
+```
+[byte: gate]   must be 0x01 (wire 0x22) to activate
+[byte: count]  number of roster entries
+[count × string] callsign strings (stored in DAT_004de000, 40-byte slots)
+```
+
+---
+
+### Cmd10 — RoomPresence ("Here you see…") (`FUN_0040C370`) — CORRECTED
+
+§18's `Cmd10_TextFeed` description was incorrect.  Decompilation confirms:
+
+`FUN_0040c370` reads a list of player records and:
+1. Clears the entire player-presence table (`DAT_004e1870` region, 40-byte slots)
+2. Reads the **first record unconditionally** (slot 0 = the receiving player themselves)
+   — slot 0 is stored but **not** shown in the "Here you see…" display
+3. Reads additional records in a loop until status byte == `0x75` (sentinel `T` + 0x21)
+4. For occupied slots 1+: formats `"Here you see Alice, Bob and Charlie."` using
+   MPBT.MSG strings: `0x0f` = "Here you see ", `0x10` = " and ", `0x11` = ", ", `0x12` = "."
+
+**Wire format:**
+```
+─── Slot 0 (self — stored, not displayed) ──────────────────────────────────
+[B85_4 5B: player_id]
+[byte  1B: status + 0x21]    5 (standing) = wire 0x26
+[string: name]
+─── Loop: additional occupants (displayed), until sentinel ──────────────────
+[B85_4 5B: player_id]
+[byte  1B: status + 0x21]    0x75 = sentinel (loop ends; no name follows)
+[string: name]               only read if status byte != 0x75
+─── etc. ────────────────────────────────────────────────────────────────────
+```
+
+**Status values** (raw value before + 0x21 encoding):
+
+| Raw status | Stored (status − 5) | Meaning |
+|:---:|:---:|--------|
+| 5 | 0 | Standing (not at a booth; omitted from display loop) |
+| 6 | 1 | At booth 1 |
+| 7 | 2 | At booth 2 |
+| … | … | … |
+| 0x54 ('T') | — | Sentinel / loop terminator |
+
+For an empty room (only self): send slot 0 then the sentinel immediately.
+
+---
+
+### Cmd11 — PlayerStatus (`FUN_0040C6C0`) — CORRECTED
+
+§18's `Cmd11_PlayerEvent` semantics were partially wrong.  Actual strings used are all
+**room navigation** events, not arena-level events:
+
+| Raw status | MPBT.MSG index | String |
+|:---:|:---:|---------|
+| 0 | 0x14 | `%s leaves.` |
+| 1 | 0x15 | `%s leaves heading %s.` (direction from `DAT_00472a34[1]`) |
+| 2 | 0x15 | `%s leaves heading %s.` (direction from `DAT_00472a34[2]`) |
+| 3 | 0x15 | `%s leaves heading %s.` (direction from `DAT_00472a34[3]`) |
+| 4 | 0x15 | `%s leaves heading %s.` (direction from `DAT_00472a34[4]`) |
+| 5 | 0x16 | `%s stands.` |
+| 0x54 | 0x17 | `%s leaves for battle.` |
+| 6…N | 0x18 | `%s goes to booth %d.` (booth = status − 5) |
+
+**Wire format:**
+```
+[B85_4 5B: player_id]   must match id from prior Cmd10 or Cmd13
+[byte  1B: status + 0x21]
+[string: name]
+```
+
+---
+
+### Cmd13 — PlayerArrival (`FUN_0040C920`) — CONFIRMED
+
+Reads player_id + callsign, finds or allocates a player-table slot, and appends
+`"%s enters the room."` (MPBT.MSG index `0x19`) to the chat area if `g_chatReady`.
+
+**Wire format:**
+```
+[B85_4 5B: player_id]
+[string: callsign]
+```
+
+---
+
+### Server World-Init Sequence (M4: Cmd4 → Cmd9 → Cmd10 → Cmd3 → Cmd5)
+
+Confirmed correct order for entering the 2D game world with no arena slots:
+
+```
+Server → Client: Cmd6  CursorBusy      (hourglass)
+Server → Client: Cmd4  SceneInit       (world frame; arena_count=0 → 2D mode)
+Server → Client: Cmd9  RoomRoster      (count=0; sets ready flag)
+Server → Client: Cmd10 RoomPresence    (self slot + sentinel; empty room)
+Server → Client: Cmd3  TextBroadcast   (room description / welcome message)
+Server → Client: Cmd5  CursorNormal    (restore cursor)
+```
+
+**Why Cmd4 is correct for the 2D world:** Cmd4 with `arena_option_count = 0` creates exactly
+the main text/chat panel without any arena buttons.  The distinction between "2D world" and
+"arena ready room" is purely the arena option count — `0` gives the 2D world frame.
+
+---
+
+
 
 ### Tools Used
 

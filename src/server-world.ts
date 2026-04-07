@@ -39,6 +39,7 @@ import {
   buildCmd5CursorNormalPacket,
   buildCmd6CursorBusyPacket,
   buildCmd9RoomPlayerListPacket,
+  buildCmd10RoomPresencePacket,
 } from './protocol/world.js';
 import { buildMenuDialogPacket, verifyInboundGameCRC } from './protocol/game.js';
 import { PlayerRegistry, ClientSession } from './state/players.js';
@@ -595,6 +596,15 @@ function sendPostAllegianceReinit(
   // Cmd9 — reset roster ready flag.
   send(socket, buildCmd9RoomPlayerListPacket([], nextSeq(session)), capture, 'CMD9_ROOM_LIST');
 
+  // Cmd10 — reset room presence (self only, empty room).
+  const selfId = session.accountId ?? 1;
+  send(
+    socket,
+    buildCmd10RoomPresencePacket({ id: selfId, name: callsign }, [], nextSeq(session)),
+    capture,
+    'CMD10_ROOM_PRESENCE',
+  );
+
   // Cmd3 — notify the player of their allegiance.
   send(
     socket,
@@ -661,6 +671,18 @@ function sendWorldInitSequence(
     'CMD9_ROOM_LIST',
   );
 
+  // Cmd10 — RoomPresence: who is in the room right now.
+  // Slot 0 is always the receiving player (self); it is stored but NOT displayed.
+  // Subsequent slots are other occupants shown as "Here you see Alice, Bob."
+  // We send an empty room (just the self slot + terminator) — no "Here you see…" text.
+  const selfId = session.accountId ?? 1;
+  send(
+    socket,
+    buildCmd10RoomPresencePacket({ id: selfId, name: callsign }, [], nextSeq(session)),
+    capture,
+    'CMD10_ROOM_PRESENCE',
+  );
+
   // Cmd7 — MenuDialog: allegiance-picker popup for new players only.
   // Creates a clickable bordered dialog at screen (256,221)-(640,480) — the right-side
   // panel that overlaps the "Choose your allegiance" background art.  Items are type-0
@@ -684,7 +706,7 @@ function sendWorldInitSequence(
   // Cmd3 — TextBroadcast: welcome message (visible in the chat scroll at top of screen).
   const welcomeMsg = session.allegiance === undefined
     ? 'NEW PILOT: Click your Great House in the dialog, or type 1-5 below and press Enter.'
-    : WELCOME_TEXT;
+    : `Welcome to Solaris 7, ${callsign}. You are in the reception area. The arena is quiet.`;
   send(socket, buildCmd3BroadcastPacket(welcomeMsg, nextSeq(session)), capture, 'CMD3_WELCOME');
 
   // Cmd5 — CursorNormal: restore the arrow cursor.
