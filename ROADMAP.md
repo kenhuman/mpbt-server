@@ -168,7 +168,7 @@ The world uses two distinct room types: **bar** (social spaces, Tier Ranking ter
 | Task | Status | Notes |
 |---|---|---|
 | `SOLARIS.MAP` / `IS.MAP` binary format RE | 🔬 | Leading room-record table now has a checked parser (`npm run map:dump -- --rooms`): room ID, type flags, coordinate bounds, three aux fields, name, and description. Ghidra confirms `Map_LoadFile` passes trailing bytes to the picture/resource loader, so exits are not obviously stored in the large trailing blob. Remaining work is finding the real movement/topology source. |
-| RE movement protocol | 🔬 | Client → server movement commands; server → client position/environment updates. RazorWing's Type P/D/S notes were revalidated against our binary as combat-mode leads, not this M5 world-navigation path. |
+| RE movement protocol | 🔬 | Client → server movement commands; server → client position/environment updates. RazorWing's Type P/D/S notes were revalidated against our binary as combat-mode leads, not this M5 world-navigation path. The map UI now has a concrete travel-reply primitive: server cmd 40/43 opens Inner Sphere/Solaris map UI, and user confirmation sends client `cmd 10` with `type1 contextId` plus `type4 selectedRoomId+1` (`0` = cancel). The server parses/logs this reply, but room-state updates are intentionally deferred until the post-selection server response is known. |
 | Tram / monorail RE | 🔬 | Cross-sector navigation shortcut — client command format unknown |
 | Room model from map files | ❌ | Replace stub `World` with real rooms (bar / arena types), exits, and coordinates decoded from `IS.MAP` / `SOLARIS.MAP` |
 | Server-side position tracking | ❌ | Extend `src/state/world.ts`; track current room + coordinates per player |

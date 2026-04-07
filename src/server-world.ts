@@ -35,6 +35,7 @@ import {
   buildCmd36MessageViewPacket,
   buildMenuDialogPacket,
   parseClientCmd4,
+  parseClientCmd10MapReply,
   parseClientCmd21TextReply,
   parseClientCmd7,
   verifyInboundGameCRC,
@@ -505,6 +506,25 @@ function handleWorldTextCommand(
   }
 }
 
+function handleMapTravelReply(
+  contextId: number,
+  selection: number,
+  selectedRoomId: number | undefined,
+  connLog: Logger,
+): void {
+  if (selection === 0) {
+    connLog.info('[world] cmd-10 map reply: context=%d cancel', contextId);
+    return;
+  }
+
+  connLog.info(
+    '[world] cmd-10 map reply: context=%d selection=%d selectedRoomId=%d (movement not implemented)',
+    contextId,
+    selection,
+    selectedRoomId ?? -1,
+  );
+}
+
 function notifyRoomArrival(
   players: PlayerRegistry,
   session: ClientSession,
@@ -709,6 +729,14 @@ function handleWorldGameData(
       return;
     }
     handleWorldTextCommand(players, session, parsed.text, connLog);
+
+  } else if (cmdIdx === 10) {
+    const parsed = parseClientCmd10MapReply(payload);
+    if (!parsed) {
+      connLog.warn('[world] cmd-10 map reply parse failed');
+      return;
+    }
+    handleMapTravelReply(parsed.contextId, parsed.selection, parsed.selectedRoomId, connLog);
 
   } else if (cmdIdx === 21) {
     const parsed = parseClientCmd21TextReply(payload);
