@@ -1223,7 +1223,7 @@ Frame-reading helpers referenced below:
 | 1 | `0x22` | `FUN_0040C030` | `Cmd1_PingAck` | Reads one seq byte; if it matches `g_expectedSeq` (`DAT_004e2c44`): records RTT elapsed (`FUN_004292b0`) and advances the round-robin seq slot (`FUN_00429380`). Silently drops frame on seq mismatch. |
 | 2 | `0x23` | `FUN_0040C060` | `Cmd2_PingRequest` | If `g_expectedSeq ≠ 0`: records current RTT, then calls `FUN_00429280(connObj, newSeq)` which sets a new expected-ack value, fires `COMMEG32.Ordinal_7` to send the reply packet to the server, and resets the RTT timer. Server is requesting a latency probe reply. |
 | 3 | `0x24` | `FUN_0040C190` | `Cmd3_TextBroadcast` | **Corrects §8 label.** In RPS mode: `Frame_ReadString` → display received text in chat scroll-window (`DAT_00472c90`); only effective after `g_chatReady` (`DAT_00472c84 ≠ 0`). In combat mode: reads data and XOR-processes it. Server sends a plain text announcement to the client. |
-| 4 | `0x25` | `FUN_00414B70` | `Cmd4_SceneInit` | Large UI-initialization command (~2836 bytes). Reads: 1-byte session-flags (bit `0x10` = has-opponents, `0x20` = clear-arena-data), 1-byte player-slot, 1-byte player-ID; optionally up to 4 opponent entries (type byte + ID byte each) then player callsign and scene name strings; 1-byte arena-option count then option strings. Creates main game window and fills arena labels, mech-slot buttons, chat scroll-window, scoreboard boxes. Sets `g_chatReady = 1` at completion. This is the principal "enter arena" command. |
+| 4 | `0x25` | `FUN_00414B70` | `Cmd4_SceneInit` | Large UI-initialization command (~2836 bytes). Reads: `type1` context/scene id, 1-byte session flags (`0x10` = read scene slot/name payload, `0x20` = clear cached scene table, low nibble enables four scene-location icons), 1-byte current client scene slot, and `type1` current scene visual id; optionally reads four target scene-slot bytes plus four target visual ids, then callsign and scene name strings; finally reads a 1-byte scene-option count plus option type/string pairs. Creates the main world window, chat scroll-window, location icons, action buttons, and status boxes. Sets `g_chatReady = 1` at completion. Earlier docs described the four slots as opponent/mech entries; `FUN_00419390` confirms they are also the ordinary scene location-icon targets for world navigation. |
 | 5 | `0x26` | `FUN_0040C2F0` | `Cmd5_CursorNormal` | Calls `FUN_00433ec0` → loads `IDC_ARROW` cursor (`0x7f00`), clears `DAT_00474d00`. Server signals "loading complete; restore normal cursor". |
 | 6 | `0x27` | `FUN_0040C300` | `Cmd6_CursorBusy` | Calls `FUN_00433ef0` → loads `IDC_WAIT` cursor (`0x7f02`), sets `DAT_00474d00 = 1`. Server signals "processing; show hourglass". |
 | 7 | `0x28` | `FUN_004112B0` | `Cmd7_ParseMenuDialog` | Menu dialog renderer — documented in §11. |
@@ -1868,18 +1868,18 @@ selection == 0: cancel / close
 selection > 0: selected room id + 1
 ```
 
-The server branch now parses this as a logged M5 travel reply, but it does not
-yet change room state. The follow-up needed for real navigation is to identify
-what server response follows a successful room selection: likely another map
-command or a world-scene update, but that is not confirmed yet.
+The follow-up branch now uses successful map replies to change server-side room
+state and send a full scene refresh sequence for the destination:
+`Cmd6 -> Cmd4 -> Cmd10 -> Cmd3 -> Cmd5`. The `Cmd4` refresh is important because
+it updates the visible room title, scene location icons, and action buttons
+instead of only changing backend presence.
 
 Engineering follow-up on this branch adds a prototype trigger and state update:
 typing `/map` or `/travel` into the world chat sends `Cmd43` with Solaris
 travel context `0xc6`; a returned `cmd 10` selection moves the session into a
-server-side `map_room_<roomId>` grouping, sends a fresh `Cmd10` room-presence
-sync, sends a `Cmd3` travel-complete line, and notifies occupants in the target
-room with `Cmd13`. This is a validation bridge, not yet the authentic terminal
-or tram request path.
+server-side `map_room_<roomId>` grouping, sends the scene refresh sequence above,
+and notifies occupants in the target room with `Cmd13`. This is a validation
+bridge, not yet the authentic terminal or tram request path.
 
 Follow-up trace of the world scene UI found a more authentic entry point:
 `Cmd4_SceneInit` action buttons carry a server-supplied `type` byte, and
@@ -1891,9 +1891,14 @@ button path instead of chat text.
 
 Adjacent scene location icons take a different path: `FUN_00419390` sends
 client `cmd 23` (`0x38` wire command) with one encoded byte selecting one of
-four location slots. That is now the strongest lead for ordinary click-to-move
-room exits once the exact `Cmd4` slot fields are reclassified from the earlier
-arena/opponent interpretation.
+four location slots. Values `0..3` select slots whose target scene is already
+cached on the client; values `4..7` select the same slots but indicate the
+target scene was not cached locally yet. The branch now parses this as
+`slot = action & 3`, looks up the server-advertised exit for the current room,
+updates `map_room_<roomId>`, and sends the same `Cmd6 -> Cmd4 -> Cmd10 -> Cmd3
+-> Cmd5` scene refresh sequence. The provisional topology currently uses valid
+`SOLARIS.MAP` scene indices and conservative neighboring rooms; the full
+authentic exit graph is still unresolved.
 
 ---
 

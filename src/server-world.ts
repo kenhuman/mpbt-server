@@ -38,6 +38,7 @@ import {
   parseClientCmd5SceneAction,
   parseClientCmd10MapReply,
   parseClientCmd21TextReply,
+  parseClientCmd23LocationAction,
   parseClientCmd7,
   verifyInboundGameCRC,
 } from './protocol/game.js';
@@ -76,10 +77,45 @@ try {
 /** Mech ID used when the player's launch record is missing. */
 const FALLBACK_MECH_ID = WORLD_MECHS.length > 0 ? WORLD_MECHS[0].id : 0;
 
-// Default arena name shown in the window title.
-const DEFAULT_SCENE_NAME = 'Solaris Arena';
 const WELCOME_TEXT       = 'Welcome to the game world.';
 const DEFAULT_MAP_ROOM_ID = 146; // Solaris Starport
+const SOLARIS_SCENE_ROOMS = [
+  { roomId: 146, name: 'Solaris Starport' },
+  { roomId: 147, name: 'Ishiyama Arena' },
+  { roomId: 148, name: 'Government House' },
+  { roomId: 149, name: 'White Lotus' },
+  { roomId: 150, name: 'Waterfront' },
+  { roomId: 151, name: 'Kobe Slums' },
+  { roomId: 152, name: 'Steiner Stadium' },
+  { roomId: 153, name: 'Lyran Building' },
+  { roomId: 154, name: 'Chahar Park' },
+  { roomId: 155, name: 'Riverside' },
+  { roomId: 156, name: 'Black Throne' },
+  { roomId: 157, name: 'Factory' },
+  { roomId: 158, name: 'Marik Tower' },
+  { roomId: 159, name: 'Allman' },
+  { roomId: 160, name: 'Riverfront' },
+  { roomId: 161, name: 'Wasteland' },
+  { roomId: 162, name: 'Jungle' },
+  { roomId: 163, name: "Chancellor's Quarters" },
+  { roomId: 164, name: 'Middletown' },
+  { roomId: 165, name: 'Rivertown' },
+  { roomId: 166, name: 'Maze' },
+  { roomId: 167, name: 'Davion Arena' },
+  { roomId: 168, name: 'Sortek Building' },
+  { roomId: 169, name: 'Guzman Park' },
+  { roomId: 170, name: 'Marina' },
+  { roomId: 171, name: 'Viewpoint' },
+  { roomId: 1, name: 'International Sector' },
+  { roomId: 2, name: 'Kobe Sector' },
+  { roomId: 3, name: 'Silesia Sector' },
+  { roomId: 4, name: 'Montenegro Sector' },
+  { roomId: 5, name: 'Cathay Sector' },
+  { roomId: 6, name: 'Black Hills Sector' },
+] as const;
+const SOLARIS_ROOM_BY_ID = new Map<number, { roomId: number; name: string; sceneIndex: number }>(
+  SOLARIS_SCENE_ROOMS.map((room, index) => [room.roomId, { ...room, sceneIndex: index }]),
+);
 const ALL_ROSTER_LIST_ID = 0x3F4;
 const INQUIRY_MENU_ID    = 1000;
 const PERSONNEL_LIST_ID  = 0x3F2;
@@ -122,6 +158,43 @@ function mapRoomKey(roomId: number): string {
   return `map_room_${roomId}`;
 }
 
+function getSolarisRoomInfo(roomId: number) {
+  return SOLARIS_ROOM_BY_ID.get(roomId) ?? SOLARIS_ROOM_BY_ID.get(DEFAULT_MAP_ROOM_ID)!;
+}
+
+function getSolarisSceneIndex(roomId: number): number {
+  return getSolarisRoomInfo(roomId).sceneIndex;
+}
+
+function getSolarisRoomName(roomId: number): string {
+  return getSolarisRoomInfo(roomId).name;
+}
+
+function uniqueRoomIds(roomIds: number[]): number[] {
+  return [...new Set(roomIds)].filter(roomId => SOLARIS_ROOM_BY_ID.has(roomId));
+}
+
+function getSolarisRoomExits(roomId: number): number[] {
+  if (roomId === 146) return [147, 152, 157, 162];
+
+  const index = SOLARIS_SCENE_ROOMS.findIndex(room => room.roomId === roomId);
+  const room = getSolarisRoomInfo(roomId);
+  const exits = [146];
+
+  if (index > 0) exits.push(SOLARIS_SCENE_ROOMS[index - 1].roomId);
+  if (index >= 0 && index < SOLARIS_SCENE_ROOMS.length - 1) exits.push(SOLARIS_SCENE_ROOMS[index + 1].roomId);
+
+  // Sector rows are the last six records in SOLARIS.MAP; each combat/social
+  // room's low flags byte points at that row. This is still a topology
+  // placeholder, but it keeps exits within valid client scene indices.
+  if (room.roomId >= 147 && room.roomId <= 171) {
+    const sectorOffset = Math.floor((room.roomId - 147) / 5);
+    exits.push(SOLARIS_SCENE_ROOMS[26 + Math.min(sectorOffset, 5)].roomId);
+  }
+
+  return uniqueRoomIds(exits).filter(exit => exit !== roomId).slice(0, 4);
+}
+
 function getPresenceStatus(session: ClientSession): number {
   return session.worldPresenceStatus ?? 5;
 }
@@ -136,7 +209,7 @@ function getComstarId(session: ClientSession): number {
 function getPresenceLocation(session: ClientSession): string {
   const roomId = session.worldMapRoomId;
   const status = getPresenceStatus(session);
-  const room = roomId === undefined ? 'world' : `room ${roomId}`;
+  const room = roomId === undefined ? 'world' : getSolarisRoomName(roomId);
   if (status <= 5) return `Standing in ${room}`;
   if (status <= 12) return `Booth ${status - 5} in ${room}`;
   return `Status ${status}`;
@@ -192,7 +265,7 @@ function buildAllRosterEntries(players: PlayerRegistry) {
     .map(other => ({
       itemId: getComstarId(other),
       col1:   getDisplayName(other),
-      col2:   DEFAULT_SCENE_NAME,
+      col2:   getSolarisRoomName(other.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID),
       col3:   getPresenceLocation(other),
     }));
 }
@@ -202,7 +275,7 @@ function buildPersonnelRecordLines(target: ClientSession, page: number): string[
     return [
       'Rank     : Warrior',
       `House    : ${target.allegiance ?? 'Unaffiliated'}`,
-      `Sector   : ${DEFAULT_SCENE_NAME}`,
+      `Sector   : ${getSolarisRoomName(target.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID)}`,
       `Location : ${getPresenceLocation(target)}`,
       'Status   : Online',
       `ComStar  : ${getComstarId(target)}`,
@@ -247,6 +320,56 @@ function sendSolarisTravelMap(
     capture,
     'CMD43_SOLARIS_MAP',
   );
+}
+
+function buildSceneInitForSession(session: ClientSession) {
+  const roomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
+  const sceneIndex = getSolarisSceneIndex(roomId);
+  const exits = getSolarisRoomExits(roomId);
+  const exitMask = exits.reduce((mask, _roomId, slot) => mask | (1 << slot), 0);
+
+  return buildCmd4SceneInitPacket(
+    {
+      sessionFlags:     0x30 | exitMask,
+      playerScoreSlot:  sceneIndex,
+      playerMechId:     sceneIndex,
+      opponents:        exits.map(exitRoomId => {
+        const exitSceneIndex = getSolarisSceneIndex(exitRoomId);
+        return { type: exitSceneIndex, mechId: exitSceneIndex };
+      }),
+      callsign:         getDisplayName(session),
+      sceneName:        getSolarisRoomName(roomId),
+      arenaOptions:     [{ type: 4, label: 'Travel' }],
+    },
+    nextSeq(session),
+  );
+}
+
+function sendSceneRefresh(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+  message: string,
+): void {
+  send(session.socket, buildCmd6CursorBusyPacket(nextSeq(session)), capture, 'CMD6_BUSY');
+  send(session.socket, buildSceneInitForSession(session), capture, 'CMD4_SCENE_REFRESH');
+
+  const roomPresenceEntries = currentRoomPresenceEntries(players, session);
+  connLog.info('[world] sending Cmd10 RoomPresenceSync (%d entries)', roomPresenceEntries.length);
+  send(
+    session.socket,
+    buildCmd10RoomPresenceSyncPacket(roomPresenceEntries, nextSeq(session)),
+    capture,
+    'CMD10_ROOM_SYNC',
+  );
+  send(
+    session.socket,
+    buildCmd3BroadcastPacket(message, nextSeq(session)),
+    capture,
+    'CMD3_TRAVEL_COMPLETE',
+  );
+  send(session.socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
 }
 
 function sendAllRosterList(
@@ -585,17 +708,56 @@ function handleMapTravelReply(
   session.worldMapRoomId = selectedRoomId;
   session.worldPresenceStatus = 5;
 
-  send(
-    session.socket,
-    buildCmd10RoomPresenceSyncPacket(currentRoomPresenceEntries(players, session), nextSeq(session)),
+  sendSceneRefresh(
+    players,
+    session,
+    connLog,
     capture,
-    'CMD10_TRAVEL_ROOM_SYNC',
+    `Travel complete: ${getSolarisRoomName(selectedRoomId)}.`,
   );
-  send(
-    session.socket,
-    buildCmd3BroadcastPacket(`Travel complete: room ${selectedRoomId}.`, nextSeq(session)),
+  notifyRoomArrival(players, session, connLog);
+}
+
+function handleLocationAction(
+  players: PlayerRegistry,
+  session: ClientSession,
+  slot: number,
+  targetCached: boolean,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const currentRoomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
+  const exits = getSolarisRoomExits(currentRoomId);
+  const targetRoomId = exits[slot];
+  if (targetRoomId === undefined) {
+    connLog.warn('[world] cmd-23 location action has no exit: room=%d slot=%d cached=%s', currentRoomId, slot, targetCached);
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket('There is no exit in that direction.', nextSeq(session)),
+      capture,
+      'CMD3_LOCATION_NO_EXIT',
+    );
+    return;
+  }
+
+  connLog.info(
+    '[world] cmd-23 location action: room=%d slot=%d cached=%s -> room=%d',
+    currentRoomId,
+    slot,
+    targetCached,
+    targetRoomId,
+  );
+
+  notifyRoomDeparture(players, session, connLog);
+  session.roomId = mapRoomKey(targetRoomId);
+  session.worldMapRoomId = targetRoomId;
+  session.worldPresenceStatus = 5;
+  sendSceneRefresh(
+    players,
+    session,
+    connLog,
     capture,
-    'CMD3_TRAVEL_COMPLETE',
+    `Arrived at ${getSolarisRoomName(targetRoomId)}.`,
   );
   notifyRoomArrival(players, session, connLog);
 }
@@ -835,6 +997,14 @@ function handleWorldGameData(
     }
     handleComstarTextReply(players, session, parsed.dialogId, parsed.text, connLog, capture);
 
+  } else if (cmdIdx === 23) {
+    const parsed = parseClientCmd23LocationAction(payload);
+    if (!parsed) {
+      connLog.warn('[world] cmd-23 location action parse failed');
+      return;
+    }
+    handleLocationAction(players, session, parsed.slot, parsed.targetCached, connLog, capture);
+
   } else if (cmdIdx === 7) {
     const parsed = parseClientCmd7(payload);
     if (!parsed) {
@@ -932,33 +1102,15 @@ function sendWorldInitSequence(
   capture: CaptureLogger,
 ): void {
   const { socket } = session;
-  const mechId     = session.selectedMechId ?? FALLBACK_MECH_ID;
-  // Prefer the character display name (set from DB after login); fall back to
-  // the login username only when character data is unavailable. getDisplayName()
-  // also strips C0/DEL control bytes and clamps to 84 bytes.
-  const callsign   = getDisplayName(session);
 
   // Cmd6 — CursorBusy (hourglass while arena loads)
   send(socket, buildCmd6CursorBusyPacket(nextSeq(session)), capture, 'CMD6_BUSY');
 
-  // Cmd4 — SceneInit: create the arena, chat window, and scoreboard.
-  //   sessionFlags 0x30 = has-opponents (0x10) + clear-arena-data (0x20).
-  //   All 4 opponent slots are absent → wire values of 0 → stored as -1 → buttons hidden.
-  //   callsign and sceneName are provided via the has-opponents (0x10) branch reads.
-  const sceneInit = buildCmd4SceneInitPacket(
-    {
-      sessionFlags:     0x30,   // has-opponents + clear-arena resets
-      playerScoreSlot:  0,
-      playerMechId:     mechId,
-      opponents:        [],     // all 4 slots = "no opponent" (wire 0x21 / [0x21,0x21])
-      callsign,
-      sceneName:        DEFAULT_SCENE_NAME,
-      arenaOptions:     [{ type: 4, label: 'Travel' }],
-    },
-    nextSeq(session),
-  );
-  connLog.info('[world] sending Cmd4 SceneInit (mech_id=%d callsign="%s")', mechId, callsign);
-  send(socket, sceneInit, capture, 'CMD4_SCENE_INIT');
+  // Cmd4 — SceneInit: create the world scene, chat window, scene action
+  // buttons, and up to four adjacent location icons.
+  const roomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
+  connLog.info('[world] sending Cmd4 SceneInit (room=%d scene="%s" callsign="%s")', roomId, getSolarisRoomName(roomId), getDisplayName(session));
+  send(socket, buildSceneInitForSession(session), capture, 'CMD4_SCENE_INIT');
 
   // Cmd10 — RoomPresenceSync: seed the live room roster table before later
   // Cmd13/Cmd11 incremental updates are applied.

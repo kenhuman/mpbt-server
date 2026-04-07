@@ -79,7 +79,7 @@
       "WorldScene_OptionHandler":{ "binary": "FUN_00413790", "role": "Main scene action-button handler: Cmd4 option ids 0x100..0x105 send cmd 5 with the server-supplied option type" },
       "WorldScene_MouseHandler": { "binary": "FUN_00410b70", "role": "Main scene mouse-selection handler; fixed scene button offset 4 also sends cmd 5 action 4" },
       "WorldScene_KeyHandler":   { "binary": "FUN_00414220", "role": "Main scene keyboard/button handler; button id 1 sends cmd 5 action 4, id 0x131 opens Options" },
-      "WorldScene_LocationAction": { "binary": "FUN_00419390", "role": "Main scene location-icon handler; sends client cmd 23 with one byte selecting one of four location slots" },
+      "WorldScene_LocationAction": { "binary": "FUN_00419390", "role": "Main scene location-icon handler; sends client cmd 23 with one byte selecting one of four location slots; values 0..3 cached target, 4..7 uncached target" },
       "Picture_ReadFromFile":   { "binary": "FUN_00428770", "role": "Read generic picture/resource blob after the map room table" }
     },
     "data": {
