@@ -1884,10 +1884,22 @@ bridge, not yet the authentic terminal or tram request path.
 Follow-up trace of the world scene UI found a more authentic entry point:
 `Cmd4_SceneInit` action buttons carry a server-supplied `type` byte, and
 `FUN_00413790` sends client `cmd 5` with that byte through `FUN_0040d2d0`.
-The branch now exposes a `Travel` scene option with type `4`; client `cmd 5 /
-action 4` opens the same `Cmd43` Solaris travel map. This still does not prove
-the final terminal/tram trigger, but it uses the client's normal scene-action
-button path instead of chat text.
+Real-GUI validation on 2026-04-07 corrected one detail: button id `0x100` is
+always intercepted by `FUN_00413790` as the local Help action (`FUN_00404450`),
+so the first Cmd4 option cannot be used for server round-trips. The branch now
+emits a placeholder `Help` option first and puts `Travel` in the second slot
+(`0x101`) with type `4`; that is the earliest option slot expected to send
+client `cmd 5 / action 4` and open the same `Cmd43` Solaris travel map. This
+still does not prove the final terminal/tram trigger, but it uses the client's
+normal scene-action button path instead of chat text.
+
+Real GUI follow-up in the same session confirmed the corrected layout end to
+end: `Help` rendered in the first slot, `Travel` rendered in the second slot,
+manual Travel click emitted client `cmd 5 / action 4`, the server replied with
+`Cmd43` (`context=0xc6`, current room 146), the map selection emitted client
+`cmd 10` with `selection=148` (`selectedRoomId=147`), and the refreshed scene
+displayed `Travel complete: Ishiyama Arena.` plus the room label `Ishiyama
+Arena`.
 
 Adjacent scene location icons take a different path: `FUN_00419390` sends
 client `cmd 23` (`0x38` wire command) with one encoded byte selecting one of

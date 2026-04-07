@@ -339,7 +339,12 @@ function buildSceneInitForSession(session: ClientSession) {
       }),
       callsign:         getDisplayName(session),
       sceneName:        getSolarisRoomName(roomId),
-      arenaOptions:     [{ type: 4, label: 'Travel' }],
+      // The client special-cases the first Cmd4 option button (0x100) as local Help.
+      // Put server actions at 0x101+ so FUN_00413790 emits cmd 5 with the type byte.
+      arenaOptions:     [
+        { type: 0, label: 'Help' },
+        { type: 4, label: 'Travel' },
+      ],
     },
     nextSeq(session),
   );
