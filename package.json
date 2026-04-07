@@ -31,7 +31,8 @@
     "db:migrate":         "node --env-file=.env --loader ts-node/esm src/db/migrate.ts",
     "db:add-account":     "node --env-file=.env --loader ts-node/esm src/db/add-account.ts",
     "db:edit-account":    "node --env-file=.env --loader ts-node/esm src/db/edit-account.ts",
-    "db:delete-account":  "node --env-file=.env --loader ts-node/esm src/db/delete-account.ts"
+    "db:delete-account":  "node --env-file=.env --loader ts-node/esm src/db/delete-account.ts",
+    "map:dump":           "node --loader ts-node/esm src/scripts/dump-map.ts"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

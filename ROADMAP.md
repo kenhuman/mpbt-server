@@ -48,8 +48,8 @@ These files are gitignored — place them in `research/` for local use.
 | File | Contents | Project use |
 |---|---|---|
 | `BT-MAN.decrypted.txt` | Full game manual: world navigation, chat channels, combat controls, mech stat tables | Design reference for M4–M9; source for `src/data/mech-stats.ts` |
-| `SOLARIS.MAP` | Solaris city venue locations, rooms 146+, 189 KB. Format: sequential room-ID records with 18-byte fixed header + LE-prefixed name string + LE-prefixed description string. Confirmed rooms: Solaris Starport, Ishiyama Arena, Government House, White Lotus | M5 world map reconstruction |
-| `IS.MAP` | Inner Sphere sector locations, rooms 1–145, 40 KB. Identical layout format to SOLARIS.MAP. Together the two files form a **global room namespace** | M5 world map; full-sector navigation |
+| `SOLARIS.MAP` | Solaris city venue locations, 189 KB. Leading room table is now reproducibly parsed: u16 record count, then room ID / flags / coordinates / aux fields / NUL-included name+description strings. Local file count is 32 records: Solaris rooms 146–171 plus sector rows 1–6; trailing non-room sections remain undecoded | M5 world map reconstruction |
+| `IS.MAP` | Inner Sphere / global location table, 40 KB. Same leading room-table format; local file count is 271 records, covering room IDs 1–271, including Solaris entries duplicated in the global namespace | M5 world map; full-sector navigation |
 | `Gnum*.txt / Gnum*.md` | Firsthand gameplay observations: 4v4 lances, fixed spawns, travel times, team/all-chat | Sanity-check for RE findings |
 
 ---
@@ -167,10 +167,10 @@ The world uses two distinct room types: **bar** (social spaces, Tier Ranking ter
 
 | Task | Status | Notes |
 |---|---|---|
-| `SOLARIS.MAP` binary format RE | 🔬 | Fully decode record structure to extract room IDs, type flags, exits, and map coordinates |
+| `SOLARIS.MAP` / `IS.MAP` binary format RE | 🔬 | Leading room-record table now has a checked parser (`npm run map:dump -- --rooms`): room ID, type flags, coordinate bounds, three aux fields, name, and description. Remaining work is decoding the trailing sections that likely contain palette/graphics/topology data and confirming where exit connections live. |
 | RE movement protocol | 🔬 | Client → server movement commands; server → client position/environment updates. RazorWing's Type P/D/S notes were revalidated against our binary as combat-mode leads, not this M5 world-navigation path. |
 | Tram / monorail RE | 🔬 | Cross-sector navigation shortcut — client command format unknown |
-| Room model from `SOLARIS.MAP` | ❌ | Replace stub `World` with real rooms (bar / arena types), exits, and coordinates decoded from map files |
+| Room model from map files | ❌ | Replace stub `World` with real rooms (bar / arena types), exits, and coordinates decoded from `IS.MAP` / `SOLARIS.MAP` |
 | Server-side position tracking | ❌ | Extend `src/state/world.ts`; track current room + coordinates per player |
 | Position sync to client | ❌ | Server → client position / environment packets |
 
@@ -287,7 +287,7 @@ These are gaps we know exist. They are not bugs — they are the RE frontier.
 - **Cmd `0x1D` server handling** — whether the server needs to acknowledge a cancel, or silently ignore it.
 - **ACK reply format for seq > 42** — the trigger is documented (RESEARCH.md §9) but the reply packet format is not.
 - **Combat CRC crossover point** — the server currently always uses lobby CRC init; the transition rule is unknown.
-- **`SOLARIS.MAP` / `IS.MAP` exit graph** — room topology source files identified and partially decoded (shared global room namespace confirmed: IS.MAP rooms 1–145, SOLARIS.MAP rooms 146+); full exit connections and room-type classification still unknown.
+- **`SOLARIS.MAP` / `IS.MAP` exit graph** — room topology source files identified and partially decoded. Leading room tables are now parser-backed: local `IS.MAP` has 271 records (IDs 1–271), and local `SOLARIS.MAP` has 32 leading records (Solaris 146–171 plus sector rows 1–6). Full exit connections, trailing sections, and room-type classification still need RE.
 - **F7 / F8 chat channel differentiation** — two distinct broadcast channels exist (team and all-comm); wire-format difference is unknown.
 - **Bar booth terminal commands** — what packets does the client send when activating Tier Ranking / ComStar terminals at a bar?
 - **Tram / monorail command** — protocol for the cross-sector navigation shortcut is unknown.
