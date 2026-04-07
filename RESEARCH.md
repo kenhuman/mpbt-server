@@ -1357,7 +1357,8 @@ Additional world-client senders confirmed after the first real-client M4 pass:
   consumed `play.pcgi`, authenticated as `GuiB_0407`, redirected to world as
   `PilotB_0407`, received `Cmd4`, received `Cmd10 RoomPresenceSync (2 entries)`, and
   notified Client A's room of arrival. This is a test harness workaround, not a
-  production client patch recommendation.
+  production client patch recommendation. The repeatable helper for applying this to
+  a local sandbox copy is `tools/patch-mpbtwin-two-gui.ps1`.
 
 ---
 
