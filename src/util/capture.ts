@@ -45,9 +45,10 @@ export class CaptureLogger {
     this.stream.write(header + hexDump(payload) + '\n\n');
   }
 
-  logSend(payload: Buffer): void {
+  logSend(payload: Buffer, label?: string): void {
+    const labelSuffix = label ? ` label=${label}` : '';
     const header =
-      `=== SEND #${this.packetIndex++} len=${payload.length} ` +
+      `=== SEND #${this.packetIndex++}${labelSuffix} len=${payload.length} ` +
       `time=${new Date().toISOString()} ===\n`;
     this.stream.write(header + hexDump(payload) + '\n\n');
   }
