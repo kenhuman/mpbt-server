@@ -1782,6 +1782,7 @@ encryption seed source.
 
 **Source**: `IS.MAP`, `SOLARIS.MAP` (local licensed installation; not committed)
 **Parser**: `src/data/maps.ts`, runnable via `npm run map:dump -- --rooms`
+**Client loader**: `Map_LoadFile` (`FUN_004100c0`) via `Map_InitSpace` (`FUN_00410340`)
 
 The earlier map-file note that treated the first bytes as a room record was off
 by one field. Both local map files start with a little-endian `u16` record count,
@@ -1818,6 +1819,25 @@ The current parser intentionally preserves `flags` and the three auxiliary
 fields as numeric values. Their semantics are not yet confirmed. The next M5
 RE step is to identify where exits and movement topology live: either in the
 trailing map sections or in a separate client-side table.
+
+Ghidra follow-up on 2026-04-07 confirms the runtime loader shape:
+
+- `Map_LoadFile` reads the record count, allocates `count * 0x1a` bytes, and
+  converts each variable-length on-disk room row into a fixed 26-byte in-memory
+  record. String pointers are stored at offsets `+0x12` (name) and `+0x16`
+  (description).
+- The first 18 bytes of each in-memory record are copied directly from disk.
+  That matches the parser fields: `room_id`, `flags`, four coordinate words,
+  and three auxiliary words.
+- After the room table, `Map_LoadFile` calls `Picture_ReadFromFile`
+  (`FUN_00428770`) and stores the returned pointer at map object offset `+8`.
+  That means the large trailing section is currently better treated as a map
+  picture/resource blob, not an exit graph, until proven otherwise.
+- `Map_InitSpace` loads `IS.MAP` when `DAT_00472a54 == 0`, filters out room IDs
+  `0x92..0xAB` (`146..171`) while building its sorted list, and sorts the
+  remaining pointers by `*(byte *)(record + 2)` then case-insensitive room name.
+  This supports the observed split: `IS.MAP` carries the global location table,
+  while the Solaris arena subset is handled specially.
 
 ---
 
