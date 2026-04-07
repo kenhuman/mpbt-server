@@ -1881,6 +1881,20 @@ sync, sends a `Cmd3` travel-complete line, and notifies occupants in the target
 room with `Cmd13`. This is a validation bridge, not yet the authentic terminal
 or tram request path.
 
+Follow-up trace of the world scene UI found a more authentic entry point:
+`Cmd4_SceneInit` action buttons carry a server-supplied `type` byte, and
+`FUN_00413790` sends client `cmd 5` with that byte through `FUN_0040d2d0`.
+The branch now exposes a `Travel` scene option with type `4`; client `cmd 5 /
+action 4` opens the same `Cmd43` Solaris travel map. This still does not prove
+the final terminal/tram trigger, but it uses the client's normal scene-action
+button path instead of chat text.
+
+Adjacent scene location icons take a different path: `FUN_00419390` sends
+client `cmd 23` (`0x38` wire command) with one encoded byte selecting one of
+four location slots. That is now the strongest lead for ordinary click-to-move
+room exits once the exact `Cmd4` slot fields are reclassified from the earlier
+arena/opponent interpretation.
+
 ---
 
 ## Appendix A — Confirmed Function Reference
