@@ -1343,14 +1343,20 @@ Additional world-client senders confirmed after the first real-client M4 pass:
   `C:\Users\moose\mpbt-client-a` and `C:\Users\moose\mpbt-client-b` avoid the shared
   `play.pcgi` deletion/race. Client A consumed its launch file, authenticated as
   `GuiA_0407`, redirected to world, and received `Cmd4`/`Cmd10` normally with
-  callsign `PilotA_0407`. Client B did **not** reach the server: with client A active,
-  a second `MPBTWIN.EXE` and a renamed `MPBTWIN_B.EXE` both exited before consuming
-  `play.pcgi`; launched alone from the second sandbox, the client logged
-  `MPBT Fatal Error (SetDisplayMode): Action not supported.` Running the bundled
-  `MPBTMemoryPatcher.exe` immediately after launch did not fix the failure. Inference:
-  the next true two-GUI pass needs a reliable windowed/DirectDraw wrapper or a separate
-  Windows display/session/VM; the current server-side `Cmd10` behavior remains validated
-  by socket and hybrid GUI+socket tests, not by two simultaneous GUI windows.
+  callsign `PilotA_0407`. Initial Client B attempts did not reach the server: renamed
+  executables tripped the startup check `MPBTWIN string not found in command line`,
+  while the in-place `MPBTWIN.EXE` copy tripped
+  `MPBT Fatal Error (SetDisplayMode): Action not supported` with Client A active.
+  A runtime-only sandbox-B patch then made the second GUI reach the server: patch
+  `FUN_00428f60` at VA `00428f88` / file offset `0x28388` from `74` to `EB` to bypass
+  the `FindWindowA("MPBattleTech", "Multiplayer BattleTech")` single-instance guard,
+  and patch `FUN_00403250` at VA `00403351` / file offset `0x2751` from `74` to `EB`
+  to continue past the second client's `SetDisplayMode(640,480,8)` failure. With those
+  two patches applied only to `C:\Users\moose\mpbt-client-b\MPBTWIN.EXE`, Client B
+  consumed `play.pcgi`, authenticated as `GuiB_0407`, redirected to world as
+  `PilotB_0407`, received `Cmd4`, received `Cmd10 RoomPresenceSync (2 entries)`, and
+  notified Client A's room of arrival. This is a test harness workaround, not a
+  production client patch recommendation.
 
 ---
 
