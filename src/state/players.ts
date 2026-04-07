@@ -12,6 +12,21 @@ export type SessionPhase =
   | 'world'         // in the game world (RPS/arena) after REDIRECT
   | 'closing';      // disconnect in progress
 
+/**
+ * NOTE — cross-session writes and CaptureLogger:
+ *
+ * The `send()` helper in server.ts takes `(socket, buf, capture, label)` and
+ * assumes the socket and capture logger belong to the same session.  For
+ * fan-out / cross-session writes (room broadcasts, ComStar delivery) there is
+ * no per-session CaptureLogger stored here, so those writes use
+ * `other.socket.write()` directly with an explicit `socket.destroyed` guard.
+ *
+ * If full cross-session capture logging is needed in a future milestone, the
+ * fix is to add a `capture: CaptureLogger` field to this interface so that any
+ * caller can use `send(other.socket, buf, other.capture, label)`.  Until then,
+ * direct writes for fan-out are intentional — do not change them to use the
+ * *calling* session's CaptureLogger, as that logs the packet to the wrong file.
+ */
 export interface ClientSession {
   /** Unique session ID (UUID). */
   id: string;
