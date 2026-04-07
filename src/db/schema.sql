@@ -30,3 +30,25 @@ CREATE INDEX IF NOT EXISTS characters_account_id_idx ON characters (account_id);
 -- Case-insensitive display name uniqueness matches isDisplayNameTaken() in characters.ts.
 CREATE UNIQUE INDEX IF NOT EXISTS characters_display_name_lower_idx
     ON characters (lower(display_name));
+
+-- messages: ComStar DMs sent between players.
+-- Delivered to online recipients immediately; stored here when recipient is offline.
+-- delivered_at is set once the message has been written to the recipient's socket.
+CREATE TABLE IF NOT EXISTS messages (
+    id                   SERIAL PRIMARY KEY,
+    sender_account_id    INTEGER      NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    recipient_account_id INTEGER      NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    -- Sender's comstarId (= 100000 + accountId) used as the dialogId in Cmd36
+    -- so the recipient can reply.
+    sender_comstar_id    INTEGER      NOT NULL,
+    -- Full formatted delivery text: "ComStar message from <name>\<body>"
+    -- Already encoded by buildComstarDeliveryText(); ready to pass to Cmd36.
+    body                 TEXT         NOT NULL,
+    sent_at              TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    delivered_at         TIMESTAMPTZ           -- NULL until written to recipient's socket
+);
+
+-- Fast lookup: pending messages for a given recipient (most common query).
+CREATE INDEX IF NOT EXISTS messages_recipient_undelivered_idx
+    ON messages (recipient_account_id)
+    WHERE delivered_at IS NULL;
