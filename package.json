@@ -17,20 +17,31 @@
     "aries-protocol"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=20.6.0"
   },
   "type": "module",
   "main": "dist/server.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/server.js",
-    "dev": "node --loader ts-node/esm src/server.ts",
+    "start": "node --env-file=.env dist/server.js",
+    "dev": "node --env-file=.env --loader ts-node/esm src/server.ts",
     "watch": "tsc --watch",
-    "gen-pcgi": "node --loader ts-node/esm src/scripts/gen-pcgi.ts"
+    "gen-pcgi":           "node --loader ts-node/esm src/scripts/gen-pcgi.ts",
+    "db:start":           "docker compose up -d db",
+    "db:migrate":         "node --env-file=.env --loader ts-node/esm src/db/migrate.ts",
+    "db:add-account":     "node --env-file=.env --loader ts-node/esm src/db/add-account.ts",
+    "db:edit-account":    "node --env-file=.env --loader ts-node/esm src/db/edit-account.ts",
+    "db:delete-account":  "node --env-file=.env --loader ts-node/esm src/db/delete-account.ts"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20.19.39",
+    "@types/pg": "^8.20.0",
     "ts-node": "^10.9.0",
     "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "pg": "^8.20.0"
   }
 }

@@ -5,11 +5,28 @@
 import type { Socket } from 'net';
 
 export type SessionPhase =
-  | 'connected'   // TCP accepted, waiting for first bytes
-  | 'auth'        // parsing login packet
-  | 'lobby'       // in the role-play shell, navigating rooms
-  | 'closing';    // disconnect in progress
+  | 'connected'     // TCP accepted, waiting for first bytes
+  | 'auth'          // parsing login packet
+  | 'lobby'         // authenticated; about to look up or create character
+  | 'char-creation' // first-login character creation in progress (callsign + allegiance)
+  | 'world'         // in the game world (RPS/arena) after REDIRECT
+  | 'closing';      // disconnect in progress
 
+/**
+ * NOTE — cross-session writes and CaptureLogger:
+ *
+ * The `send()` helper in server.ts takes `(socket, buf, capture, label)` and
+ * assumes the socket and capture logger belong to the same session.  For
+ * fan-out / cross-session writes (room broadcasts, ComStar delivery) there is
+ * no per-session CaptureLogger stored here, so those writes use
+ * `other.socket.write()` directly with an explicit `socket.destroyed` guard.
+ *
+ * If full cross-session capture logging is needed in a future milestone, the
+ * fix is to add a `capture: CaptureLogger` field to this interface so that any
+ * caller can use `send(other.socket, buf, other.capture, label)`.  Until then,
+ * direct writes for fan-out are intentional — do not change them to use the
+ * *calling* session's CaptureLogger, as that logs the packet to the wrong file.
+ */
 export interface ClientSession {
   /** Unique session ID (UUID). */
   id: string;
@@ -34,6 +51,59 @@ export interface ClientSession {
   awaitingMechConfirm: boolean;
   /** Server→client sequence number 0..41, incremented per game frame. */
   serverSeq: number;
+  /** True once the world init sequence has been sent in response to the first world cmd-3. */
+  worldInitialized?: boolean;
+  /**
+   * Stable per-connection roster identifier used by world presence packets
+   * (Cmd10/Cmd11/Cmd12/Cmd13). This is distinct from accountId and only needs to be
+   * unique within the current server process.
+   */
+  worldRosterId?: number;
+  /**
+   * Current room-presence state byte used by Cmd10/Cmd11 updates.
+   * 5 = standing, 6..12 = booth 1..7.
+   */
+  worldPresenceStatus?: number;
+  /**
+   * Most recent world inquiry target, used to page follow-up record requests
+   * such as Cmd7(0x95, 2) after Cmd14_PersonnelRecord.
+   */
+  worldInquiryTargetId?: number;
+  /** Current personnel-record page number for the active inquiry target. */
+  worldInquiryPage?: number;
+  /**
+   * Mech ID selected in the lobby and used to initialize the world arena.
+   * Set on world-server sessions (via launchRegistry.consume); undefined on lobby sessions.
+   */
+  selectedMechId?: number;
+  /**
+   * 0-based mech slot (sort position) for the selected mech.
+   * Set on world-server sessions; undefined on lobby sessions.
+   */
+  selectedMechSlot?: number;
+
+  /**
+   * Pending mech slot chosen in the mech-select dialog, held until the
+   * player confirms their selection (cmd-7 confirm reply).
+   */
+  pendingMechSlot?: number;
+
+  // ── Persistence fields (set after DB lookup / character creation) ─────────
+
+  /** Database account row ID; set after successful login & DB auth. */
+  accountId?: number;
+  /**
+   * Character display name (callsign shown to other players and in Cmd4).
+   * Set from the characters table after login; also set at end of char creation.
+   * Falls back to `username` if not yet populated (pre-character-creation sessions).
+   */
+  displayName?: string;
+  /**
+   * House allegiance — one of Davion | Steiner | Liao | Marik | Kurita.
+   * Set from the characters table after login, or persisted from cmd-5 during
+   * the first-login allegiance-picker wizard (wire format confirmed via RE).
+   */
+  allegiance?: string;
 }
 
 export class PlayerRegistry {
@@ -51,9 +121,22 @@ export class PlayerRegistry {
     this.sessions.delete(id);
   }
 
+  all(): ClientSession[] {
+    return [...this.sessions.values()];
+  }
+
   /** Sessions currently in a given room. */
   inRoom(roomId: string): ClientSession[] {
-    return [...this.sessions.values()].filter(s => s.roomId === roomId);
+    return this.all().filter(s => s.roomId === roomId);
+  }
+
+  /** World sessions that are currently live and initialized. */
+  worldSessions(): ClientSession[] {
+    return this.all().filter(
+      session => session.phase === 'world' &&
+        session.worldInitialized &&
+        !session.socket.destroyed,
+    );
   }
 
   /** Broadcast raw bytes to all sessions in a room except the sender. */

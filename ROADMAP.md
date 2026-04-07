@@ -101,13 +101,40 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 
 | Task | Status | Notes |
 |---|---|---|
-| `src/server-world.ts` — second TCP listener | ❌ | Separate port; same `PacketParser` (ARIES); combat CRC init |
-| `src/protocol/world.ts` — world command stubs | ❌ | One handler per command discovered in M2 |
-| Update `gen-pcgi.ts` — separate lobby + world ports | ❌ | `play.pcgi` needs to route the REDIRECT to the right address/port |
-| `ClientSession` — add `'world'` phase | ❌ | Extend `src/state/players.ts` |
-| Initial world handshake response | ❌ | Whatever M2 reveals the client expects first |
+| `src/server-world.ts` — second TCP listener | ✅ | Port 2001; same `PacketParser` (ARIES); RPS CRC seed 0x0A5C25 |
+| `src/protocol/world.ts` — world command builders | ✅ | Cmd3 TextBroadcast, Cmd4 SceneInit, Cmd5/6 cursor, Cmd9 character-creation prompt notes |
+| `src/state/launch.ts` — mech launch registry | ✅ | Bridges lobby→world: records selected mech before REDIRECT, consumed on world LOGIN |
+| `ClientSession` — add `'world'` phase | ✅ | Extended `src/state/players.ts`; `selectedMechId?` / `selectedMechSlot?` added |
+| Initial world handshake | ✅ | LOGIN_REQUEST → LOGIN → SYNC ack → MMW welcome → cmd-3 → Cmd6+Cmd4+Cmd10+Cmd3+Cmd5 |
+| Fix REDIRECT target to WORLD_PORT | ✅ | Lobby now redirects to port 2001; launch record stored before REDIRECT sends |
+| `gen-pcgi.ts` — separate lobby/world ports | N/A | `play.pcgi` always points to lobby (2000); REDIRECT carries the world address. Combat server is a separate dynamic spin-up (M6/M7). |
 
-**Verification:** Client connects after REDIRECT, game world renders, no immediate crash or disconnect.
+**M3 additions — Persistence, Character Creation, Direct World Entry (#25 / #26 / #27):**
+
+| Task | Status | Notes |
+|---|---|---|
+| PostgreSQL persistence layer | ✅ | `pg` + `bcryptjs`; `src/db/{client,schema.sql,accounts,characters,migrate}.ts`; `docker-compose.yml` |
+| `accounts` table + bcrypt password auth | ✅ | Auto-register on first login; verify password on subsequent logins; rejects wrong passwords |
+| `characters` table + allegiance enum | ✅ | One character per account; `display_name UNIQUE`; allegiance CHECK constraint `Davion\|Steiner\|Liao\|Marik\|Kurita` |
+| `npm run db:migrate` — idempotent schema apply | ✅ | Reads `src/db/schema.sql`; safe to re-run |
+| `ClientSession` — add `accountId`, `displayName`, `allegiance` | ✅ | Set from DB after login; `'char-creation'` phase added |
+| Character creation flow (first login) | ✅ | cmd-3 → no character in DB → send `Cmd9` callsign + House prompt → persist typed display name and allegiance → seed launch context → REDIRECT |
+| Post-login direct world entry (returning player) | ✅ | cmd-3 → character found → REDIRECT to port 2001 immediately; no mech-select shown |
+| World server uses `displayName` as Cmd4 callsign | ✅ | Falls back to `username` if character data unavailable (e.g. test direct-connect) |
+| Display name entry (name selection dialog) | ✅ | Implemented with server `Cmd9`, the likely authentic first-login prompt: it opens `MPBT.MSG[5]` (`"Enter your character's name"`), then a numbered selector titled `MPBT.MSG[6]` (`"Choose your allegiance:"`), and submits outbound `cmd 9, subcmd 1, <typed name>, <selected-index>`. This supersedes the earlier `Cmd36`/`Cmd37` hypothesis; `Cmd36` is the read/reply viewer, `Cmd37` opens the ComStar compose editor, and the live `Cmd37(0)` probe is only a compatibility bridge. Live GUI probe confirmed the wire path; socket smoke now confirms persistence, launch-context seeding, and returning-account world entry with the typed callsign in `Cmd4`. |
+
+**Known M3 limitations / M4 work:**
+- Initial room-sync uses `Cmd10`; the earlier `Cmd9(count=0)` placeholder was removed, and `Cmd9` is now tied to the first-login name + allegiance prompt rather than room presence.
+- `Cmd8` (session binary data / mech loadout) not yet sent; client mech stats display may be absent.
+- Arena navigation and movement not yet implemented (M5).
+- World server does not yet bounce a second REDIRECT to a combat server (M6/M7).
+
+**Verification:**
+- *New player:* connect, select House allegiance, enter world — Cmd4 callsign shows username; allegiance persisted to DB.
+- *Returning player:* connect, skip character creation, enter world directly — no mech-select screen shown.
+- *Wrong password:* second login with wrong credentials → connection closed.
+- *Mech select (M6 path):* cmd-26 visible only when explicitly triggered; pre-combat flow unaffected.
+- *First-login `Cmd9` implementation:* socket smoke confirmed `Cmd9` prompt → typed callsign + House reply → persisted character → REDIRECT → world init `6,4,10,3,5`, with `Cmd4` containing the typed callsign on both first-login and returning-account paths. The older `Cmd37(0)` probe remains a compatibility bridge, not the authentic original name-entry UI.
 
 ---
 
@@ -119,14 +146,14 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 
 | Task | Status | Notes |
 |---|---|---|
-| Room broadcast | ❌ | Players see who is in their current location |
-| Player join / leave events | ❌ | Notify room occupants when someone arrives or departs |
+| Room broadcast | 🔬 | Same-room presence now seeds the roster with `Cmd10`, then uses `Cmd13` arrival and `Cmd11(status=0)` departure for incremental updates. World `cmd-4` free-text relay is now implemented as room-local chat fan-out to other clients via `Cmd3`. Validated with the local two-client socket harness and a one-client `MPBTWIN.EXE` launch (`play.pcgi` consumed; client remained connected through world init). |
+| Player join / leave events | 🔬 | Same-room `Cmd10` / `Cmd13` / `Cmd11(status=0)` path is implemented on the branch and passes the local two-client socket smoke harness. The social-room status transitions behind the roster menu are now partially implemented too: `Cmd7(listId=3)` `selection=0` grabs a new booth, `selection=2` stands, and `selection>=3` joins booth `selection-2`, with `Cmd11(status=5..12)` updating the live roster table. Real-client join/leave behavior with multiple GUI clients is still pending. |
 | F7 — team / lance channel | 🔬 | Wire format for scoped team broadcast unknown |
 | F8 — all-comm / chat-window toggle | 🔬 | May share a command code with the chat-window open/close packet |
-| ComStar DM — store and deliver | ❌ | Async private messages; server must persist unread messages per player |
-| All-roster query | 🔬 | Global presence query: returns every online player's ComStar ID, handle, current sector, and location; supports "send ComStar" and "view personnel record" from the list; triggered via KP5 |
+| ComStar DM — store and deliver | 🔬 | Stronger RE now shows `Cmd36` is the received-message / reply viewer and `Cmd37` is the server-side compose opener; the local `listId=1000` submenu can also open compose without a server round-trip. The branch prototype now delivers live online ComStar mail as `Cmd36` with a nonzero reply target, while the sender still uses client `cmd 21` to submit text. Remaining gaps: offline persistence, unread delivery, exact message-body formatting, and real-GUI confirmation that the client’s `Reply` flow interoperates cleanly with the current server prototype. |
+| All-roster query | 🔬 | Global presence query: returns every online player's ComStar ID, handle, current sector, and location; triggered via KP5. Current RE confirms the room menu `Cmd7(listId=3)` `selection=1` is the actual `All` request; the earlier `Cmd9` roster interpretation was wrong and now points to the first-login name + allegiance prompt. The current branch prototype follows the stronger RE path: `Cmd7(listId=3, selection=1)` sends `Cmd48_KeyedTripleStringList` (`0x51`) with live world sessions as rows, and row picks (`Cmd7(listId, item_id + 1)`) open the inquiry submenu at `listId=1000`. From there, the real client is expected to open local compose itself for `Send a ComStar message`, or send `Cmd7(0x3f2, target_id + 1)` for `Access personnel data`. The older `Cmd45`/`Cmd58` family still looks like a separate scroll-list shell/list-id helper rather than the minimal KP5 reply. Remaining gap: confirm this flow against the real GUI client, especially the local `1000` submenu behavior after a `Cmd48` all-roster reply. |
 
-**Verification:** Two clients in different rooms; each sees the other on the all-roster; a ComStar message is delivered even after the recipient moves rooms.
+**Verification:** Local direct world-session smoke now covers `Cmd48` all-roster listing, row-pick inquiry submenu, `cmd 21` text submit, `Cmd36` inbound message delivery to the selected online target, and sender acknowledgment.
 
 ---
 
@@ -224,7 +251,7 @@ The world uses two distinct room types: **bar** (social spaces, Tier Ranking ter
 | SCentEx ranking model | ❌ | Damage inflicted vs. damage sustained determines rank change after each sanctioned match |
 | Player fame stat | ❌ | Per-character fame tracked (BT-MAN p. 9) |
 | Tier Ranking display | ❌ | Displayed at bar terminals; served by the world navigation layer |
-| Personnel record | ❌ | Per-character record viewable by other players via the all-roster |
+| Personnel record | 🔬 | First page is now identified: `Cmd7(0x3f2, target_id + 1)` triggers world `Cmd14_PersonnelRecord` (`0x2f`), which displays the selected handle, ComStar ID, battles-to-date, and six server-formatted text lines. Follow-up trace on the built-in `Cmd7(0x95, 2)` `More` request did not reveal a distinct second-page command handler; strongest current inference is that later pages are delivered as additional `Cmd14` payloads. A minimal two-page server prototype is now implemented on the branch and passes a direct world-session socket smoke (`Cmd48 -> Cmd14 page 1 -> Cmd7(0x95, 2) -> Cmd14 page 2`). Remaining unknowns: exact mapping of the six text lines and the meaning of two legacy/unused `type4` payload slots. |
 | SCentEx result reporting protocol | 🔬 | How does the server communicate sanctioned match results to the ranking system? |
 
 **Verification:** Two players complete a sanctioned match; both observe updated rankings at a bar terminal.
