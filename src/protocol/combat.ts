@@ -96,21 +96,31 @@ function encodeLongString(s: string, maxBytes: number): Buffer {
 }
 
 // ── Cmd64 / wire 0x65 / table index 68 ───────────────────────────────────────
-// PARTIAL — handler FUN_0040d390 — Remote actor/mech add.
+// CONFIRMED — handler Combat_Cmd64_AddActor_v123 @ 0040d390 — Remote actor add.
 //
-// Known field flow (static RE):
-//   slot byte       — server-slot index; client maps via DAT_00478d98
-//   5 identity strings (max 11, 31, 39, 15, 31 bytes) — ASSUMPTION: same
-//     count/layout as Cmd72 identity block; live capture needed to confirm
-//   mechId type2    — via FUN_004013a0(2); triggers .MEC load
+// Wire layout (confirmed by Ghidra decompile):
+//   slot          byte   — external slot ID; client assigns internal slot and
+//                          stores reverse-mapping in DAT_00478d98/DAT_00478dc0
+//   actorTypeByte byte   — stored at DAT_004f2036 + internalSlot*0x49c; purpose
+//                          semantically unconfirmed; use 0 for prototype
+//   identity0     str11  — max 11 bytes; trailing digits → actor display index
+//   identity1     str31  — max 31 bytes
+//   identity2     str39  — max 39 bytes
+//   identity3     str15  — max 15 bytes
+//   identity4     str31  — max 31 bytes
+//   statusByte    byte   — stored at DAT_004f1fe6+slot*0x4ec; purpose unconfirmed
+//   mechId        type2  — triggers .MEC load via FUN_00433860
 //
-// Ghidra assumptions:
-//   • Exact identity-string count and order not yet confirmed for Cmd64.
-//   • No damage-state block expected here (unlike Cmd72).
-//   • Struct offset: DAT_004f1d30 + index * 0x49c (confirmed for v1.23).
+// No damage-state block: damage state is initialised from the .MEC file locally
+// via Combat_InitDamageStateFromMec_v123, not received from the server.
 
 export interface Cmd64RemoteActor {
   slot: number;
+  /**
+   * Second byte after slot; stored at DAT_004f2036 + internalSlot*0x49c.
+   * Semantics unconfirmed — send 0 for prototype.
+   */
+  actorTypeByte: number;
   /** max 11 bytes — identity string 0; trailing digits → actor display index */
   identity0: string;
   /** max 31 bytes — identity string 1 */
@@ -121,19 +131,26 @@ export interface Cmd64RemoteActor {
   identity3: string;
   /** max 31 bytes — identity string 4 */
   identity4: string;
-  /** mech variant id; server loads matching .MEC file on client */
+  /**
+   * Byte stored at DAT_004f1fe6 + slot*0x4ec.
+   * Same struct field as Cmd72 statusByte; semantics unconfirmed — send 0.
+   */
+  statusByte: number;
+  /** mech variant id; client loads matching .MEC file */
   mechId: number;
 }
 
-/** Build a Cmd64 remote-actor-add packet (PARTIAL — identity layout assumed). */
+/** Build a Cmd64 remote-actor-add packet. CONFIRMED §19.6.1 + Ghidra decompile. */
 export function buildCmd64RemoteActorPacket(actor: Cmd64RemoteActor, seq = 0): Buffer {
   const args = Buffer.concat([
     encodeAsByte(actor.slot),
+    encodeAsByte(actor.actorTypeByte),
     encodeString(actor.identity0.substring(0, 11)),
     encodeString(actor.identity1.substring(0, 31)),
     encodeString(actor.identity2.substring(0, 39)),
     encodeString(actor.identity3.substring(0, 15)),
     encodeString(actor.identity4.substring(0, 31)),
+    encodeAsByte(actor.statusByte),
     encodeB85_2(actor.mechId),
   ]);
   return buildGamePacket(68, args, true, seq); // wire 0x65
@@ -368,23 +385,24 @@ export function buildCmd71ResetEffectStatePacket(seq = 0): Buffer {
 }
 
 // ── Cmd72 / wire 0x6d / table index 76 ───────────────────────────────────────
-// PARTIAL — handler FUN_00445110 — Local combat bootstrap.
+// PARTIAL — handler Combat_Cmd72_InitLocalActor_v123 @ 00445110 — Local bootstrap.
 //
 // This is the first packet sent to a connecting combat client.  It seeds all
 // local actor state and must precede Cmd64 remote-actor adds.
 //
 // Full field flow: RESEARCH.md §19.6.1, Combat_Cmd72_InitLocalActor_v123.
 //
-// Ghidra assumptions (live capture still needed):
-//   • unknownByte0: consumed by client, purpose not identified — send 0.
-//   • globalA / globalB / globalC (three type2 values): purpose not labelled.
-//   • headingBias: encoded with MOTION_NEUTRAL bias; exact meaning unclear.
-//   • statusByte: purpose not identified — send 0.
-//   • extraType2Values: currently unlabeled; send empty array for prototype.
-//   • unknownType1: send MOTION_NEUTRAL (neutral/zero value) for prototype.
-//   • critStateExtraCount comes from .MEC offset 0x3c (signed).
-//     Prototype safe default: 0 (produces 0x15 = 21 critical-state bytes).
-//   • identity0 trailing digits are parsed into DAT_004f1ff6 (actor display id).
+// Status of previously-assumed fields (all confirmed by Ghidra decompile):
+//   • 5 identity strings (max 11/31/39/15/31) — CONFIRMED same layout as Cmd64.
+//   • unknownByte0: read via FUN_00401a60() and result DISCARDED by client;
+//     it is a protocol filler byte — safe to send 0.
+//   • statusByte: stored at DAT_004f1fe6 — same struct offset as in Cmd64.
+//   • globalA/B/C (three type2 values at DAT_004f56b4, DAT_004f1d24, DAT_004f5684):
+//     purpose still unlabelled; safe to send 0.
+//   • headingBias type1 → client stores (raw − 0xe1c); send MOTION_NEUTRAL for 0.
+//   • extraType2Values: count byte + N type2 values; send [] for prototype.
+//   • remainingActorCount → DAT_0047ef70; if 0 → sets DAT_0047ef60 |= 4.
+//   • unknownType1Raw: send MOTION_NEUTRAL (0xe1c) as raw for prototype.
 
 export interface Cmd72TerrainPoint {
   x: number;
