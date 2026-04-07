@@ -304,4 +304,4 @@ These are gaps we know exist. They are not bugs — they are the RE frontier.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
 See [RESEARCH.md](RESEARCH.md) for all confirmed protocol details and RE methodology.
 
-If you have access to Ghidra and want to help, the RE Priority Queue above is where to start. Open a **Research Finding** issue with your findings before opening a PR.
+If you have access to Ghidra and want to help, the RE Priority Queue above is where to start. Open a **Research Finding** issue with your findings before opening a PR.

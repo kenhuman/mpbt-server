@@ -104,5 +104,28 @@
       "g_mechWin_ShowExtButtons":{ "binary": "DAT_004dbd84",    "role": "Non-zero when typeFlag triggers extended button display" },
       "g_mechWin_HighlightIdx":  { "binary": "DAT_004dbd80",    "role": "Index of currently highlighted mech slot" }
     }
+  },
+  "MPBTWIN.EXE v1.23": {
+    "functions": {
+      "Main_NetQueueTick_v123":        { "binary": "FUN_00435b20", "role": "Drains queued COMMEG payloads, dispatches mode packets, then ticks RPS state 3 or combat state 4" },
+      "Main_ModePacketDispatch_v123":  { "binary": "FUN_00435ed0", "role": "Classifies queued payloads after RPS start; routes later MMW/MMC handshakes or normal text-frame parsing" },
+      "Main_InitialModeGate_v123":     { "binary": "FUN_00435ff0", "role": "Initial MMW/MMC welcome gate; MMW enters RPS, MMC is only valid after RPS state is established" },
+      "Main_ModeWelcomeClassify_v123": { "binary": "FUN_00436340", "role": "Returns 2 for ESC?MMW welcome, 3 for ESC?MMC welcome, 0 for non-handshake data" },
+      "Main_SetModeName_v123":         { "binary": "FUN_00401d70", "role": "Argument 0 copies \"Solaris RPS\"; argument 1 copies \"Solaris COMBAT\"" },
+      "Combat_InitMode_v123":          { "binary": "FUN_00435db0", "role": "Combat-mode initializer after MMC welcome; tears down RPS UI, loads scenes.dat, resets combat globals" },
+      "Combat_Tick_v123":              { "binary": "FUN_00435eb0", "role": "Per-frame combat tick; runs combat update and calls combat music selector when music is enabled" },
+      "Audio_CombatMusicSelect_v123":  { "binary": "FUN_00428370", "role": "Chooses requested combat music state from target distance/visibility/advantage, then calls Audio_RequestMusicState_v123" },
+      "Audio_RequestMusicState_v123":  { "binary": "FUN_0042a5f0", "role": "Maps external music request ids to internal state ids; request 10 maps to internal state 6" },
+      "Audio_TickMusicState_v123":     { "binary": "FUN_0042aa10", "role": "Applies pending KSND/Miles music state transitions and invokes selected state callback" }
+    },
+    "data": {
+      "g_modeState_v123":              { "binary": "DAT_0047d05c", "role": "Mode state: 3 = Solaris RPS tick, 4 = Solaris COMBAT tick" },
+      "g_modeRpsActive_v123":          { "binary": "DAT_0047a7f0", "role": "Set after the MMW/RPS welcome path starts" },
+      "g_musicStateCurrent_v123":      { "binary": "DAT_00479b00", "role": "Current internal music state id" },
+      "g_musicStateRequested_v123":    { "binary": "DAT_004da2ec", "role": "Pending internal music state id requested by Audio_RequestMusicState_v123" },
+      "g_musicStateNames_v123":        { "binary": "00479b10", "role": "Pointer table of 21 music-state labels; index 6 is \"Transition to combat - even\"" },
+      "g_welcomeStrMMC_v123":          { "binary": "0047d240", "role": "Literal ESC?MMC Copyright Kesmai Corp. 1991" },
+      "g_welcomeStrMMW_v123":          { "binary": "0047d264", "role": "Literal ESC?MMW Copyright Kesmai Corp. 1991" }
+    }
   }
 }
