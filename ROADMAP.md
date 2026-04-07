@@ -168,7 +168,7 @@ The world uses two distinct room types: **bar** (social spaces, Tier Ranking ter
 | Task | Status | Notes |
 |---|---|---|
 | `SOLARIS.MAP` binary format RE | 🔬 | Fully decode record structure to extract room IDs, type flags, exits, and map coordinates |
-| RE movement protocol | 🔬 | Client → server movement commands; server → client position/environment updates |
+| RE movement protocol | 🔬 | Client → server movement commands; server → client position/environment updates. RazorWing's Type P/D/S notes were revalidated against our binary as combat-mode leads, not this M5 world-navigation path. |
 | Tram / monorail RE | 🔬 | Cross-sector navigation shortcut — client command format unknown |
 | Room model from `SOLARIS.MAP` | ❌ | Replace stub `World` with real rooms (bar / arena types), exits, and coordinates decoded from map files |
 | Server-side position tracking | ❌ | Extend `src/state/world.ts`; track current room + coordinates per player |
@@ -213,7 +213,7 @@ The world uses two distinct room types: **bar** (social spaces, Tier Ranking ter
 | Room broadcast | ❌ | Sync combat state to all clients in the same arena |
 | Player enter / leave events | ❌ | Notify existing clients when a player joins or leaves |
 | Side assignment enforcement | ❌ | Cannot assign all players to the same side |
-| Synchronized position | ❌ | Each client sees other mechs move in real time |
+| Synchronized position | 🔬 | Each client sees other mechs move in real time. Current local Ghidra lead: combat cmd `65` / wire `0x66` (`FUN_00401820`) parses player id, X/Y/Z, rotation-ish bytes, and speed/throttle-ish byte; constants differ from RazorWing/solaris. |
 | Synchronized damage | ❌ | Damage dealt by one client is reflected in all clients' views |
 | Match orchestration | ❌ | Ready-up, start, 15-min timer, end, sanctioned-match flag |
 
