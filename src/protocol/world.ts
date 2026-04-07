@@ -124,8 +124,8 @@ export interface Cmd4Options {
    */
   sceneName?: string;
   /**
-   * Arena option entries (displayed as action buttons; mostly unknown for M3).
-   * Default: empty.
+   * Scene action entries displayed as option buttons. Pressing one sends
+   * client cmd-5 with the entry's type byte (FUN_00413790 -> FUN_0040d2d0).
    */
   arenaOptions?: Array<{ type: number; label: string }>;
 }

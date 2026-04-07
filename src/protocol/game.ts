@@ -395,6 +395,31 @@ export function parseClientCmd4(
 }
 
 /**
+ * Parse a client-sent world cmd-5 scene/action button frame.
+ *
+ * CONFIRMED from MPBTWIN.EXE FUN_00413790 / FUN_0040d2d0:
+ *   server-provided Cmd4 scene option buttons call FUN_0040d2d0(option_type)
+ *
+ * Wire layout:
+ *   [byte actionType]
+ */
+export function parseClientCmd5SceneAction(
+  payload: Buffer,
+): { seq: number; actionType: number } | null {
+  if (payload.length < 8 || payload[0] !== 0x1B || payload[payload.length - 1] !== 0x1B) {
+    return null;
+  }
+  const seq = payload[1] - 0x21;
+  const cmd = payload[2] - 0x21;
+  if (cmd !== 5) return null;
+
+  return {
+    seq,
+    actionType: payload[3] - 0x21,
+  };
+}
+
+/**
  * Parse a client-sent cmd-9 character creation reply.
  *
  * CONFIRMED from MPBTWIN.EXE FUN_0042dbf0 -> FUN_0040d400:
