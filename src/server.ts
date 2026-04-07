@@ -44,6 +44,7 @@ import { Logger } from './util/logger.js';
 import { CaptureLogger } from './util/capture.js';
 import { verifyOrRegister } from './db/accounts.js';
 import { findCharacter, createCharacter, ALLEGIANCES } from './db/characters.js';
+import { ARIES_KEEPALIVE_INTERVAL_MS, SOCKET_IDLE_TIMEOUT_MS } from './config.js';
 
 // ── Global state ──────────────────────────────────────────────────────────────
 
@@ -82,7 +83,7 @@ const MECH_SEND_LIMIT = 20; // Client (FUN_0043A370) stores mechs in parallel st
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function send(socket: net.Socket, pkt: Buffer, capture: CaptureLogger, label: string): void {
-  capture.logSend(pkt);
+  capture.logSend(pkt, label);
   socket.write(pkt);
 }
 
@@ -157,6 +158,7 @@ function handleConnection(socket: net.Socket): void {
 
   const capture = new CaptureLogger(sessionId);
   const parser = new PacketParser();
+  let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
 
   const session: ClientSession = {
     id: sessionId,
@@ -211,9 +213,8 @@ function handleConnection(socket: net.Socket): void {
           break;
 
         case Msg.KEEPALIVE:
-          // Echo keepalive back (client sends 0x05, server echoes 0x05)
-          connLog.debug('[keepalive] echoing');
-          send(socket, buildPacket(Msg.KEEPALIVE, Buffer.alloc(0)), capture, 'keepalive');
+          // Client response to server-initiated ARIES type-0x05 keepalive.
+          connLog.debug('[keepalive] response received');
           break;
 
         default:
@@ -236,16 +237,32 @@ function handleConnection(socket: net.Socket): void {
   socket.on('close', () => {
     connLog.info('Client disconnected (phase=%s, bytes=%d)', session.phase, session.bytesReceived);
     players.remove(session.id);
+    if (keepaliveTimer !== undefined) {
+      clearInterval(keepaliveTimer);
+    }
     capture.close();
   });
 
   // ── TCP keep-alive ──────────────────────────────────────────────────────────
   socket.setKeepAlive(true, 15_000);
-  socket.setTimeout(120_000);
-  socket.on('timeout', () => {
-    connLog.warn('Session timed out, closing');
-    socket.destroy();
-  });
+  if (SOCKET_IDLE_TIMEOUT_MS > 0) {
+    socket.setTimeout(SOCKET_IDLE_TIMEOUT_MS);
+    socket.on('timeout', () => {
+      connLog.warn('Session timed out after %d ms, closing', SOCKET_IDLE_TIMEOUT_MS);
+      socket.destroy();
+    });
+  }
+
+  keepaliveTimer = ARIES_KEEPALIVE_INTERVAL_MS > 0
+    ? setInterval(() => {
+      if (socket.destroyed || !socket.writable) {
+        return;
+      }
+      connLog.debug('[keepalive] sending ping');
+      send(socket, buildPacket(Msg.KEEPALIVE, Buffer.alloc(0)), capture, 'KEEPALIVE_PING');
+    }, ARIES_KEEPALIVE_INTERVAL_MS)
+    : undefined;
+  keepaliveTimer?.unref();
 
   // ── SERVER SPEAKS FIRST ─────────────────────────────────────────────────────
   // COMMEG32.DLL FUN_100014e0 case 0x16: when LOGIN_REQUEST arrives, it calls

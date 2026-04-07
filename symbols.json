@@ -66,7 +66,21 @@
       "MecFile_Prng":           { "binary": "FUN_0042f690", "role": "PRNG step: uvar1=(state*0xF0F1+1); new_state=uvar1+rotl16(uvar1); returns new_state in EAX" },
       "MecFile_GetSeedId":      { "binary": "FUN_0042f5a0", "role": "Derive XOR seed from filename: last 4 chars before '.' in reverse order as LE uint32; stores to DAT_00479980" },
       "MecFile_GetStructPerSection": { "binary": "FUN_00438750", "role": "Return IS or armor for a body section (0-7) from tonnage lookup; case 7 returns 9 (head)" },
-      "MecFile_BuildDisplayData":    { "binary": "FUN_00438610", "role": "Fill mech display struct: copies 11 uint16 armor/speed fields from .MEC at 0x1A-0x2E, zero weapon slots, build ammo table" }
+      "MecFile_BuildDisplayData":    { "binary": "FUN_00438610", "role": "Fill mech display struct: copies 11 uint16 armor/speed fields from .MEC at 0x1A-0x2E, zero weapon slots, build ammo table" },
+
+      "Map_LoadFile":           { "binary": "FUN_004100c0", "role": "Load IS.MAP / SOLARIS.MAP leading room table; count-prefixed variable records become fixed 0x1a-byte records, then trailing bytes go to Picture_ReadFromFile" },
+      "Map_InitSpace":          { "binary": "FUN_00410340", "role": "Load IS.MAP or SOLARIS.MAP depending on DAT_00472a54; builds sorted non-Solaris global room pointer list from IS.MAP" },
+      "MapRecordCompareByFlags": { "binary": "FUN_00410300", "role": "qsort comparator for map record pointers: compare low flag byte at record+2, then case-insensitive room name at record+0x12" },
+      "MapOpenInnerSphere":     { "binary": "FUN_0040ecb0", "role": "Server cmd 40 handler: reads context id, current room id, and value/cost, then opens the Inner Sphere map UI" },
+      "MapOpenSolaris":         { "binary": "FUN_0040eed0", "role": "Server cmd 43 handler: reads context id, current room id+1, and 26 Solaris counters, then opens the Solaris map UI" },
+      "MapLocationListKeyHandler": { "binary": "FUN_0040f630", "role": "Keyboard handler for the same-group map location list opened from the map UI" },
+      "Map_SendTravelReply":    { "binary": "FUN_0040d360", "role": "Client cmd 10 sender: type1(contextId) + type4(selection); selection is selectedRoomId+1 or 0 for cancel" },
+      "WorldScene_SendAction":   { "binary": "FUN_0040d2d0", "role": "Client cmd 5 sender for main scene action buttons: byte(actionType); Cmd4 option buttons pass their server-supplied type here" },
+      "WorldScene_OptionHandler":{ "binary": "FUN_00413790", "role": "Main scene action-button handler: Cmd4 option id 0x100 is local Help; ids 0x101..0x105 send cmd 5 with the server-supplied option type" },
+      "WorldScene_MouseHandler": { "binary": "FUN_00410b70", "role": "Main scene mouse-selection handler; fixed scene button offset 4 also sends cmd 5 action 4" },
+      "WorldScene_KeyHandler":   { "binary": "FUN_00414220", "role": "Main scene keyboard/button handler; button id 1 sends cmd 5 action 4, id 0x131 opens Options" },
+      "WorldScene_LocationAction": { "binary": "FUN_00419390", "role": "Main scene location-icon handler; sends client cmd 23 with one byte selecting one of four location slots; values 0..3 cached target, 4..7 uncached target" },
+      "Picture_ReadFromFile":   { "binary": "FUN_00428770", "role": "Read generic picture/resource blob after the map room table" }
     },
     "data": {
       "g_lobby_DispatchTable":   { "binary": "DAT_00470198",    "role": "Lobby command function-pointer table (0x4C = 76 entries)" },

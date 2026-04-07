@@ -27,8 +27,8 @@ contributors who want to extend or audit the server emulator.
 17. [COMMEG32.DLL — Secondary Connection Protocol (M2 RE)](#17-commeg32dll--secondary-connection-protocol-m2-re)
 18. [Game World Protocol — MPBTWIN.EXE RE](#18-game-world-protocol--mpbtwinexe-re)
 19. [Client v1.23 Migration Notes](#19-client-v123-migration-notes)
-20. [Methodology](#19-methodology)
-21. [MEC File Binary Format](#20-mec-file-binary-format)
+20. [MEC File Binary Format](#20-mec-file-binary-format)
+21. [MAP File Leading Room Table](#21-map-file-leading-room-table)
 
 ---
 
@@ -82,7 +82,7 @@ All types confirmed from the `switch()` dispatch table in `Aries_RecvDispatch` (
 | `0x01` | S→C | `CONN_CLOSE` | Server closes connection gracefully |
 | `0x02` | S→C | `CONN_ERROR` | Server signals error |
 | `0x03` | S→C | `REDIRECT` | Redirect to game-world server; 120-byte payload |
-| `0x05` | Both | `KEEPALIVE` | Client sends; server echoes back identical packet |
+| `0x05` | Both | `KEEPALIVE` | Server pings; client replies with the same type |
 | `0x15` | C→S | `LOGIN` | Client login packet, ~325 + pwLen bytes |
 | `0x16` | S→C | `LOGIN_REQUEST` | Server sends immediately on connect; empty payload |
 | `0x1a` | S→C | `TEXT_MSG` | Displays fatal error dialog; client quits |
@@ -363,7 +363,13 @@ Full table: 0x4C (76) entries × 4 bytes = 304 bytes.  Confirmed non-null entrie
 
 | Index | Binary Address | Notes |
 |:---:|---------|------|
-| 0x48 | `FUN_00406140` | Receives mech stats from server; fills mech data arrays |
+| 0x40 | `FUN_00401390` | Seeds/creates a remote combatant slot: reads server player id, strings, mech id, then allocates/fills the per-player mech structures |
+| 0x41 | `FUN_00401820` | Strongest current position-sync handler: reads player id, X/Y/Z, rotation/heading-ish bytes, and speed/throttle-ish byte into per-player motion fields |
+| 0x44 | `FUN_00402380` | Combat effect/attack update: reads source/target ids plus angle and X/Y/Z fields, then calls effect helpers |
+| 0x45 | `FUN_00402530` | Combat effect/sound/projectile update with X/Y/Z fields and local-distance checks |
+| 0x46 | `FUN_004026D0` | Combat state/animation control; action byte drives animation/flag helper calls |
+| 0x48 | `FUN_00406140` | Local combat scene/self init: loads scene/mech metadata, local callsign/mech strings, origin coordinates, arena counts, and marks combat scene active |
+| 0x49 | `FUN_004022D0` | Stores two scaled short control/aim/offset values into the per-player combat table |
 
 ### Client Command 3 — Client-Ready (CONFIRMED)
 
@@ -1149,6 +1155,22 @@ Combat-only entries (cmd 62–79, only non-null in combat table):
 | 78 | `0x73` | `0x004069E0` |
 | 79 | `0x74` | `0x00402AB0` |
 
+Combat-handler revalidation against the local `MPBTWIN.EXE` on 2026-04-06 gives the
+first useful M7 position-sync lead, but it is **combat-mode only** and should not be
+copied into M4/M5 world navigation:
+
+- RPS/world `cmd 3` remains `Cmd3_TextBroadcast`. In combat mode, the same handler
+  reads and XOR-processes an argument, but it is not the primary position packet.
+- Combat `cmd 65` / wire `0x66` (`FUN_00401820`) is the strongest local match for the
+  third-party "Type P" position note: `player-id`, encoded X/Y as 3-byte integers,
+  encoded Z as a 2-byte integer, then four 1-byte rotation/speed fields.
+- The local X/Y offset is `0x18e4258` (decimal `26002008`), not RazorWing's documented
+  `26100312`; rotation/speed scaling also differs from the simplified external notes.
+- Combat `cmd 64` (`FUN_00401390`) seeds remote combatants, `cmd 72` (`FUN_00406140`)
+  seeds the local combat scene/self, `cmd 68`/`69` are effect/projectile-like updates,
+  `cmd 70` drives combat animation/state, and `cmd 73` stores two scaled per-player
+  control/aim/offset values.
+
 ### World Handshake Sequence — CONFIRMED
 
 After the client receives the REDIRECT packet and `Aries_Connect` succeeds:
@@ -1201,13 +1223,13 @@ Frame-reading helpers referenced below:
 | 1 | `0x22` | `FUN_0040C030` | `Cmd1_PingAck` | Reads one seq byte; if it matches `g_expectedSeq` (`DAT_004e2c44`): records RTT elapsed (`FUN_004292b0`) and advances the round-robin seq slot (`FUN_00429380`). Silently drops frame on seq mismatch. |
 | 2 | `0x23` | `FUN_0040C060` | `Cmd2_PingRequest` | If `g_expectedSeq ≠ 0`: records current RTT, then calls `FUN_00429280(connObj, newSeq)` which sets a new expected-ack value, fires `COMMEG32.Ordinal_7` to send the reply packet to the server, and resets the RTT timer. Server is requesting a latency probe reply. |
 | 3 | `0x24` | `FUN_0040C190` | `Cmd3_TextBroadcast` | **Corrects §8 label.** In RPS mode: `Frame_ReadString` → display received text in chat scroll-window (`DAT_00472c90`); only effective after `g_chatReady` (`DAT_00472c84 ≠ 0`). In combat mode: reads data and XOR-processes it. Server sends a plain text announcement to the client. |
-| 4 | `0x25` | `FUN_00414B70` | `Cmd4_SceneInit` | Large UI-initialization command (~2836 bytes). Reads: 1-byte session-flags (bit `0x10` = has-opponents, `0x20` = clear-arena-data), 1-byte player-slot, 1-byte player-ID; optionally up to 4 opponent entries (type byte + ID byte each) then player callsign and scene name strings; 1-byte arena-option count then option strings. Creates main game window and fills arena labels, mech-slot buttons, chat scroll-window, scoreboard boxes. Sets `g_chatReady = 1` at completion. This is the principal "enter arena" command. |
+| 4 | `0x25` | `FUN_00414B70` | `Cmd4_SceneInit` | Large UI-initialization command (~2836 bytes). Reads: `type1` context/scene id, 1-byte session flags (`0x10` = read scene slot/name payload, `0x20` = clear cached scene table, low nibble enables four scene-location icons), 1-byte current client scene slot, and `type1` current scene visual id; optionally reads four target scene-slot bytes plus four target visual ids, then callsign and scene name strings; finally reads a 1-byte scene-option count plus option type/string pairs. Creates the main world window, chat scroll-window, location icons, action buttons, and status boxes. Sets `g_chatReady = 1` at completion. Earlier docs described the four slots as opponent/mech entries; `FUN_00419390` confirms they are also the ordinary scene location-icon targets for world navigation. |
 | 5 | `0x26` | `FUN_0040C2F0` | `Cmd5_CursorNormal` | Calls `FUN_00433ec0` → loads `IDC_ARROW` cursor (`0x7f00`), clears `DAT_00474d00`. Server signals "loading complete; restore normal cursor". |
 | 6 | `0x27` | `FUN_0040C300` | `Cmd6_CursorBusy` | Calls `FUN_00433ef0` → loads `IDC_WAIT` cursor (`0x7f02`), sets `DAT_00474d00 = 1`. Server signals "processing; show hourglass". |
 | 7 | `0x28` | `FUN_004112B0` | `Cmd7_ParseMenuDialog` | Menu dialog renderer — documented in §11. |
 | 8 | `0x29` | `FUN_00413960` | `Cmd8_SessionData` | Reads connection object (`FUN_0040d4c0`), then `Frame_ReadArg` into `DAT_0048a070`. Passes buffer to `FUN_00413800(conn, buf, NULL)` — loads per-session binary data (mech load-out / team assignment). Updates two input-handler jump-table entries. |
 | 9 | `0x2a` | `FUN_0040C310` | `Cmd9_CharacterNameAllegiancePrompt` | Reads sentinel byte; if `0x01`: reads a 1-byte count, then that many `Frame_ReadArg` string entries into `DAT_004de000` (40-byte slots). Earlier notes mislabelled this as a room-player list. A tighter `FUN_00405840` xref sweep shows the handler calls `FUN_0042da40`, which opens `FUN_00413800(0x3fd, FUN_00405840(5), NULL)` using local `MPBT.MSG[5]` = `"Enter your character's name"`. When the player presses Enter, `FUN_00413a60` copies the typed text into `DAT_004ddfd0` and calls `FUN_0042daa0`, which opens a numbered type-3 selector titled with `FUN_00405840(6)` = `"Choose your allegiance:"` and formats each server-supplied entry as `"%d. %s"`. The numbered selection callback `FUN_0042dbf0` emits outbound bytes `0x09, 0x01, <DAT_004ddfd0 string>, <selected-index byte>` via `FUN_0040d400`, then flushes. This is now the strongest candidate for the original first-login callsign + allegiance flow; it is not the passive room-entry roster sync and not the KP5/global all-roster path. |
-| 10 | `0x2b` | `FUN_0040C370` | `Cmd10_RoomPresenceSync` | Clears the live room roster table at `DAT_004e1870`, then reads a batch of roster records into that same structure used by `Cmd11`/`Cmd12`/`Cmd13`: first record is `type4 session-id`, `byte status`, `Frame_ReadArg callsign`; subsequent records repeat `type4 session-id`, `byte status`, `Frame_ReadArg callsign` until a sentinel status byte `0x54` is read after a final ignored `type4`. The first record selects roster index `0` via `DAT_004e2608 = 0`. Status bytes are stored as `status - 5`, which matches `Cmd13` using zero for a normal present occupant. After seeding the table, the handler appends a natural-language occupant list to the world chat window using message ids `0x0f`..`0x12`. This is the strongest current candidate for the initial same-room presence sync that should precede later incremental `Cmd13` arrivals and `Cmd11` status/leave updates. |
+| 10 | `0x2b` | `FUN_0040C370` | `Cmd10_RoomPresenceSync` | Clears the live room roster table at `DAT_004e1870`, then reads a batch of roster records into that same structure used by `Cmd11`/`Cmd12`/`Cmd13`: first record is `type4 session-id`, `byte status`, `Frame_ReadArg callsign`; subsequent records repeat `type4 session-id`, `byte status`, `Frame_ReadArg callsign` until a sentinel status byte `0x54` is read after a final ignored `type4`. The first record selects roster index `0` via `DAT_004e2608 = 0`. Status bytes are stored as `status - 5`, which matches `Cmd13` using zero for a normal present occupant. After seeding the table, the handler appends a natural-language occupant list to the world chat window using message ids `0x0f`..`0x12`. This is the strongest current candidate for the initial same-room presence sync that should precede later incremental `Cmd13` arrivals and `Cmd11` status/leave updates. Hybrid GUI+socket validation on 2026-04-06 confirmed a socket client entering while `MPBTWIN.EXE` was already in-world received `Cmd10` entries for itself and the live GUI occupant (`Pilot_mnnw67n7`). |
 | 11 | `0x2c` | `FUN_0040C6C0` | `Cmd11_PlayerEvent` | Reads 4-byte session-ID + 1-byte status code + callsign string. Finds/creates roster slot via `FUN_0040c590`. Status: `0` removes the occupant from the live room table; `1–4` format the status through `DAT_00472a34[status]`; `0x54` is a special terminal/update case; and other values store `status - 5` into the same `DAT_004e1872` presence-state field used by the room roster UI. The social-room roster path (`FUN_00412e60`) groups that field as `0 = Standing`, `1..7 = Booth 1..7`, so wire statuses `5..12` are the concrete standing/booth states used by current world-room presence work. Appends a formatted event line to chat. |
 | 12 | `0x2d` | `FUN_0040C5C0` | `Cmd12_PlayerRename` | Reads 4-byte session-ID + new callsign string. Looks up existing roster slot, formats "{old} is now {new}" message (MSG `0x13`), overwrites stored name in player table, appends to chat. |
 | 13 | `0x2e` | `FUN_0040C920` | `Cmd13_PlayerArrival` | Reads 4-byte session-ID + callsign string. Searches player table for matching session-ID (update) or first free slot (insert). Sets active flag, stores callsign, resets timer field to 0, appends "{callsign} entered" line (MSG `0x19`) to chat. |
@@ -1318,6 +1340,40 @@ Additional world-client senders confirmed after the first real-client M4 pass:
 - `Cmd14_PersonnelRecord` is paged. Its dialog callback `FUN_00415690` closes on Enter/ESC, but Space emits `Cmd7(0x95, 2)` before flushing. This is the strongest current candidate for the follow-up `More` request that advances to a second personnel-record page.
 - Follow-up trace on `Cmd7(0x95, 2)`: no separate second-page reply handler has been identified so far. `FUN_00415690` is only installed by `Cmd14_PersonnelRecord`, and this pass did not uncover another world-command parser dedicated to a later personnel page. Strongest current inference: the server answers `Cmd7(0x95, 2)` with another `Cmd14_PersonnelRecord` page carrying a different set of six lines, rather than switching to a distinct command code.
 - The only `Cmd48`-specific hard-coded `list_id` branch found so far is `0x2e`, which installs modal close boilerplate (`FUN_00411e00`) rather than a personal-inquiry action split. Inference: if KP5/all-roster really reuses `Cmd48`, the first row pick likely goes straight back to the server as `Cmd7(list_id, item_id + 1)`, and any later `ComStar vs personnel` split is either server-driven or implemented as a separate local follow-up packet sequence.
+- Two-GUI validation follow-up on 2026-04-07: separate sandbox directories under
+  `C:\Users\moose\mpbt-client-a` and `C:\Users\moose\mpbt-client-b` avoid the shared
+  `play.pcgi` deletion/race. Client A consumed its launch file, authenticated as
+  `GuiA_0407`, redirected to world, and received `Cmd4`/`Cmd10` normally with
+  callsign `PilotA_0407`. Initial Client B attempts did not reach the server: renamed
+  executables tripped the startup check `MPBTWIN string not found in command line`,
+  while the in-place `MPBTWIN.EXE` copy tripped
+  `MPBT Fatal Error (SetDisplayMode): Action not supported` with Client A active.
+  A runtime-only sandbox-B patch then made the second GUI reach the server: patch
+  `FUN_00428f60` at VA `00428f88` / file offset `0x28388` from `74` to `EB` to bypass
+  the `FindWindowA("MPBattleTech", "Multiplayer BattleTech")` single-instance guard,
+  and patch `FUN_00403250` at VA `00403351` / file offset `0x2751` from `74` to `EB`
+  to continue past the second client's `SetDisplayMode(640,480,8)` failure. With those
+  two patches applied only to `C:\Users\moose\mpbt-client-b\MPBTWIN.EXE`, Client B
+  consumed `play.pcgi`, authenticated as `GuiB_0407`, redirected to world as
+  `PilotB_0407`, received `Cmd4`, received `Cmd10 RoomPresenceSync (2 entries)`, and
+  notified Client A's room of arrival. This is a test harness workaround, not a
+  production client patch recommendation. The repeatable helper for applying this to
+  a local sandbox copy is `tools/patch-mpbtwin-two-gui.ps1`.
+- Follow-up on the 120-second GUI session timeouts: COMMEG32.DLL
+  `FUN_100014e0` case `5` confirms server-initiated ARIES `Msg.KEEPALIVE` (`0x05`)
+  is the right transport-level ping. The client responds by building a type-`0x05`
+  packet with `FUN_10003600(..., 5)` / `FUN_10003680(...)` and writing it back on
+  the socket. The server now sends configurable keepalive pings via
+  `ARIES_KEEPALIVE_INTERVAL_MS` and keeps `SOCKET_IDLE_TIMEOUT_MS` configurable for
+  long real-GUI validation runs.
+- Real two-GUI keepalive validation on 2026-04-07: with Client B's sandbox copy
+  patched as above and the server running with the default 30-second
+  `ARIES_KEEPALIVE_INTERVAL_MS`, both GUI clients stayed connected past the old
+  120-second idle cutoff. The server log showed repeated world `Msg.KEEPALIVE`
+  pings and client type-`0x05` responses for both `PilotA_0407` and `PilotB_0407`,
+  with no `session timed out` close. During the same run Client B emitted a real
+  world `cmd-4` text frame (`Hello! Is it me you're looking for?!`), which the
+  server parsed as room-local text from `PilotB_0407`.
 
 ---
 
@@ -1520,6 +1576,43 @@ configuration) in detail — not covered in this file because the server does no
 implement COMMEG32-level timing; see `commeg32_message_types.md` in that repo for the
 full `ParseProtocolMessage` switch-table and timing histogram structures.
 
+Fresh audit on 2026-04-06 against `RazorWing/solaris` `main` at commit
+`bcf5913` (`Solaris Prototype Server`) confirms the repo is small and source-only:
+`solaris_server.py` plus four RE notes (`mpbtwin_protocol.md`, `mpbtwin_state.md`,
+`commeg32_connection_analysis.md`, `commeg32_message_types.md`). Two caveats matter
+before importing anything else:
+
+- The RazorWing `MPBTWIN.EXE` hash (`MD5 60c8febf6b4e0a319367e3c6557d705e`) does not
+  match the local target (`MD5 8735070e8f3eaa387d43db2223bca5cc`, SHA256
+  `118dd4267e5bcfa762f511b8f7488afd03d090d48653fdffaf327d02effe13df`). Its COMMEG32
+  hash also differs from ours (`RazorWing MD5 fdd292992368094a3f2da589c5fd1da3` vs
+  local `MD5 6b6694d4647d61afcc018bd5058bb1ca`). Treat handler addresses and command
+  table semantics as hints only.
+- Their direct-launch path (`MPBTWIN.EXE /S=127.0.0.1:2001`) is not the same as our
+  `play.pcgi`/INITAR/lobby/REDIRECT flow. It is still useful as a possible future
+  direct-connect test harness, especially for the `MMC` combat banner path, but it
+  bypasses the account and world-launch context that our server now emulates.
+
+Useful follow-up leads from the fresh audit:
+
+- The COMMEG timing model is the main unexplored transport-level value: type `28`
+  configures `TargetTime`, `SendFreq`, and `PingFreq`; type `27` records ping RTT; type
+  `29` sends a 168-byte latency histogram report. This is not needed for current M3/M4
+  stability, but it is the best starting point if later long-running GUI sessions expose
+  timing warnings or disconnects.
+- `commeg32_message_types.md` also documents type `26` as UI text/error delivery via
+  WM `0x7F6`. Our server should continue avoiding `Msg.TEXT_MSG` for normal gameplay
+  because current local RE already shows it behaves like a fatal/error text path, not
+  a chat primitive.
+- The RazorWing `mpbtwin_protocol.md` combat/position command notes (`Type P/D/S`,
+  position offset `26100312`, rotation multiplier `182`) may be useful for M5/M7 RE,
+  but only after revalidating the corresponding handlers in our binary. In our current
+  RPS/world table, cmd `3` is already proven to be text broadcast, not position sync.
+  A follow-up Ghidra pass against the local binary found the closest position-sync
+  match in the **combat** table at cmd `65` / wire `0x66` (`FUN_00401820`), with a
+  different X/Y offset (`0x18e4258`) and different rotation/speed scaling from the
+  RazorWing note. Treat this as an M7 combat lead, not an M5 world-navigation packet.
+
 ### RE Process
 
 1. Open `COMMEG32.DLL` in Ghidra.  Run auto-analysis.
@@ -1682,6 +1775,142 @@ cross-referencing the weapon global table at `DAT_00477b58` (stride `0x5C`, 0-in
 mech string table at `MPBT.MSG` offset `(mech_id + 0x3AE) * 2` (§15).  The loader
 uses this name both to construct the filename `mechdata\<name>.MEC` and as the
 encryption seed source.
+
+---
+
+## 21. MAP File Leading Room Table
+
+**Source**: `IS.MAP`, `SOLARIS.MAP` (local licensed installation; not committed)
+**Parser**: `src/data/maps.ts`, runnable via `npm run map:dump -- --rooms`
+**Client loader**: `Map_LoadFile` (`FUN_004100c0`) via `Map_InitSpace` (`FUN_00410340`)
+
+The earlier map-file note that treated the first bytes as a room record was off
+by one field. Both local map files start with a little-endian `u16` record count,
+followed by exactly that many leading room records. The trailing bytes after the
+leading table are still not decoded; they may contain palette, graphics, or
+topology data.
+
+Leading table layout:
+
+```
+[u16 room_record_count]
+repeat room_record_count times:
+  [u16 room_id]
+  [u16 flags]
+  [u16 x1] [u16 y1] [u16 x2] [u16 y2]
+  [u16 aux0] [u16 aux1] [u16 aux2]
+  [u16 name_len_including_nul] [name bytes]
+  [u16 desc_len_including_nul] [description bytes]
+```
+
+Local parser validation on 2026-04-07:
+
+| File | Count | Parsed room IDs | First / last | Room-table end | Trailing bytes |
+|------|------:|-----------------|--------------|---------------:|---------------:|
+| `IS.MAP` | 271 | `1-271` | `1 Luthien` / `271 New Westin` | `0x4F28` | 19771 |
+| `SOLARIS.MAP` | 32 | `146-171`, `1-6` | `146 Solaris Starport` / `6 Black Hills Sector` | `0x2123` | 180826 |
+
+Notable correction: the local `IS.MAP` is not only rooms `1-145`; its leading
+room table covers the full global namespace through `271`, including Solaris
+entries. The local `SOLARIS.MAP` leading table is a 32-row Solaris subset plus
+six sector rows, followed by a much larger undecoded section.
+
+The current parser intentionally preserves `flags` and the three auxiliary
+fields as numeric values. Their semantics are not yet confirmed. The next M5
+RE step is to identify where exits and movement topology live: either in the
+trailing map sections or in a separate client-side table.
+
+Ghidra follow-up on 2026-04-07 confirms the runtime loader shape:
+
+- `Map_LoadFile` reads the record count, allocates `count * 0x1a` bytes, and
+  converts each variable-length on-disk room row into a fixed 26-byte in-memory
+  record. String pointers are stored at offsets `+0x12` (name) and `+0x16`
+  (description).
+- The first 18 bytes of each in-memory record are copied directly from disk.
+  That matches the parser fields: `room_id`, `flags`, four coordinate words,
+  and three auxiliary words.
+- After the room table, `Map_LoadFile` calls `Picture_ReadFromFile`
+  (`FUN_00428770`) and stores the returned pointer at map object offset `+8`.
+  That means the large trailing section is currently better treated as a map
+  picture/resource blob, not an exit graph, until proven otherwise.
+- `Map_InitSpace` loads `IS.MAP` when `DAT_00472a54 == 0`, filters out room IDs
+  `0x92..0xAB` (`146..171`) while building its sorted list, and sorts the
+  remaining pointers by `*(byte *)(record + 2)` then case-insensitive room name.
+  This supports the observed split: `IS.MAP` carries the global location table,
+  while the Solaris arena subset is handled specially.
+
+### 21.1 Map UI Commands
+
+Two server command handlers now have concrete map semantics:
+
+| Cmd | Wire | Handler | Semantics |
+|-----|------|---------|-----------|
+| 40 | `0x49` | `MapOpenInnerSphere` (`0x0040ecb0`) | Reads `type1 contextId`, `type1 currentRoomId`, `type4 value/cost`, then opens the Inner Sphere map. |
+| 43 | `0x4c` | `MapOpenSolaris` (`0x0040eed0`) | Reads `type1 contextId`, `type1 currentRoomIdPlusOne`, then 26 `type1` values used to populate Solaris room/sector counters before opening the Solaris map. |
+
+The context id controls local button text / behavior. Confirmed cases from the
+handler conditionals and `MPBT.MSG`:
+
+| Context | Observed UI labels |
+|---------|--------------------|
+| `0x08` | `Travel`, `Planet`, `Cancel`; shows `Wealth`, `Cost`, `Tonnage` |
+| `0x03`, `0x6c`, `0x6f`, `0x78` | `Ship`, `Planet`, `Cancel`; shows cost/wealth fields |
+| `0x67` | `Attack`, `Planet`, `Cancel` |
+| other Inner Sphere contexts | `Info`, `Planet`, `Done` |
+| Solaris context `0xc6` | `Travel`, `Cancel` |
+
+When the user confirms or cancels from either map, the client sends
+`FUN_0040d360(contextId, selection)`, which emits client command `10`:
+
+```
+cmd 10 args: [type1 contextId] [type4 selection]
+selection == 0: cancel / close
+selection > 0: selected room id + 1
+```
+
+The follow-up branch now uses successful map replies to change server-side room
+state and send a full scene refresh sequence for the destination:
+`Cmd6 -> Cmd4 -> Cmd10 -> Cmd3 -> Cmd5`. The `Cmd4` refresh is important because
+it updates the visible room title, scene location icons, and action buttons
+instead of only changing backend presence.
+
+Engineering follow-up on this branch adds a prototype trigger and state update:
+typing `/map` or `/travel` into the world chat sends `Cmd43` with Solaris
+travel context `0xc6`; a returned `cmd 10` selection moves the session into a
+server-side `map_room_<roomId>` grouping, sends the scene refresh sequence above,
+and notifies occupants in the target room with `Cmd13`. This is a validation
+bridge, not yet the authentic terminal or tram request path.
+
+Follow-up trace of the world scene UI found a more authentic entry point:
+`Cmd4_SceneInit` action buttons carry a server-supplied `type` byte, and
+`FUN_00413790` sends client `cmd 5` with that byte through `FUN_0040d2d0`.
+Real-GUI validation on 2026-04-07 corrected one detail: button id `0x100` is
+always intercepted by `FUN_00413790` as the local Help action (`FUN_00404450`),
+so the first Cmd4 option cannot be used for server round-trips. The branch now
+emits a placeholder `Help` option first and puts `Travel` in the second slot
+(`0x101`) with type `4`; that is the earliest option slot expected to send
+client `cmd 5 / action 4` and open the same `Cmd43` Solaris travel map. This
+still does not prove the final terminal/tram trigger, but it uses the client's
+normal scene-action button path instead of chat text.
+
+Real GUI follow-up in the same session confirmed the corrected layout end to
+end: `Help` rendered in the first slot, `Travel` rendered in the second slot,
+manual Travel click emitted client `cmd 5 / action 4`, the server replied with
+`Cmd43` (`context=0xc6`, current room 146), the map selection emitted client
+`cmd 10` with `selection=148` (`selectedRoomId=147`), and the refreshed scene
+displayed `Travel complete: Ishiyama Arena.` plus the room label `Ishiyama
+Arena`.
+
+Adjacent scene location icons take a different path: `FUN_00419390` sends
+client `cmd 23` (`0x38` wire command) with one encoded byte selecting one of
+four location slots. Values `0..3` select slots whose target scene is already
+cached on the client; values `4..7` select the same slots but indicate the
+target scene was not cached locally yet. The branch now parses this as
+`slot = action & 3`, looks up the server-advertised exit for the current room,
+updates `map_room_<roomId>`, and sends the same `Cmd6 -> Cmd4 -> Cmd10 -> Cmd3
+-> Cmd5` scene refresh sequence. The provisional topology currently uses valid
+`SOLARIS.MAP` scene indices and conservative neighboring rooms; the full
+authentic exit graph is still unresolved.
 
 ---
 

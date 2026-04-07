@@ -35,7 +35,10 @@ import {
   buildCmd36MessageViewPacket,
   buildMenuDialogPacket,
   parseClientCmd4,
+  parseClientCmd5SceneAction,
+  parseClientCmd10MapReply,
   parseClientCmd21TextReply,
+  parseClientCmd23LocationAction,
   parseClientCmd7,
   verifyInboundGameCRC,
 } from './protocol/game.js';
@@ -45,6 +48,7 @@ import {
   buildCmd11PlayerEventPacket,
   buildCmd13PlayerArrivalPacket,
   buildCmd14PersonnelRecordPacket,
+  buildCmd43SolarisMapPacket,
   buildCmd48KeyedTripleStringListPacket,
   buildCmd4SceneInitPacket,
   buildCmd5CursorNormalPacket,
@@ -55,6 +59,7 @@ import { launchRegistry } from './state/launch.js';
 import { loadMechs } from './data/mechs.js';
 import { Logger } from './util/logger.js';
 import { CaptureLogger } from './util/capture.js';
+import { ARIES_KEEPALIVE_INTERVAL_MS, SOCKET_IDLE_TIMEOUT_MS } from './config.js';
 
 // ── Shared mech catalog (same on-disk data as lobby) ─────────────────────────
 // Loaded once at module import time.  Provides a fallback when a player's
@@ -72,21 +77,64 @@ try {
 /** Mech ID used when the player's launch record is missing. */
 const FALLBACK_MECH_ID = WORLD_MECHS.length > 0 ? WORLD_MECHS[0].id : 0;
 
-// Default arena name shown in the window title.
-const DEFAULT_SCENE_NAME = 'Solaris Arena';
 const WELCOME_TEXT       = 'Welcome to the game world.';
-const DEFAULT_ROOM_ID    = 'world_default_room';
+const DEFAULT_MAP_ROOM_ID = 146; // Solaris Starport
+const SOLARIS_SCENE_ROOMS = [
+  { roomId: 146, name: 'Solaris Starport' },
+  { roomId: 147, name: 'Ishiyama Arena' },
+  { roomId: 148, name: 'Government House' },
+  { roomId: 149, name: 'White Lotus' },
+  { roomId: 150, name: 'Waterfront' },
+  { roomId: 151, name: 'Kobe Slums' },
+  { roomId: 152, name: 'Steiner Stadium' },
+  { roomId: 153, name: 'Lyran Building' },
+  { roomId: 154, name: 'Chahar Park' },
+  { roomId: 155, name: 'Riverside' },
+  { roomId: 156, name: 'Black Throne' },
+  { roomId: 157, name: 'Factory' },
+  { roomId: 158, name: 'Marik Tower' },
+  { roomId: 159, name: 'Allman' },
+  { roomId: 160, name: 'Riverfront' },
+  { roomId: 161, name: 'Wasteland' },
+  { roomId: 162, name: 'Jungle' },
+  { roomId: 163, name: "Chancellor's Quarters" },
+  { roomId: 164, name: 'Middletown' },
+  { roomId: 165, name: 'Rivertown' },
+  { roomId: 166, name: 'Maze' },
+  { roomId: 167, name: 'Davion Arena' },
+  { roomId: 168, name: 'Sortek Building' },
+  { roomId: 169, name: 'Guzman Park' },
+  { roomId: 170, name: 'Marina' },
+  { roomId: 171, name: 'Viewpoint' },
+  { roomId: 1, name: 'International Sector' },
+  { roomId: 2, name: 'Kobe Sector' },
+  { roomId: 3, name: 'Silesia Sector' },
+  { roomId: 4, name: 'Montenegro Sector' },
+  { roomId: 5, name: 'Cathay Sector' },
+  { roomId: 6, name: 'Black Hills Sector' },
+] as const;
+const SOLARIS_ROOM_BY_ID = new Map<number, { roomId: number; name: string; sceneIndex: number }>(
+  SOLARIS_SCENE_ROOMS.map((room, index) => [room.roomId, { ...room, sceneIndex: index }]),
+);
 const ALL_ROSTER_LIST_ID = 0x3F4;
 const INQUIRY_MENU_ID    = 1000;
 const PERSONNEL_LIST_ID  = 0x3F2;
 const PERSONNEL_MORE_ID  = 0x95;
+const SOLARIS_TRAVEL_CONTEXT_ID = 0xC6;
 let nextWorldRosterId    = 1;
+const worldCaptures      = new Map<string, CaptureLogger>();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function send(socket: net.Socket, pkt: Buffer, capture: CaptureLogger, label: string): void {
-  capture.logSend(pkt);
+  capture.logSend(pkt, label);
   socket.write(pkt);
+}
+
+function sendToWorldSession(session: ClientSession, pkt: Buffer, label: string): void {
+  if (session.socket.destroyed || !session.socket.writable) return;
+  worldCaptures.get(session.id)?.logSend(pkt, label);
+  session.socket.write(pkt);
 }
 
 /**
@@ -106,6 +154,47 @@ function getDisplayName(session: ClientSession): string {
   return latin1 || 'Pilot';
 }
 
+function mapRoomKey(roomId: number): string {
+  return `map_room_${roomId}`;
+}
+
+function getSolarisRoomInfo(roomId: number) {
+  return SOLARIS_ROOM_BY_ID.get(roomId) ?? SOLARIS_ROOM_BY_ID.get(DEFAULT_MAP_ROOM_ID)!;
+}
+
+function getSolarisSceneIndex(roomId: number): number {
+  return getSolarisRoomInfo(roomId).sceneIndex;
+}
+
+function getSolarisRoomName(roomId: number): string {
+  return getSolarisRoomInfo(roomId).name;
+}
+
+function uniqueRoomIds(roomIds: number[]): number[] {
+  return [...new Set(roomIds)].filter(roomId => SOLARIS_ROOM_BY_ID.has(roomId));
+}
+
+function getSolarisRoomExits(roomId: number): number[] {
+  if (roomId === 146) return [147, 152, 157, 162];
+
+  const index = SOLARIS_SCENE_ROOMS.findIndex(room => room.roomId === roomId);
+  const room = getSolarisRoomInfo(roomId);
+  const exits = [146];
+
+  if (index > 0) exits.push(SOLARIS_SCENE_ROOMS[index - 1].roomId);
+  if (index >= 0 && index < SOLARIS_SCENE_ROOMS.length - 1) exits.push(SOLARIS_SCENE_ROOMS[index + 1].roomId);
+
+  // Sector rows are the last six records in SOLARIS.MAP; each combat/social
+  // room's low flags byte points at that row. This is still a topology
+  // placeholder, but it keeps exits within valid client scene indices.
+  if (room.roomId >= 147 && room.roomId <= 171) {
+    const sectorOffset = Math.floor((room.roomId - 147) / 5);
+    exits.push(SOLARIS_SCENE_ROOMS[26 + Math.min(sectorOffset, 5)].roomId);
+  }
+
+  return uniqueRoomIds(exits).filter(exit => exit !== roomId).slice(0, 4);
+}
+
 function getPresenceStatus(session: ClientSession): number {
   return session.worldPresenceStatus ?? 5;
 }
@@ -118,9 +207,11 @@ function getComstarId(session: ClientSession): number {
 }
 
 function getPresenceLocation(session: ClientSession): string {
+  const roomId = session.worldMapRoomId;
   const status = getPresenceStatus(session);
-  if (status <= 5) return 'Standing';
-  if (status <= 12) return `Booth ${status - 5}`;
+  const room = roomId === undefined ? 'world' : getSolarisRoomName(roomId);
+  if (status <= 5) return `Standing in ${room}`;
+  if (status <= 12) return `Booth ${status - 5} in ${room}`;
   return `Status ${status}`;
 }
 
@@ -174,7 +265,7 @@ function buildAllRosterEntries(players: PlayerRegistry) {
     .map(other => ({
       itemId: getComstarId(other),
       col1:   getDisplayName(other),
-      col2:   DEFAULT_SCENE_NAME,
+      col2:   getSolarisRoomName(other.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID),
       col3:   getPresenceLocation(other),
     }));
 }
@@ -184,7 +275,7 @@ function buildPersonnelRecordLines(target: ClientSession, page: number): string[
     return [
       'Rank     : Warrior',
       `House    : ${target.allegiance ?? 'Unaffiliated'}`,
-      `Sector   : ${DEFAULT_SCENE_NAME}`,
+      `Sector   : ${getSolarisRoomName(target.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID)}`,
       `Location : ${getPresenceLocation(target)}`,
       'Status   : Online',
       `ComStar  : ${getComstarId(target)}`,
@@ -208,6 +299,82 @@ function buildComstarDeliveryText(senderName: string, text: string): string {
     trimmed = trimmed.slice(0, -1);
   }
   return trimmed;
+}
+
+function sendSolarisTravelMap(
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const currentRoomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
+  connLog.info('[world] sending Cmd43 Solaris travel map: currentRoomId=%d', currentRoomId);
+  send(
+    session.socket,
+    buildCmd43SolarisMapPacket(
+      {
+        contextId: SOLARIS_TRAVEL_CONTEXT_ID,
+        currentRoomId,
+      },
+      nextSeq(session),
+    ),
+    capture,
+    'CMD43_SOLARIS_MAP',
+  );
+}
+
+function buildSceneInitForSession(session: ClientSession) {
+  const roomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
+  const sceneIndex = getSolarisSceneIndex(roomId);
+  const exits = getSolarisRoomExits(roomId);
+  const exitMask = exits.reduce((mask, _roomId, slot) => mask | (1 << slot), 0);
+
+  return buildCmd4SceneInitPacket(
+    {
+      sessionFlags:     0x30 | exitMask,
+      playerScoreSlot:  sceneIndex,
+      playerMechId:     sceneIndex,
+      opponents:        exits.map(exitRoomId => {
+        const exitSceneIndex = getSolarisSceneIndex(exitRoomId);
+        return { type: exitSceneIndex, mechId: exitSceneIndex };
+      }),
+      callsign:         getDisplayName(session),
+      sceneName:        getSolarisRoomName(roomId),
+      // The client special-cases the first Cmd4 option button (0x100) as local Help.
+      // Put server actions at 0x101+ so FUN_00413790 emits cmd 5 with the type byte.
+      arenaOptions:     [
+        { type: 0, label: 'Help' },
+        { type: 4, label: 'Travel' },
+      ],
+    },
+    nextSeq(session),
+  );
+}
+
+function sendSceneRefresh(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+  message: string,
+): void {
+  send(session.socket, buildCmd6CursorBusyPacket(nextSeq(session)), capture, 'CMD6_BUSY');
+  send(session.socket, buildSceneInitForSession(session), capture, 'CMD4_SCENE_REFRESH');
+
+  const roomPresenceEntries = currentRoomPresenceEntries(players, session);
+  connLog.info('[world] sending Cmd10 RoomPresenceSync (%d entries)', roomPresenceEntries.length);
+  send(
+    session.socket,
+    buildCmd10RoomPresenceSyncPacket(roomPresenceEntries, nextSeq(session)),
+    capture,
+    'CMD10_ROOM_SYNC',
+  );
+  send(
+    session.socket,
+    buildCmd3BroadcastPacket(message, nextSeq(session)),
+    capture,
+    'CMD3_TRAVEL_COMPLETE',
+  );
+  send(session.socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
 }
 
 function sendAllRosterList(
@@ -348,17 +515,15 @@ function handleComstarTextReply(
     clean,
   );
 
-  if (!target.socket.destroyed) {
-    // Cross-session write: use target's socket directly rather than the sender's
-    // CaptureLogger, which belongs to a different session.
-    target.socket.write(
-      buildCmd36MessageViewPacket(
-        getComstarId(session),
-        buildComstarDeliveryText(senderName, clean),
-        nextSeq(target),
-      ),
-    );
-  }
+  sendToWorldSession(
+    target,
+    buildCmd36MessageViewPacket(
+      getComstarId(session),
+      buildComstarDeliveryText(senderName, clean),
+      nextSeq(target),
+    ),
+    'CMD36_COMSTAR_DELIVERY',
+  );
   send(
     session.socket,
     buildCmd3BroadcastPacket(ack, nextSeq(session)),
@@ -419,8 +584,10 @@ function updateRoomPresenceStatus(
     ) {
       continue;
     }
-    other.socket.write(
+    sendToWorldSession(
+      other,
       buildCmd11PlayerEventPacket(session.worldRosterId, status, callsign, nextSeq(other)),
+      'CMD11_STATUS_UPDATE',
     );
   }
 
@@ -473,10 +640,16 @@ function handleWorldTextCommand(
   session: ClientSession,
   text: string,
   connLog: Logger,
+  capture: CaptureLogger,
 ): void {
   const clean = text.replace(/\x1b/g, '?').trim();
   if (clean.length === 0) {
     connLog.debug('[world] cmd-4 text ignored (empty)');
+    return;
+  }
+
+  if (clean.toLowerCase() === '/map' || clean.toLowerCase() === '/travel') {
+    sendSolarisTravelMap(session, connLog, capture);
     return;
   }
 
@@ -493,8 +666,105 @@ function handleWorldTextCommand(
       continue;
     }
 
-    other.socket.write(buildCmd3BroadcastPacket(line, nextSeq(other)));
+    sendToWorldSession(other, buildCmd3BroadcastPacket(line, nextSeq(other)), 'CMD3_CHAT_FANOUT');
   }
+}
+
+function handleMapTravelReply(
+  players: PlayerRegistry,
+  session: ClientSession,
+  contextId: number,
+  selection: number,
+  selectedRoomId: number | undefined,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  if (selection === 0) {
+    connLog.info('[world] cmd-10 map reply: context=%d cancel', contextId);
+    return;
+  }
+
+  if (selectedRoomId === undefined) {
+    connLog.warn('[world] cmd-10 map reply missing selected room: context=%d selection=%d', contextId, selection);
+    return;
+  }
+
+  const oldRoomId = session.roomId;
+  const newRoomId = mapRoomKey(selectedRoomId);
+  connLog.info(
+    '[world] cmd-10 map reply: context=%d selection=%d selectedRoomId=%d',
+    contextId,
+    selection,
+    selectedRoomId,
+  );
+
+  if (oldRoomId === newRoomId) {
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket(`Already at room ${selectedRoomId}.`, nextSeq(session)),
+      capture,
+      'CMD3_TRAVEL_ALREADY_THERE',
+    );
+    return;
+  }
+
+  notifyRoomDeparture(players, session, connLog);
+  session.roomId = newRoomId;
+  session.worldMapRoomId = selectedRoomId;
+  session.worldPresenceStatus = 5;
+
+  sendSceneRefresh(
+    players,
+    session,
+    connLog,
+    capture,
+    `Travel complete: ${getSolarisRoomName(selectedRoomId)}.`,
+  );
+  notifyRoomArrival(players, session, connLog);
+}
+
+function handleLocationAction(
+  players: PlayerRegistry,
+  session: ClientSession,
+  slot: number,
+  targetCached: boolean,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const currentRoomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
+  const exits = getSolarisRoomExits(currentRoomId);
+  const targetRoomId = exits[slot];
+  if (targetRoomId === undefined) {
+    connLog.warn('[world] cmd-23 location action has no exit: room=%d slot=%d cached=%s', currentRoomId, slot, targetCached);
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket('There is no exit in that direction.', nextSeq(session)),
+      capture,
+      'CMD3_LOCATION_NO_EXIT',
+    );
+    return;
+  }
+
+  connLog.info(
+    '[world] cmd-23 location action: room=%d slot=%d cached=%s -> room=%d',
+    currentRoomId,
+    slot,
+    targetCached,
+    targetRoomId,
+  );
+
+  notifyRoomDeparture(players, session, connLog);
+  session.roomId = mapRoomKey(targetRoomId);
+  session.worldMapRoomId = targetRoomId;
+  session.worldPresenceStatus = 5;
+  sendSceneRefresh(
+    players,
+    session,
+    connLog,
+    capture,
+    `Arrived at ${getSolarisRoomName(targetRoomId)}.`,
+  );
+  notifyRoomArrival(players, session, connLog);
 }
 
 function notifyRoomArrival(
@@ -513,8 +783,10 @@ function notifyRoomArrival(
     ) {
       continue;
     }
-    other.socket.write(
+    sendToWorldSession(
+      other,
       buildCmd13PlayerArrivalPacket(session.worldRosterId, callsign, nextSeq(other)),
+      'CMD13_ARRIVAL',
     );
   }
   connLog.info('[world] notified room of arrival: rosterId=%d callsign="%s"', session.worldRosterId, callsign);
@@ -536,8 +808,10 @@ function notifyRoomDeparture(
     ) {
       continue;
     }
-    other.socket.write(
+    sendToWorldSession(
+      other,
       buildCmd11PlayerEventPacket(session.worldRosterId, 0, callsign, nextSeq(other)),
+      'CMD11_DEPARTURE',
     );
   }
   connLog.info('[world] notified room of departure: rosterId=%d callsign="%s"', session.worldRosterId, callsign);
@@ -596,8 +870,9 @@ async function handleWorldLogin(
     launch.mechSlot,
   );
 
-  session.phase  = 'world';
-  session.roomId = DEFAULT_ROOM_ID;
+  session.phase          = 'world';
+  session.worldMapRoomId = DEFAULT_MAP_ROOM_ID;
+  session.roomId         = mapRoomKey(DEFAULT_MAP_ROOM_ID);
 
   connLog.info(
     '[world-login] accepted: user="%s" displayName="%s" allegiance=%s service="%s"',
@@ -696,7 +971,28 @@ function handleWorldGameData(
       connLog.warn('[world] cmd-4 parse failed');
       return;
     }
-    handleWorldTextCommand(players, session, parsed.text, connLog);
+    handleWorldTextCommand(players, session, parsed.text, connLog, capture);
+
+  } else if (cmdIdx === 5) {
+    const parsed = parseClientCmd5SceneAction(payload);
+    if (!parsed) {
+      connLog.warn('[world] cmd-5 scene action parse failed');
+      return;
+    }
+    connLog.info('[world] cmd-5 scene action: type=%d', parsed.actionType);
+    if (parsed.actionType === 4) {
+      sendSolarisTravelMap(session, connLog, capture);
+      return;
+    }
+    connLog.warn('[world] cmd-5 unsupported scene action type=%d', parsed.actionType);
+
+  } else if (cmdIdx === 10) {
+    const parsed = parseClientCmd10MapReply(payload);
+    if (!parsed) {
+      connLog.warn('[world] cmd-10 map reply parse failed');
+      return;
+    }
+    handleMapTravelReply(players, session, parsed.contextId, parsed.selection, parsed.selectedRoomId, connLog, capture);
 
   } else if (cmdIdx === 21) {
     const parsed = parseClientCmd21TextReply(payload);
@@ -705,6 +1001,14 @@ function handleWorldGameData(
       return;
     }
     handleComstarTextReply(players, session, parsed.dialogId, parsed.text, connLog, capture);
+
+  } else if (cmdIdx === 23) {
+    const parsed = parseClientCmd23LocationAction(payload);
+    if (!parsed) {
+      connLog.warn('[world] cmd-23 location action parse failed');
+      return;
+    }
+    handleLocationAction(players, session, parsed.slot, parsed.targetCached, connLog, capture);
 
   } else if (cmdIdx === 7) {
     const parsed = parseClientCmd7(payload);
@@ -803,33 +1107,15 @@ function sendWorldInitSequence(
   capture: CaptureLogger,
 ): void {
   const { socket } = session;
-  const mechId     = session.selectedMechId ?? FALLBACK_MECH_ID;
-  // Prefer the character display name (set from DB after login); fall back to
-  // the login username only when character data is unavailable. getDisplayName()
-  // also strips C0/DEL control bytes and clamps to 84 bytes.
-  const callsign   = getDisplayName(session);
 
   // Cmd6 — CursorBusy (hourglass while arena loads)
   send(socket, buildCmd6CursorBusyPacket(nextSeq(session)), capture, 'CMD6_BUSY');
 
-  // Cmd4 — SceneInit: create the arena, chat window, and scoreboard.
-  //   sessionFlags 0x30 = has-opponents (0x10) + clear-arena-data (0x20).
-  //   All 4 opponent slots are absent → wire values of 0 → stored as -1 → buttons hidden.
-  //   callsign and sceneName are provided via the has-opponents (0x10) branch reads.
-  const sceneInit = buildCmd4SceneInitPacket(
-    {
-      sessionFlags:     0x30,   // has-opponents + clear-arena resets
-      playerScoreSlot:  0,
-      playerMechId:     mechId,
-      opponents:        [],     // all 4 slots = "no opponent" (wire 0x21 / [0x21,0x21])
-      callsign,
-      sceneName:        DEFAULT_SCENE_NAME,
-      arenaOptions:     [],
-    },
-    nextSeq(session),
-  );
-  connLog.info('[world] sending Cmd4 SceneInit (mech_id=%d callsign="%s")', mechId, callsign);
-  send(socket, sceneInit, capture, 'CMD4_SCENE_INIT');
+  // Cmd4 — SceneInit: create the world scene, chat window, scene action
+  // buttons, and up to four adjacent location icons.
+  const roomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
+  connLog.info('[world] sending Cmd4 SceneInit (room=%d scene="%s" callsign="%s")', roomId, getSolarisRoomName(roomId), getDisplayName(session));
+  send(socket, buildSceneInitForSession(session), capture, 'CMD4_SCENE_INIT');
 
   // Cmd10 — RoomPresenceSync: seed the live room roster table before later
   // Cmd13/Cmd11 incremental updates are applied.
@@ -860,8 +1146,10 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
   const connLog     = log.child(sessionId.slice(0, 8));
   const capture     = new CaptureLogger(sessionId);
   const parser      = new PacketParser();
+  let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
 
   connLog.info('[world] client connected from %s (session %s)', remoteAddr, sessionId);
+  worldCaptures.set(sessionId, capture);
 
   const session: ClientSession = {
     id:                sessionId,
@@ -917,8 +1205,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
           break;
 
         case Msg.KEEPALIVE:
-          connLog.debug('[world] keepalive — echoing');
-          send(socket, buildPacket(Msg.KEEPALIVE, Buffer.alloc(0)), capture, 'KEEPALIVE');
+          connLog.debug('[world] keepalive response received');
           break;
 
         default:
@@ -945,15 +1232,32 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
       notifyRoomDeparture(players, session, connLog);
     }
     players.remove(session.id);
+    worldCaptures.delete(session.id);
+    if (keepaliveTimer !== undefined) {
+      clearInterval(keepaliveTimer);
+    }
     capture.close();
   });
 
   socket.setKeepAlive(true, 15_000);
-  socket.setTimeout(120_000);
-  socket.on('timeout', () => {
-    connLog.warn('[world] session timed out, closing');
-    socket.destroy();
-  });
+  if (SOCKET_IDLE_TIMEOUT_MS > 0) {
+    socket.setTimeout(SOCKET_IDLE_TIMEOUT_MS);
+    socket.on('timeout', () => {
+      connLog.warn('[world] session timed out after %d ms, closing', SOCKET_IDLE_TIMEOUT_MS);
+      socket.destroy();
+    });
+  }
+
+  keepaliveTimer = ARIES_KEEPALIVE_INTERVAL_MS > 0
+    ? setInterval(() => {
+      if (socket.destroyed || !socket.writable) {
+        return;
+      }
+      connLog.debug('[world] keepalive — sending ping');
+      send(socket, buildPacket(Msg.KEEPALIVE, Buffer.alloc(0)), capture, 'WORLD_KEEPALIVE_PING');
+    }, ARIES_KEEPALIVE_INTERVAL_MS)
+    : undefined;
+  keepaliveTimer?.unref();
 
   // ── Server speaks first ───────────────────────────────────────────────────
   session.phase = 'auth';

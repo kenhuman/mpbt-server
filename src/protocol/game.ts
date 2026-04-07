@@ -395,6 +395,61 @@ export function parseClientCmd4(
 }
 
 /**
+ * Parse a client-sent world cmd-5 scene/action button frame.
+ *
+ * CONFIRMED from MPBTWIN.EXE FUN_00413790 / FUN_0040d2d0:
+ *   server-provided Cmd4 scene option buttons call FUN_0040d2d0(option_type)
+ *
+ * Wire layout:
+ *   [byte actionType]
+ */
+export function parseClientCmd5SceneAction(
+  payload: Buffer,
+): { seq: number; actionType: number } | null {
+  if (payload.length < 8 || payload[0] !== 0x1B || payload[payload.length - 1] !== 0x1B) {
+    return null;
+  }
+  const seq = payload[1] - 0x21;
+  const cmd = payload[2] - 0x21;
+  if (cmd !== 5) return null;
+
+  return {
+    seq,
+    actionType: payload[3] - 0x21,
+  };
+}
+
+/**
+ * Parse a client-sent world cmd-23 scene-location action.
+ *
+ * CONFIRMED from MPBTWIN.EXE FUN_00419390:
+ *   the four main scene location icons send FUN_00403030(0x17) plus one
+ *   encoded byte. Values 0..3 select an already-loaded target slot; values
+ *   4..7 select the same slot but tell the server the target scene was not
+ *   cached locally yet.
+ */
+export function parseClientCmd23LocationAction(
+  payload: Buffer,
+): { seq: number; action: number; slot: number; targetCached: boolean } | null {
+  if (payload.length < 8 || payload[0] !== 0x1B || payload[payload.length - 1] !== 0x1B) {
+    return null;
+  }
+  const seq = payload[1] - 0x21;
+  const cmd = payload[2] - 0x21;
+  if (cmd !== 23) return null;
+
+  const action = payload[3] - 0x21;
+  if (action < 0 || action > 7) return null;
+
+  return {
+    seq,
+    action,
+    slot: action & 3,
+    targetCached: action < 4,
+  };
+}
+
+/**
  * Parse a client-sent cmd-9 character creation reply.
  *
  * CONFIRMED from MPBTWIN.EXE FUN_0042dbf0 -> FUN_0040d400:
@@ -423,6 +478,36 @@ export function parseClientCmd9CharacterCreationReply(
     subcmd,
     displayName: payload.subarray(textStart, textEnd).toString('latin1'),
     selection: payload[textEnd] - 0x21,
+  };
+}
+
+/**
+ * Parse a client-sent cmd-10 map/location reply.
+ *
+ * CONFIRMED from MPBTWIN.EXE MapOpenInnerSphere / MapOpenSolaris:
+ *   map selection sends FUN_0040d360(contextId, selectedRoomId + 1)
+ *   cancel sends FUN_0040d360(contextId, 0)
+ *
+ * Wire layout:
+ *   [type1 context/list id] [type4 selection value]
+ */
+export function parseClientCmd10MapReply(
+  payload: Buffer,
+): { seq: number; contextId: number; selection: number; selectedRoomId?: number } | null {
+  if (payload.length < 14 || payload[0] !== 0x1B || payload[payload.length - 1] !== 0x1B) {
+    return null;
+  }
+  const seq = payload[1] - 0x21;
+  const cmd = payload[2] - 0x21;
+  if (cmd !== 10) return null;
+
+  const [contextId, o1] = decodeArgType1(payload, 3);
+  const [selection, _o] = decodeArgType4(payload, o1);
+  return {
+    seq,
+    contextId,
+    selection,
+    selectedRoomId: selection > 0 ? selection - 1 : undefined,
   };
 }
 

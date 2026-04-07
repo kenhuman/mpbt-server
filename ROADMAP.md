@@ -1,4 +1,4 @@
-# Roadmap
+﻿# Roadmap
 
 ## Vision
 
@@ -48,8 +48,8 @@ These files are gitignored — place them in `research/` for local use.
 | File | Contents | Project use |
 |---|---|---|
 | `BT-MAN.decrypted.txt` | Full game manual: world navigation, chat channels, combat controls, mech stat tables | Design reference for M4–M9; source for `src/data/mech-stats.ts` |
-| `SOLARIS.MAP` | Solaris city venue locations, rooms 146+, 189 KB. Format: sequential room-ID records with 18-byte fixed header + LE-prefixed name string + LE-prefixed description string. Confirmed rooms: Solaris Starport, Ishiyama Arena, Government House, White Lotus | M5 world map reconstruction |
-| `IS.MAP` | Inner Sphere sector locations, rooms 1–145, 40 KB. Identical layout format to SOLARIS.MAP. Together the two files form a **global room namespace** | M5 world map; full-sector navigation |
+| `SOLARIS.MAP` | Solaris city venue locations, 189 KB. Leading room table is now reproducibly parsed: u16 record count, then room ID / flags / coordinates / aux fields / NUL-included name+description strings. Local file count is 32 records: Solaris rooms 146–171 plus sector rows 1–6; trailing non-room sections remain undecoded | M5 world map reconstruction |
+| `IS.MAP` | Inner Sphere / global location table, 40 KB. Same leading room-table format; local file count is 271 records, covering room IDs 1–271, including Solaris entries duplicated in the global namespace | M5 world map; full-sector navigation |
 | `Gnum*.txt / Gnum*.md` | Firsthand gameplay observations: 4v4 lances, fixed spawns, travel times, team/all-chat | Sanity-check for RE findings |
 
 ---
@@ -146,8 +146,8 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 
 | Task | Status | Notes |
 |---|---|---|
-| Room broadcast | 🔧 | Same-room presence seeds the roster with `Cmd10`, then uses `Cmd13` arrival and `Cmd11(status=0)` departure for incremental updates. World `cmd-4` free-text relay is implemented as room-local chat fan-out to other clients via `Cmd3`. Validated with the local two-client socket harness and a one-client `MPBTWIN.EXE` launch. Pending: real multi-client GUI verification. |
-| Player join / leave events | 🔧 | Same-room `Cmd10` / `Cmd13` / `Cmd11(status=0)` path is implemented and passes the local two-client socket smoke harness. Social-room status transitions are partially implemented: `Cmd7(listId=3)` `selection=0` grabs a booth, `selection=2` stands, `selection>=3` joins booth `selection-2`, with `Cmd11(status=5..12)` updating the roster table. Pending: real-client behavior with multiple GUI clients. |
+| Room broadcast | 🔧 | Same-room presence seeds the roster with `Cmd10`, then uses `Cmd13` arrival and `Cmd11(status=0)` departure for incremental updates. World `cmd-4` free-text relay is implemented as room-local chat fan-out to other clients via `Cmd3`. Validated with the local two-client socket harness and a one-client `MPBTWIN.EXE` launch. A hybrid GUI+socket pass on 2026-04-06 also confirmed a socket world client receives the live GUI occupant in its `Cmd10` seed. A 2026-04-07 two-GUI sandbox pass reaches the server when the second sandbox copy is patched in place to bypass both the `FindWindowA` single-instance guard and the second-client `SetDisplayMode` failure. A later two-GUI keepalive pass captured a real Client B `cmd-4` chat frame parsed as room-local text while both clients stayed connected. |
+| Player join / leave events | 🔧 | Same-room `Cmd10` / `Cmd13` / `Cmd11(status=0)` path is implemented and passes the local two-client socket smoke harness. Social-room status transitions are partially implemented: `Cmd7(listId=3)` `selection=0` grabs a booth, `selection=2` stands, `selection>=3` joins booth `selection-2`, with `Cmd11(status=5..12)` updating the roster table. Hybrid GUI+socket validation confirmed the server emits arrival/departure notifications while a real GUI session is connected; the two-GUI sandbox pass on 2026-04-07 confirmed Client B reaches world init, receives `Cmd10 RoomPresenceSync (2 entries)`, and emits the room-arrival notification while Client A is already connected. The second GUI required runtime-only binary patches at file offsets `0x28388` and `0x2751`; see `RESEARCH.md` and `tools/patch-mpbtwin-two-gui.ps1` before repeating the test. |
 | F7 — team / lance channel | ❌ | Arena-only; requires `Cmd8` team assignment — moved to M7. v1.23 RE (§19.4) confirms F7 does NOT emit a network packet — it only toggles the local chat-channel UI indicator. Channel selection is implicit via the mode command (`FUN_0043d920`). |
 | F8 — all-comm / chat-window toggle | ❌ | Arena-only; v1.23 RE (§19.4) confirms F8 does NOT emit a network packet — purely local UI state toggle (same `FUN_0042dc30` visual handler as F7). Moved to M7. |
 | ComStar DM — store and deliver | 🔧 | `Cmd36` delivers received messages with a nonzero reply target; sender uses client `cmd 21` to submit text; the local `listId=1000` submenu can open compose without a server round-trip. Pending: offline persistence, unread delivery on login, exact message-body formatting, and real-GUI confirmation of the `Reply` flow. |
@@ -167,10 +167,11 @@ The world uses two distinct room types: **bar** (social spaces, Tier Ranking ter
 
 | Task | Status | Notes |
 |---|---|---|
-| `SOLARIS.MAP` binary format RE | � | **DECODED** (RESEARCH.md §19.7): 2-byte LE record_count header; each record = 18-byte fixed prefix (room_id, faction, raw_x, raw_y, 4×flags) + uint8 name_len + name chars + uint8 desc_len + desc chars. IS.MAP display: `x/3+380`, `y/−3+248`; SOLARIS.MAP: identity. Needs implementation in room-loader. |
-| RE movement protocol | 🔧 | **DECODED** (RESEARCH.md §19.2): client→server timer-based (100 ms). Cmd 8 (coasting): X(3w)+Y(3w)+heading(2w)+adj_vel(1w)+rotation(1w). Cmd 9 (moving): X(3w)+Y(3w)+heading(2w)+turn(1w)+0xe1c(1w)+throttle(1w)+leg(1w)+rotation(1w). Bias constant=0xe1c (3612), divisor=0xb6 (182). Server→client position packets still 🔬. |
+| `SOLARIS.MAP` / `IS.MAP` binary format RE | ✅ | **DECODED** (RESEARCH.md §19.7): 2-byte LE record_count header; each record = 18-byte fixed prefix (room_id, faction, raw_x, raw_y, 4×flags) + uint8 name_len + name chars + uint8 desc_len + desc chars. IS.MAP display: `x/3+380`, `y/−3+248`; SOLARIS.MAP: identity. Parser via `npm run map:dump -- --rooms`. Ghidra confirms `Map_LoadFile` passes trailing bytes to the picture/resource loader; exits not stored in trailing blob. Needs implementation in room-loader. |
+| RE movement protocol | 🔧 | **DECODED** (RESEARCH.md §19.2): client→server timer-based (100 ms). Cmd 8 (coasting): X(3w)+Y(3w)+heading(2w)+adj_vel(1w)+rotation(1w). Cmd 9 (moving): X(3w)+Y(3w)+heading(2w)+turn(1w)+0xe1c(1w)+throttle(1w)+leg(1w)+rotation(1w). Bias constant=0xe1c (3612), divisor=0xb6 (182). Travel-reply: server cmd 40/43 opens IS/Solaris map UI; client replies `cmd 10` (`type1 contextId` + `type4 selectedRoomId+1`). Real GUI validated `Travel → Cmd43 → cmd 10(selection=148) → Ishiyama Arena`. Server→client position packets (Cmd65) still 🔬. |
+
 | Tram / monorail RE | 🔬 | Cross-sector navigation shortcut — client command format unknown |
-| Room model from `SOLARIS.MAP` | ❌ | Replace stub `World` with real rooms (bar / arena types), exits, and coordinates decoded from map files |
+| Room model from map files | 🔬 | Replace stub `World` with real rooms (bar / arena types), exits, and coordinates decoded from `IS.MAP` / `SOLARIS.MAP`. Ordinary scene location icons send client `cmd 23` with one byte: values `0..3` select a cached scene slot, `4..7` select the same slot when the target scene is not cached. The branch now maps those slots through a provisional valid-`SOLARIS.MAP` topology and refreshes the client scene; authentic exit graph still needs RE. |
 | Server-side position tracking | ❌ | Extend `src/state/world.ts`; track current room + coordinates per player |
 | Position sync to client | ❌ | Server → client position / environment packets |
 
@@ -213,7 +214,7 @@ The world uses two distinct room types: **bar** (social spaces, Tier Ranking ter
 | Room broadcast | ❌ | Sync combat state to all clients in the same arena |
 | Player enter / leave events | ❌ | Notify existing clients when a player joins or leaves |
 | Side assignment enforcement | ❌ | Cannot assign all players to the same side |
-| Synchronized position | ❌ | Each client sees other mechs move in real time |
+| Synchronized position | 🔬 | Each client sees other mechs move in real time. Current local Ghidra lead: combat cmd `65` / wire `0x66` (`FUN_00401820`) parses player id, X/Y/Z, rotation-ish bytes, and speed/throttle-ish byte; constants differ from RazorWing/solaris. |
 | Synchronized damage | ❌ | Damage dealt by one client is reflected in all clients' views |
 | Match orchestration | ❌ | Ready-up, start, 15-min timer, end, sanctioned-match flag |
 | F7 — team / lance channel | 🔬 | Scoped broadcast to your lance teammates; v1.23 RE confirms F7 is local-only (no network packet). The server-side team-channel fan-out mechanism (identifying which clients are on the same lance) remains 🔬; wire format unknown. Requires `Cmd8` team assignment to be established. |
@@ -236,7 +237,7 @@ The world uses two distinct room types: **bar** (social spaces, Tier Ranking ter
 | Correct mech stat handling (armor, weapons, heat) | ❌ | From `.MEC` parser + damage model |
 | Client launcher — `play.pcgi` generator | ✅ | `npm run gen-pcgi` already works |
 | Basic observability (logs, session captures) | ✅ | Already implemented |
-| Graceful disconnect / reconnect handling | ❌ | Client timeout, mid-match drop |
+| Graceful disconnect / reconnect handling | 🔬 | ARIES type-`0x05` keepalive is now sent periodically by the server and echoed by the client, matching COMMEG32.DLL `FUN_100014e0` case `5`. `ARIES_KEEPALIVE_INTERVAL_MS` and `SOCKET_IDLE_TIMEOUT_MS` are configurable so long GUI validation sessions are not cut off by the old hardcoded 120-second idle timeout. Real two-GUI validation on 2026-04-07 confirmed both `MPBTWIN.EXE` sessions remained connected beyond 120 seconds and replied to repeated world keepalive pings. Mid-match reconnect/recovery is still unimplemented. |
 
 **Verification:** Full play session — two humans, real mechs, real arena, fight to conclusion — with no manual intervention.
 
@@ -289,7 +290,7 @@ These are gaps we know exist. They are not bugs — they are the RE frontier.
 - **Cmd `0x1D` server handling** — whether the server needs to acknowledge a cancel, or silently ignore it.
 - **ACK reply format for seq > 42** — the trigger is documented (RESEARCH.md §9) but the reply packet format is not.
 - **Combat CRC crossover point** — the server currently always uses lobby CRC init; the transition rule is unknown.
-- **`SOLARIS.MAP` / `IS.MAP` exit graph** — room topology source files identified and partially decoded (shared global room namespace confirmed: IS.MAP rooms 1–145, SOLARIS.MAP rooms 146+); full exit connections and room-type classification still unknown.
+- **`SOLARIS.MAP` / `IS.MAP` exit graph** — room topology source files identified and partially decoded. Leading room tables are now parser-backed: local `IS.MAP` has 271 records (IDs 1–271), and local `SOLARIS.MAP` has 32 leading records (Solaris 146–171 plus sector rows 1–6). Ghidra confirms the trailing section is read through the generic picture/resource path, so full exit connections and room-type classification still need a separate movement/topology trace.
 - **F7 / F8 chat channel differentiation** — two distinct broadcast channels exist (team/lance and all-comm); both are arena-phase constructs gated on `Cmd8` team assignment; wire-format difference is unknown. Tracked in M7.
 - **Bar booth terminal commands** — what packets does the client send when activating Tier Ranking / ComStar terminals at a bar?
 - **Tram / monorail command** — protocol for the cross-sector navigation shortcut is unknown.

@@ -45,9 +45,9 @@ export function buildCmd3BroadcastPacket(text: string, seq = 0): Buffer {
 // ── Cmd 4 — Scene Init ────────────────────────────────────────────────────────
 // CONFIRMED by decompiling FUN_00414B70 in MPBTWIN.EXE.
 //
-// This is the principal "enter arena" command.  It creates the main game window
+// This is the principal world-scene command.  It creates the main game window
 // (DAT_004ddf60), the chat scroll-window (DAT_00472c90), the scoreboard boxes,
-// and mech-slot buttons for any opponents.  Sets g_chatReady = 1 at completion.
+// scene action buttons, and up to four location/action icons.  Sets g_chatReady = 1 at completion.
 // Cmd3_TextBroadcast and most other world commands are silently dropped before
 // g_chatReady is set, so Cmd4 MUST be sent before any chat/game commands.
 //
@@ -61,10 +61,10 @@ export function buildCmd3BroadcastPacket(text: string, seq = 0): Buffer {
 //   [type1 2B: player_mech_id]    FUN_00402b10(1)  → (&DAT_00481a4c)[slot * 0xaa]
 //
 //   IF session_flags & 0x10 (has-opponents branch):
-//     [byte × 4: opp_type[i] + 1]        FUN_00402f40 ×4 → stored as (val - 1)
-//                                          "no opponent" → stored -1 → wire byte 0x21
-//     [type1 2B × 4: opp_mech_id[i] + 1] FUN_00402b10(1) ×4 → stored as (val - 1)
-//                                          "no opponent" → stored -1 → wire [0x21, 0x21]
+//     [byte × 4: location_slot[i] + 1]   FUN_00402f40 ×4 → stored as (val - 1)
+//                                          "no location" → stored -1 → wire byte 0x21
+//     [type1 2B × 4: location_icon[i]+1] FUN_00402b10(1) ×4 → stored as (val - 1)
+//                                          "no location" → stored -1 → wire [0x21, 0x21]
 //     [Frame_ReadArg: callsign]           FUN_0040c0d0 = encodeString format (1B len + raw)
 //     [Frame_ReadString: scene_name]      FUN_0040c130 = encodeB85_1(len) + raw bytes
 //   ELSE (no-opponents branch):
@@ -76,15 +76,15 @@ export function buildCmd3BroadcastPacket(text: string, seq = 0): Buffer {
 //     [Frame_ReadArg: option_str] FUN_0040c0d0 = encodeString format
 //   ]
 //
-// Opponent slot handling:
-//   After parsing, (&DAT_00481a60)[slot * 0xaa + i] == -1 → FUN_0042ffb0 hides button.
-//   Otherwise the slot is populated with mech icon + callsign + scoreboard row.
-//   For M3 (solo connection) send all 4 opponent slots as "no opponent".
+// Location slot handling:
+//   session_flags low nibble gates whether the four icons are clickable.
+//   The first 4-byte group is used by FUN_00419390 as the target client scene slot.
+//   The second 4×type1 group is used to draw each icon. -1 hides a slot.
 
 export interface OpponentEntry {
-  /** Opponent type (0-based; stored on client as val - 1; wire = type + 1). */
+  /** Target scene slot/type (0-based; stored on client as val - 1; wire = type + 1). */
   type: number;
-  /** Opponent mech ID (0-based; stored on client as val - 1; wire = mechId + 1). */
+  /** Location icon ID (0-based; stored on client as val - 1; wire = mechId + 1). */
   mechId: number;
 }
 
@@ -96,18 +96,19 @@ export interface Cmd4Options {
   matchId?: number;
   /**
    * Session flags byte:
-   *   0x10 = has-opponents (triggers opponent/callsign/scene reads from wire)
+   *   bits 0..3 = enable location icon slots 0..3
+   *   0x10 = has location slot/callsign/scene reads from wire
    *   0x20 = clear arena data (client memsets its arena data block on receipt)
-   * Default: 0x30 (both flags; fresh arena entry with opponent reads enabled).
+   * Default: 0x30 (fresh scene entry with location-slot reads enabled).
    */
   sessionFlags?: number;
-  /** Player's row in the score table (0-based, DAT_00472c8c). Default: 0. */
+  /** Current client scene slot (0-based, DAT_00472c8c). Default: 0. */
   playerScoreSlot?: number;
-  /** Player's mech ID (type1 2B, sent to (&DAT_00481a4c)[slot * 0xaa]). */
+  /** Current scene icon/visual ID (type1 2B, sent to (&DAT_00481a4c)[slot * 0xaa]). */
   playerMechId: number;
   /**
-   * Opponent entries (up to 4).
-   * Missing/extra entries are zero-padded → stored as -1 → button hidden.
+   * Location entries (up to 4). Historical name retained to minimize churn.
+   * Missing/extra entries are zero-padded → stored as -1 → icon hidden.
    * Only used when sessionFlags & 0x10 is set.
    */
   opponents?: OpponentEntry[];
@@ -124,8 +125,8 @@ export interface Cmd4Options {
    */
   sceneName?: string;
   /**
-   * Arena option entries (displayed as action buttons; mostly unknown for M3).
-   * Default: empty.
+   * Scene action entries displayed as option buttons. Pressing one sends
+   * client cmd-5 with the entry's type byte (FUN_00413790 -> FUN_0040d2d0).
    */
   arenaOptions?: Array<{ type: number; label: string }>;
 }
@@ -144,16 +145,16 @@ function buildCmd4Args(opts: Cmd4Options): Buffer {
   ];
 
   if (hasOpps) {
-    // 4 × opponent type (wire = type+1; FUN_00402f40 decodes → stored as val-1)
-    // "no opponent" entry: type -1 intended → stored -1 → wire val = 0 → encodeAsByte(0)
+    // 4 × location target slot (wire = type+1; FUN_00402f40 decodes → stored as val-1)
+    // "no location" entry: type -1 intended → stored -1 → wire val = 0 → encodeAsByte(0)
     for (let i = 0; i < 4; i++) {
       const opp = opts.opponents?.[i];
       // opp.type is 0-based; stored = wire_val - 1; wire_val = opp.type + 1
-      // "no opponent": we want stored = -1 → wire_val = 0 → encodeAsByte(0)
+      // "no location": we want stored = -1 → wire_val = 0 → encodeAsByte(0)
       parts.push(encodeAsByte(opp ? opp.type + 1 : 0));
     }
-    // 4 × opponent mech_id (wire = mechId+1; stored as val-1)
-    // "no opponent": mechId -1 → stored -1 → wire val = 0 → encodeB85_1(0) = [0x21,0x21]
+    // 4 × location icon id (wire = mechId+1; stored as val-1)
+    // "no location": mechId -1 → stored -1 → wire val = 0 → encodeB85_1(0) = [0x21,0x21]
     for (let i = 0; i < 4; i++) {
       const opp = opts.opponents?.[i];
       parts.push(encodeB85_1(opp ? opp.mechId + 1 : 0));
@@ -380,6 +381,70 @@ export function buildCmd14PersonnelRecordPacket(
   seq = 0,
 ): Buffer {
   return buildGamePacket(14, buildCmd14Args(opts), false, seq);
+}
+
+// ── Cmd 40 — Open Inner Sphere Map ──────────────────────────────────────────
+// CONFIRMED: MapOpenInnerSphere (FUN_0040ecb0).
+//
+// Wire args:
+//   [type1: context_id]
+//   [type1: current_room_id]
+//   [type4: value/cost]
+
+export interface Cmd40InnerSphereMapOptions {
+  contextId: number;
+  currentRoomId: number;
+  value?: number;
+}
+
+/** Build a Cmd40 packet to open the Inner Sphere map UI. */
+export function buildCmd40InnerSphereMapPacket(
+  opts: Cmd40InnerSphereMapOptions,
+  seq = 0,
+): Buffer {
+  return buildGamePacket(
+    40,
+    Buffer.concat([
+      encodeB85_1(opts.contextId),
+      encodeB85_1(opts.currentRoomId),
+      encodeB85_4(opts.value ?? 0),
+    ]),
+    false,
+    seq,
+  );
+}
+
+// ── Cmd 43 — Open Solaris Map ───────────────────────────────────────────────
+// CONFIRMED: MapOpenSolaris (FUN_0040eed0).
+//
+// Wire args:
+//   [type1: context_id]
+//   [type1: current_room_id + 1]
+//   [type1 × 26: Solaris room/sector counters]
+
+export interface Cmd43SolarisMapOptions {
+  contextId: number;
+  currentRoomId: number;
+  counters?: number[];
+}
+
+function buildCmd43Args(opts: Cmd43SolarisMapOptions): Buffer {
+  const counters = opts.counters?.slice(0, 26) ?? [];
+  while (counters.length < 26) counters.push(0);
+
+  return Buffer.concat([
+    encodeB85_1(opts.contextId),
+    encodeB85_1(opts.currentRoomId + 1),
+    ...counters.map(counter => encodeB85_1(counter)),
+  ]);
+}
+
+/** Build a Cmd43 packet to open the Solaris map UI. */
+export function buildCmd43SolarisMapPacket(
+  opts: Cmd43SolarisMapOptions,
+  seq = 0,
+): Buffer {
+  return buildGamePacket(43, buildCmd43Args(opts), false, seq);
 }
 
 // ── Cmd 48 — Keyed Triple-String List ────────────────────────────────────────
