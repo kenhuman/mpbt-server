@@ -1,9 +1,9 @@
 /**
  * MPBT .MAP room-record parser.
  *
- * The proprietary map files are not committed. This parser only describes the
- * room-record table at the front of IS.MAP / SOLARIS.MAP so M5 work can be
- * reproduced against a local licensed installation.
+ * The proprietary map files are not committed. This parser mirrors the leading
+ * room-record load performed by MPBTWIN.EXE Map_LoadFile (FUN_004100c0), so M5
+ * work can be reproduced against a local licensed installation.
  */
 
 import * as fs from 'fs';
@@ -82,8 +82,9 @@ function readU16(buf: Buffer, offset: number, label: string, filePath: string): 
  *     [u16 name_len_including_nul] [name bytes]
  *     [u16 desc_len_including_nul] [description bytes]
  *
- * Bytes after the room table remain undecoded and are intentionally preserved
- * only as an offset/count for later RE.
+ * MPBTWIN.EXE passes bytes after the room table to Picture_ReadFromFile
+ * (FUN_00428770). Those trailing bytes are intentionally preserved only as an
+ * offset/count until the picture format matters for gameplay.
  */
 export function parseMapFile(filePath: string, source = path.basename(filePath).toUpperCase()): ParsedMapFile {
   const buf = fs.readFileSync(filePath);
