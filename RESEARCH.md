@@ -363,7 +363,13 @@ Full table: 0x4C (76) entries × 4 bytes = 304 bytes.  Confirmed non-null entrie
 
 | Index | Binary Address | Notes |
 |:---:|---------|------|
-| 0x48 | `FUN_00406140` | Receives mech stats from server; fills mech data arrays |
+| 0x40 | `FUN_00401390` | Seeds/creates a remote combatant slot: reads server player id, strings, mech id, then allocates/fills the per-player mech structures |
+| 0x41 | `FUN_00401820` | Strongest current position-sync handler: reads player id, X/Y/Z, rotation/heading-ish bytes, and speed/throttle-ish byte into per-player motion fields |
+| 0x44 | `FUN_00402380` | Combat effect/attack update: reads source/target ids plus angle and X/Y/Z fields, then calls effect helpers |
+| 0x45 | `FUN_00402530` | Combat effect/sound/projectile update with X/Y/Z fields and local-distance checks |
+| 0x46 | `FUN_004026D0` | Combat state/animation control; action byte drives animation/flag helper calls |
+| 0x48 | `FUN_00406140` | Local combat scene/self init: loads scene/mech metadata, local callsign/mech strings, origin coordinates, arena counts, and marks combat scene active |
+| 0x49 | `FUN_004022D0` | Stores two scaled short control/aim/offset values into the per-player combat table |
 
 ### Client Command 3 — Client-Ready (CONFIRMED)
 
@@ -1149,6 +1155,22 @@ Combat-only entries (cmd 62–79, only non-null in combat table):
 | 78 | `0x73` | `0x004069E0` |
 | 79 | `0x74` | `0x00402AB0` |
 
+Combat-handler revalidation against the local `MPBTWIN.EXE` on 2026-04-06 gives the
+first useful M7 position-sync lead, but it is **combat-mode only** and should not be
+copied into M4/M5 world navigation:
+
+- RPS/world `cmd 3` remains `Cmd3_TextBroadcast`. In combat mode, the same handler
+  reads and XOR-processes an argument, but it is not the primary position packet.
+- Combat `cmd 65` / wire `0x66` (`FUN_00401820`) is the strongest local match for the
+  third-party "Type P" position note: `player-id`, encoded X/Y as 3-byte integers,
+  encoded Z as a 2-byte integer, then four 1-byte rotation/speed fields.
+- The local X/Y offset is `0x18e4258` (decimal `26002008`), not RazorWing's documented
+  `26100312`; rotation/speed scaling also differs from the simplified external notes.
+- Combat `cmd 64` (`FUN_00401390`) seeds remote combatants, `cmd 72` (`FUN_00406140`)
+  seeds the local combat scene/self, `cmd 68`/`69` are effect/projectile-like updates,
+  `cmd 70` drives combat animation/state, and `cmd 73` stores two scaled per-player
+  control/aim/offset values.
+
 ### World Handshake Sequence — CONFIRMED
 
 After the client receives the REDIRECT packet and `Aries_Connect` succeeds:
@@ -1552,6 +1574,10 @@ Useful follow-up leads from the fresh audit:
   position offset `26100312`, rotation multiplier `182`) may be useful for M5/M7 RE,
   but only after revalidating the corresponding handlers in our binary. In our current
   RPS/world table, cmd `3` is already proven to be text broadcast, not position sync.
+  A follow-up Ghidra pass against the local binary found the closest position-sync
+  match in the **combat** table at cmd `65` / wire `0x66` (`FUN_00401820`), with a
+  different X/Y offset (`0x18e4258`) and different rotation/speed scaling from the
+  RazorWing note. Treat this as an M7 combat lead, not an M5 world-navigation packet.
 
 ### RE Process
 
