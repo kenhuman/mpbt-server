@@ -83,7 +83,7 @@ const MECH_SEND_LIMIT = 20; // Client (FUN_0043A370) stores mechs in parallel st
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function send(socket: net.Socket, pkt: Buffer, capture: CaptureLogger, label: string): void {
-  capture.logSend(pkt);
+  capture.logSend(pkt, label);
   socket.write(pkt);
 }
 
