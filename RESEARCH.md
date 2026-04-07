@@ -1339,6 +1339,18 @@ Additional world-client senders confirmed after the first real-client M4 pass:
 - `Cmd14_PersonnelRecord` is paged. Its dialog callback `FUN_00415690` closes on Enter/ESC, but Space emits `Cmd7(0x95, 2)` before flushing. This is the strongest current candidate for the follow-up `More` request that advances to a second personnel-record page.
 - Follow-up trace on `Cmd7(0x95, 2)`: no separate second-page reply handler has been identified so far. `FUN_00415690` is only installed by `Cmd14_PersonnelRecord`, and this pass did not uncover another world-command parser dedicated to a later personnel page. Strongest current inference: the server answers `Cmd7(0x95, 2)` with another `Cmd14_PersonnelRecord` page carrying a different set of six lines, rather than switching to a distinct command code.
 - The only `Cmd48`-specific hard-coded `list_id` branch found so far is `0x2e`, which installs modal close boilerplate (`FUN_00411e00`) rather than a personal-inquiry action split. Inference: if KP5/all-roster really reuses `Cmd48`, the first row pick likely goes straight back to the server as `Cmd7(list_id, item_id + 1)`, and any later `ComStar vs personnel` split is either server-driven or implemented as a separate local follow-up packet sequence.
+- Two-GUI validation follow-up on 2026-04-07: separate sandbox directories under
+  `C:\Users\moose\mpbt-client-a` and `C:\Users\moose\mpbt-client-b` avoid the shared
+  `play.pcgi` deletion/race. Client A consumed its launch file, authenticated as
+  `GuiA_0407`, redirected to world, and received `Cmd4`/`Cmd10` normally with
+  callsign `PilotA_0407`. Client B did **not** reach the server: with client A active,
+  a second `MPBTWIN.EXE` and a renamed `MPBTWIN_B.EXE` both exited before consuming
+  `play.pcgi`; launched alone from the second sandbox, the client logged
+  `MPBT Fatal Error (SetDisplayMode): Action not supported.` Running the bundled
+  `MPBTMemoryPatcher.exe` immediately after launch did not fix the failure. Inference:
+  the next true two-GUI pass needs a reliable windowed/DirectDraw wrapper or a separate
+  Windows display/session/VM; the current server-side `Cmd10` behavior remains validated
+  by socket and hybrid GUI+socket tests, not by two simultaneous GUI windows.
 
 ---
 
