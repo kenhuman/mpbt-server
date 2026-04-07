@@ -1365,6 +1365,14 @@ Additional world-client senders confirmed after the first real-client M4 pass:
   the socket. The server now sends configurable keepalive pings via
   `ARIES_KEEPALIVE_INTERVAL_MS` and keeps `SOCKET_IDLE_TIMEOUT_MS` configurable for
   long real-GUI validation runs.
+- Real two-GUI keepalive validation on 2026-04-07: with Client B's sandbox copy
+  patched as above and the server running with the default 30-second
+  `ARIES_KEEPALIVE_INTERVAL_MS`, both GUI clients stayed connected past the old
+  120-second idle cutoff. The server log showed repeated world `Msg.KEEPALIVE`
+  pings and client type-`0x05` responses for both `PilotA_0407` and `PilotB_0407`,
+  with no `session timed out` close. During the same run Client B emitted a real
+  world `cmd-4` text frame (`Hello! Is it me you're looking for?!`), which the
+  server parsed as room-local text from `PilotB_0407`.
 
 ---
 
