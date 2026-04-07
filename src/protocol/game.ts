@@ -427,6 +427,36 @@ export function parseClientCmd9CharacterCreationReply(
 }
 
 /**
+ * Parse a client-sent cmd-10 map/location reply.
+ *
+ * CONFIRMED from MPBTWIN.EXE MapOpenInnerSphere / MapOpenSolaris:
+ *   map selection sends FUN_0040d360(contextId, selectedRoomId + 1)
+ *   cancel sends FUN_0040d360(contextId, 0)
+ *
+ * Wire layout:
+ *   [type1 context/list id] [type4 selection value]
+ */
+export function parseClientCmd10MapReply(
+  payload: Buffer,
+): { seq: number; contextId: number; selection: number; selectedRoomId?: number } | null {
+  if (payload.length < 14 || payload[0] !== 0x1B || payload[payload.length - 1] !== 0x1B) {
+    return null;
+  }
+  const seq = payload[1] - 0x21;
+  const cmd = payload[2] - 0x21;
+  if (cmd !== 10) return null;
+
+  const [contextId, o1] = decodeArgType1(payload, 3);
+  const [selection, _o] = decodeArgType4(payload, o1);
+  return {
+    seq,
+    contextId,
+    selection,
+    selectedRoomId: selection > 0 ? selection - 1 : undefined,
+  };
+}
+
+/**
  * Parse a client-sent cmd-21 editable-text reply.
  *
  * CONFIRMED by MPBTWIN.EXE:

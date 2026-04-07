@@ -71,6 +71,10 @@
       "Map_LoadFile":           { "binary": "FUN_004100c0", "role": "Load IS.MAP / SOLARIS.MAP leading room table; count-prefixed variable records become fixed 0x1a-byte records, then trailing bytes go to Picture_ReadFromFile" },
       "Map_InitSpace":          { "binary": "FUN_00410340", "role": "Load IS.MAP or SOLARIS.MAP depending on DAT_00472a54; builds sorted non-Solaris global room pointer list from IS.MAP" },
       "MapRecordCompareByFlags": { "binary": "FUN_00410300", "role": "qsort comparator for map record pointers: compare low flag byte at record+2, then case-insensitive room name at record+0x12" },
+      "MapOpenInnerSphere":     { "binary": "FUN_0040ecb0", "role": "Server cmd 40 handler: reads context id, current room id, and value/cost, then opens the Inner Sphere map UI" },
+      "MapOpenSolaris":         { "binary": "FUN_0040eed0", "role": "Server cmd 43 handler: reads context id, current room id+1, and 26 Solaris counters, then opens the Solaris map UI" },
+      "MapLocationListKeyHandler": { "binary": "FUN_0040f630", "role": "Keyboard handler for the same-group map location list opened from the map UI" },
+      "Map_SendTravelReply":    { "binary": "FUN_0040d360", "role": "Client cmd 10 sender: type1(contextId) + type4(selection); selection is selectedRoomId+1 or 0 for cancel" },
       "Picture_ReadFromFile":   { "binary": "FUN_00428770", "role": "Read generic picture/resource blob after the map room table" }
     },
     "data": {

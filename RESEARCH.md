@@ -1839,6 +1839,40 @@ Ghidra follow-up on 2026-04-07 confirms the runtime loader shape:
   This supports the observed split: `IS.MAP` carries the global location table,
   while the Solaris arena subset is handled specially.
 
+### 21.1 Map UI Commands
+
+Two server command handlers now have concrete map semantics:
+
+| Cmd | Wire | Handler | Semantics |
+|-----|------|---------|-----------|
+| 40 | `0x49` | `MapOpenInnerSphere` (`0x0040ecb0`) | Reads `type1 contextId`, `type1 currentRoomId`, `type4 value/cost`, then opens the Inner Sphere map. |
+| 43 | `0x4c` | `MapOpenSolaris` (`0x0040eed0`) | Reads `type1 contextId`, `type1 currentRoomIdPlusOne`, then 26 `type1` values used to populate Solaris room/sector counters before opening the Solaris map. |
+
+The context id controls local button text / behavior. Confirmed cases from the
+handler conditionals and `MPBT.MSG`:
+
+| Context | Observed UI labels |
+|---------|--------------------|
+| `0x08` | `Travel`, `Planet`, `Cancel`; shows `Wealth`, `Cost`, `Tonnage` |
+| `0x03`, `0x6c`, `0x6f`, `0x78` | `Ship`, `Planet`, `Cancel`; shows cost/wealth fields |
+| `0x67` | `Attack`, `Planet`, `Cancel` |
+| other Inner Sphere contexts | `Info`, `Planet`, `Done` |
+| Solaris context `0xc6` | `Travel`, `Cancel` |
+
+When the user confirms or cancels from either map, the client sends
+`FUN_0040d360(contextId, selection)`, which emits client command `10`:
+
+```
+cmd 10 args: [type1 contextId] [type4 selection]
+selection == 0: cancel / close
+selection > 0: selected room id + 1
+```
+
+The server branch now parses this as a logged M5 travel reply, but it does not
+yet change room state. The follow-up needed for real navigation is to identify
+what server response follows a successful room selection: likely another map
+command or a world-scene update, but that is not confirmed yet.
+
 ---
 
 ## Appendix A — Confirmed Function Reference
