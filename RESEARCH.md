@@ -1891,6 +1891,26 @@ These point to a substantially richer state machine governing the lobby→world�
 **INITAR.DLL — substantially rewritten (+11.7%):**
 The launcher DLL grew by 12 KB. The additional RE on this binary is the highest priority since `INITAR.DLL` controls how `play.pcgi` is parsed and how the game is launched — any new fields in the config file or changes to the launch protocol would originate here.
 
+### play.pcgi lookup strategy (both v1.06 and v1.23 INITAR.DLL)
+
+String extraction from both INITAR binaries confirms the same Win32 API import set for file location:
+
+| API | Purpose |
+|-----|---------|
+| `GetCommandLineA` | Read the pcgi path passed as a CLI argument |
+| `GetModuleFileNameA` | Locate pcgi relative to the DLL/exe directory |
+| `GetFullPathNameA` | Resolve relative paths to absolute |
+| `GetModuleHandleA` | Self-reference for the above |
+
+INITAR likely tries all three strategies in order. `MPBT.bat` is written to satisfy all of them:
+
+1. `gen-pcgi` writes `C:\MPBT\play.pcgi` (default `--out` resolved 3 levels up from `src/scripts/`)
+2. A `copy /Y` step places `play.pcgi` into `C:\MPBT\client-1.23\` (exe-relative lookup)
+3. `cd /d C:\MPBT\client-1.23` sets cwd to the client dir before `start` (current-directory lookup)
+4. The absolute path `C:\MPBT\client-1.23\play.pcgi` is passed as the CLI arg (CommandLine lookup)
+
+The v1.23 import set is identical to v1.06, so no new pcgi fields have been confirmed yet — deeper RE (task 5 below) is needed to rule out format changes.
+
 ### RE tasks for this branch
 
 The v1.23 Ghidra project has been created with all three binaries analyzed. Work these in order using the per-binary RVA lists in `tools/version_diffs/`:
@@ -1901,5 +1921,5 @@ The v1.23 Ghidra project has been created with all three binaries analyzed. Work
 | 2 | Re-verify `Aries_RecvHandler` / case 0 | COMMEG32 v1.23 | §17 was confirmed on v1.06; confirm it still works identically |
 | 3 | Trace new state machine in `MPBTWIN` | MPBTWIN v1.23 | Find the handler for `"Solaris RPS"` → `"Transition to combat - even"` → `"Solaris COMBAT"` — this defines the world→combat REDIRECT flow |
 | 4 | Re-verify world command dispatch table | MPBTWIN v1.23 | §18 addresses will have shifted; new entries may exist in v1.23 |
-| 5 | Trace `INITAR.DLL` launcher changes | INITAR v1.23 | Check if `play.pcgi` format or launch arguments changed |
+| 5 | Trace `INITAR.DLL` launcher changes | INITAR v1.23 | Win32 API surface identical to v1.06 (confirmed by string extraction). Deeper RE needed to confirm pcgi field format is unchanged given +12 KB growth. |
 | 6 | Check `Speech32.dll` integration | MPBTWIN v1.23 | What events trigger speech? Any new server→client commands? |
