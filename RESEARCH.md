@@ -26,8 +26,9 @@ contributors who want to extend or audit the server emulator.
 16. [Open Questions](#16-open-questions)
 17. [COMMEG32.DLL — Secondary Connection Protocol (M2 RE)](#17-commeg32dll--secondary-connection-protocol-m2-re)
 18. [Game World Protocol — MPBTWIN.EXE RE](#18-game-world-protocol--mpbtwinexe-re)
-19. [Methodology](#19-methodology)
-20. [MEC File Binary Format](#20-mec-file-binary-format)
+19. [Client v1.23 Migration Notes](#19-client-v123-migration-notes)
+20. [Methodology](#19-methodology)
+21. [MEC File Binary Format](#20-mec-file-binary-format)
 
 ---
 
@@ -1833,3 +1834,72 @@ Offset  Ptr (LE32)   Resolved
 ...
 104     70 A3 43 00  0x0043A370  ← cmd 26: mech list
 ```
+
+---
+
+## 19. Client v1.23 Migration Notes
+
+> **Branch:** `feat/client-1.23` — all RE below is being re-verified against the 1.23 Ghidra project.
+> All function addresses throughout §1–§18 are from the **v1.06** binaries unless explicitly noted here.
+
+### Binary metadata
+
+| Binary | v1.06 | v1.23 | Delta |
+|--------|-------|-------|-------|
+| `MPBTWIN.EXE` | 577,536 bytes · Nov 21 1996 | 621,568 bytes · Oct 24 1997 | +44,032 (+7.6%) |
+| `COMMEG32.DLL` | 148,480 bytes · Oct 17 1996 | 144,896 bytes · Apr 9 1997 | −3,584 (−2.4%) |
+| `INITAR.DLL` | 104,960 bytes · Jul 30 1996 | 117,248 bytes · Mar 6 1997 | +12,288 (+11.7%) |
+
+Source debug paths embedded in v1.23 `MPBTWIN.EXE`: `D:\btech\Source123\Combat.c`, `D:\btech\Source123\Commwnd.c`, `D:\btech\Source123\Makemech.c`.
+
+### Protocol-relevant changes confirmed by string diff
+
+**COMMEG32.DLL — version string changed (breaks naive version checks):**
+- **Removed:** `"Kesmai Comm Engine 3.22"` (v1.06 LOGIN payload at offset `+0x070`)
+- **Added:** `"Kesmai CommEngine 3.29"` (note: no space between "Comm" and "Engine")
+- New exported symbols in v1.23 COMMEG32: `CE_VersionNumber`, `CE_VersionString`
+- Class name `"Kesmai Comm Engine"` (MFC class table, unrelated to the version string) is unchanged.
+
+**Server impact:** `parseLoginPayload()` reads `clientVer` as a raw string and logs it but does not enforce a specific value — no server code change required. Comments in `src/protocol/auth.ts` and `src/protocol/constants.ts` updated on this branch to document both strings.
+
+**MPBTWIN.EXE — new combat state machine strings:**
+
+The v1.23 binary contains new debug/state-label strings absent from v1.06:
+
+| String | Implication |
+|--------|------------|
+| `"Solaris RPS"` | Explicit state name for the 2D world (RPS = role-playing shell) |
+| `"Solaris COMBAT"` | Explicit state name for the combat engine |
+| `"Transition to combat - even"` | New combat-entry state; "even" = equal-side match |
+| `"Combat - advantage - up/down"` | In-match advantage tracking |
+| `"Combat - disadvantage - up/down"` | Symmetrical disadvantage path |
+| `"Combat - pursuit"` / `"run away"` | Explicit pursuit/retreat states |
+| `"Combat - victory"` / `"defeat"` | Match-end states |
+| `"Combat - imminent victory/defeat"` | Pre-end warning states |
+| `"Combat - winning/losing - up/down"` | Gradient win/loss states |
+| `"Unknown state attempting to enter SOLARIS COMBAT"` | Assertion / guard string |
+| `"Unknown state attempting to send the version"` | Version handshake guard |
+| `"Version not initialized"` | Login-phase guard |
+
+These point to a substantially richer state machine governing the lobby→world→combat transition in v1.23. The v1.06 binary had none of these labels (they appeared as a single hardcoded string `"BattleTech II Version BTOC 1.06"`).
+
+**MPBTWIN.EXE — new runtime behavior:**
+- `GetVersionExA` added: v1.23 performs OS version checks at startup.
+- Two registry keys for bypassing CPU checks: `Software\Kesmai\MultiPlayer Battletech Solaris\NoGameCPUCheck` and `NoSpeechCPUCheck`.
+- `Speech32.dll` in v1.23 client directory: speech synthesis support added.
+
+**INITAR.DLL — substantially rewritten (+11.7%):**
+The launcher DLL grew by 12 KB. The additional RE on this binary is the highest priority since `INITAR.DLL` controls how `play.pcgi` is parsed and how the game is launched — any new fields in the config file or changes to the launch protocol would originate here.
+
+### RE tasks for this branch
+
+The v1.23 Ghidra project has been created with all three binaries analyzed. Work these in order using the per-binary RVA lists in `tools/version_diffs/`:
+
+| Priority | Task | Binary | Notes |
+|----------|------|--------|-------|
+| 1 | Re-verify `FUN_10001420` (LOGIN builder) | COMMEG32 v1.23 | Confirm payload layout unchanged; check if `CE_VersionNumber`/`CE_VersionString` exports alter the version field |
+| 2 | Re-verify `Aries_RecvHandler` / case 0 | COMMEG32 v1.23 | §17 was confirmed on v1.06; confirm it still works identically |
+| 3 | Trace new state machine in `MPBTWIN` | MPBTWIN v1.23 | Find the handler for `"Solaris RPS"` → `"Transition to combat - even"` → `"Solaris COMBAT"` — this defines the world→combat REDIRECT flow |
+| 4 | Re-verify world command dispatch table | MPBTWIN v1.23 | §18 addresses will have shifted; new entries may exist in v1.23 |
+| 5 | Trace `INITAR.DLL` launcher changes | INITAR v1.23 | Check if `play.pcgi` format or launch arguments changed |
+| 6 | Check `Speech32.dll` integration | MPBTWIN v1.23 | What events trigger speech? Any new server→client commands? |

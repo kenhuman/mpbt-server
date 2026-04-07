@@ -68,7 +68,9 @@ export enum Msg {
                         //             12-byte header + payload starting at DAT_1001f888
                         //             Payload layout (offsets from payload start):
                         //               +0x000 (wire+12): username    (null-padded, field ~112 bytes)
-                        //               +0x070 (wire+124): "Kesmai Comm Engine 3.22" (80 bytes)
+                        //               +0x070 (wire+124): client version string, 80 bytes
+                        //                                   v1.06: "Kesmai Comm Engine 3.22"
+                        //                                   v1.23: "Kesmai CommEngine 3.29"
                         //               +0x0C0 (wire+204): email handle (40 bytes)
                         //               +0x0E8 (wire+244): internet/service id (80 bytes)
                         //               +0x13C (wire+328): htons(product_code) 2 bytes
