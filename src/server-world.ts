@@ -102,7 +102,10 @@ function nextSeq(session: ClientSession): number {
 }
 
 function getDisplayName(session: ClientSession): string {
-  return ((session.displayName ?? session.username) || 'Pilot').slice(0, 84);
+  const raw = String((session.displayName ?? session.username) || 'Pilot');
+  const withoutEsc = raw.replace(/[\x00-\x1F\x7F]/g, '');
+  const latin1 = Buffer.from(withoutEsc, 'latin1').subarray(0, 84).toString('latin1');
+  return latin1 || 'Pilot';
 }
 
 function getPresenceStatus(session: ClientSession): number {

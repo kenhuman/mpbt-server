@@ -294,6 +294,7 @@ function handleLogin(
 
   // DB authentication: auto-register on first login, verify password on subsequent.
   verifyOrRegister(rawUsername, login.password ?? '').then(authResult => {
+    if (session.socket.destroyed) return;
     if (!authResult.ok) {
       connLog.warn('[login] rejected by DB: %s (user="%s")', authResult.reason, rawUsername);
       session.socket.destroy();
@@ -420,6 +421,7 @@ function handleGameData(
     }
 
     findCharacter(accountId).then(character => {
+      if (session.socket.destroyed || session.phase !== 'lobby') return;
       if (character) {
         // Returning player: character on file → straight to world.
         session.displayName = character.display_name;
@@ -506,7 +508,7 @@ function handleGameData(
       parsed.subcmd, parsed.displayName, parsed.selection, session.phase,
     );
 
-    const displayName = parsed.displayName.trim().slice(0, 64);
+    const displayName = parsed.displayName.trim().replace(/[\x00-\x1F\x7F]/g, '').slice(0, 64);
     const allegiance = ALLEGIANCES[parsed.selection - 1];
     if (parsed.subcmd !== 1 || !displayName || !allegiance) {
       connLog.warn(
