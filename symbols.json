@@ -76,7 +76,7 @@
       "MapLocationListKeyHandler": { "binary": "FUN_0040f630", "role": "Keyboard handler for the same-group map location list opened from the map UI" },
       "Map_SendTravelReply":    { "binary": "FUN_0040d360", "role": "Client cmd 10 sender: type1(contextId) + type4(selection); selection is selectedRoomId+1 or 0 for cancel" },
       "WorldScene_SendAction":   { "binary": "FUN_0040d2d0", "role": "Client cmd 5 sender for main scene action buttons: byte(actionType); Cmd4 option buttons pass their server-supplied type here" },
-      "WorldScene_OptionHandler":{ "binary": "FUN_00413790", "role": "Main scene action-button handler: Cmd4 option ids 0x100..0x105 send cmd 5 with the server-supplied option type" },
+      "WorldScene_OptionHandler":{ "binary": "FUN_00413790", "role": "Main scene action-button handler: Cmd4 option id 0x100 is local Help; ids 0x101..0x105 send cmd 5 with the server-supplied option type" },
       "WorldScene_MouseHandler": { "binary": "FUN_00410b70", "role": "Main scene mouse-selection handler; fixed scene button offset 4 also sends cmd 5 action 4" },
       "WorldScene_KeyHandler":   { "binary": "FUN_00414220", "role": "Main scene keyboard/button handler; button id 1 sends cmd 5 action 4, id 0x131 opens Options" },
       "WorldScene_LocationAction": { "binary": "FUN_00419390", "role": "Main scene location-icon handler; sends client cmd 23 with one byte selecting one of four location slots; values 0..3 cached target, 4..7 uncached target" },
