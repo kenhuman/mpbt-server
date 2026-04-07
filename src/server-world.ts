@@ -55,6 +55,7 @@ import { launchRegistry } from './state/launch.js';
 import { loadMechs } from './data/mechs.js';
 import { Logger } from './util/logger.js';
 import { CaptureLogger } from './util/capture.js';
+import { ARIES_KEEPALIVE_INTERVAL_MS, SOCKET_IDLE_TIMEOUT_MS } from './config.js';
 
 // ── Shared mech catalog (same on-disk data as lobby) ─────────────────────────
 // Loaded once at module import time.  Provides a fallback when a player's
@@ -860,6 +861,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
   const connLog     = log.child(sessionId.slice(0, 8));
   const capture     = new CaptureLogger(sessionId);
   const parser      = new PacketParser();
+  let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
 
   connLog.info('[world] client connected from %s (session %s)', remoteAddr, sessionId);
 
@@ -917,8 +919,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
           break;
 
         case Msg.KEEPALIVE:
-          connLog.debug('[world] keepalive — echoing');
-          send(socket, buildPacket(Msg.KEEPALIVE, Buffer.alloc(0)), capture, 'KEEPALIVE');
+          connLog.debug('[world] keepalive response received');
           break;
 
         default:
@@ -945,15 +946,31 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
       notifyRoomDeparture(players, session, connLog);
     }
     players.remove(session.id);
+    if (keepaliveTimer !== undefined) {
+      clearInterval(keepaliveTimer);
+    }
     capture.close();
   });
 
   socket.setKeepAlive(true, 15_000);
-  socket.setTimeout(120_000);
-  socket.on('timeout', () => {
-    connLog.warn('[world] session timed out, closing');
-    socket.destroy();
-  });
+  if (SOCKET_IDLE_TIMEOUT_MS > 0) {
+    socket.setTimeout(SOCKET_IDLE_TIMEOUT_MS);
+    socket.on('timeout', () => {
+      connLog.warn('[world] session timed out after %d ms, closing', SOCKET_IDLE_TIMEOUT_MS);
+      socket.destroy();
+    });
+  }
+
+  keepaliveTimer = ARIES_KEEPALIVE_INTERVAL_MS > 0
+    ? setInterval(() => {
+      if (socket.destroyed || !socket.writable) {
+        return;
+      }
+      connLog.debug('[world] keepalive — sending ping');
+      send(socket, buildPacket(Msg.KEEPALIVE, Buffer.alloc(0)), capture, 'WORLD_KEEPALIVE_PING');
+    }, ARIES_KEEPALIVE_INTERVAL_MS)
+    : undefined;
+  keepaliveTimer?.unref();
 
   // ── Server speaks first ───────────────────────────────────────────────────
   session.phase = 'auth';

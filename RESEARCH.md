@@ -81,7 +81,7 @@ All types confirmed from the `switch()` dispatch table in `Aries_RecvDispatch` (
 | `0x01` | S→C | `CONN_CLOSE` | Server closes connection gracefully |
 | `0x02` | S→C | `CONN_ERROR` | Server signals error |
 | `0x03` | S→C | `REDIRECT` | Redirect to game-world server; 120-byte payload |
-| `0x05` | Both | `KEEPALIVE` | Client sends; server echoes back identical packet |
+| `0x05` | Both | `KEEPALIVE` | Server pings; client replies with the same type |
 | `0x15` | C→S | `LOGIN` | Client login packet, ~325 + pwLen bytes |
 | `0x16` | S→C | `LOGIN_REQUEST` | Server sends immediately on connect; empty payload |
 | `0x1a` | S→C | `TEXT_MSG` | Displays fatal error dialog; client quits |
@@ -1358,6 +1358,13 @@ Additional world-client senders confirmed after the first real-client M4 pass:
   notified Client A's room of arrival. This is a test harness workaround, not a
   production client patch recommendation. The repeatable helper for applying this to
   a local sandbox copy is `tools/patch-mpbtwin-two-gui.ps1`.
+- Follow-up on the 120-second GUI session timeouts: COMMEG32.DLL
+  `FUN_100014e0` case `5` confirms server-initiated ARIES `Msg.KEEPALIVE` (`0x05`)
+  is the right transport-level ping. The client responds by building a type-`0x05`
+  packet with `FUN_10003600(..., 5)` / `FUN_10003680(...)` and writing it back on
+  the socket. The server now sends configurable keepalive pings via
+  `ARIES_KEEPALIVE_INTERVAL_MS` and keeps `SOCKET_IDLE_TIMEOUT_MS` configurable for
+  long real-GUI validation runs.
 
 ---
 

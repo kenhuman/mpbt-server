@@ -58,7 +58,7 @@ export enum Msg {
   CONN_CLOSE    = 0x01, // CONFIRMED — server closes connection gracefully
   CONN_ERROR    = 0x02, // CONFIRMED — server signals error
   REDIRECT      = 0x03, // CONFIRMED — redirect: 120-byte payload [addr40|internet40|pw40]
-  KEEPALIVE     = 0x05, // CONFIRMED — keepalive/ping (echoed back by client)
+  KEEPALIVE     = 0x05, // CONFIRMED — server keepalive/ping; client replies with same type
   LOGIN_REQUEST = 0x16, // CONFIRMED — server requests login; client sends LOGIN in response
   TEXT_MSG      = 0x1a, // CONFIRMED — server text; shows as "MPBT Fatal Error" dialog then quit
   CHAR_LIST     = 0x1e, // CONFIRMED — 12-byte char/world list header; WM 0x7f1
