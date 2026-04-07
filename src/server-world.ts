@@ -82,12 +82,19 @@ const INQUIRY_MENU_ID    = 1000;
 const PERSONNEL_LIST_ID  = 0x3F2;
 const PERSONNEL_MORE_ID  = 0x95;
 let nextWorldRosterId    = 1;
+const worldCaptures      = new Map<string, CaptureLogger>();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function send(socket: net.Socket, pkt: Buffer, capture: CaptureLogger, label: string): void {
-  capture.logSend(pkt);
+  capture.logSend(pkt, label);
   socket.write(pkt);
+}
+
+function sendToWorldSession(session: ClientSession, pkt: Buffer, label: string): void {
+  if (session.socket.destroyed || !session.socket.writable) return;
+  worldCaptures.get(session.id)?.logSend(pkt, label);
+  session.socket.write(pkt);
 }
 
 /**
@@ -349,17 +356,15 @@ function handleComstarTextReply(
     clean,
   );
 
-  if (!target.socket.destroyed) {
-    // Cross-session write: use target's socket directly rather than the sender's
-    // CaptureLogger, which belongs to a different session.
-    target.socket.write(
-      buildCmd36MessageViewPacket(
-        getComstarId(session),
-        buildComstarDeliveryText(senderName, clean),
-        nextSeq(target),
-      ),
-    );
-  }
+  sendToWorldSession(
+    target,
+    buildCmd36MessageViewPacket(
+      getComstarId(session),
+      buildComstarDeliveryText(senderName, clean),
+      nextSeq(target),
+    ),
+    'CMD36_COMSTAR_DELIVERY',
+  );
   send(
     session.socket,
     buildCmd3BroadcastPacket(ack, nextSeq(session)),
@@ -420,8 +425,10 @@ function updateRoomPresenceStatus(
     ) {
       continue;
     }
-    other.socket.write(
+    sendToWorldSession(
+      other,
       buildCmd11PlayerEventPacket(session.worldRosterId, status, callsign, nextSeq(other)),
+      'CMD11_STATUS_UPDATE',
     );
   }
 
@@ -494,7 +501,7 @@ function handleWorldTextCommand(
       continue;
     }
 
-    other.socket.write(buildCmd3BroadcastPacket(line, nextSeq(other)));
+    sendToWorldSession(other, buildCmd3BroadcastPacket(line, nextSeq(other)), 'CMD3_CHAT_FANOUT');
   }
 }
 
@@ -514,8 +521,10 @@ function notifyRoomArrival(
     ) {
       continue;
     }
-    other.socket.write(
+    sendToWorldSession(
+      other,
       buildCmd13PlayerArrivalPacket(session.worldRosterId, callsign, nextSeq(other)),
+      'CMD13_ARRIVAL',
     );
   }
   connLog.info('[world] notified room of arrival: rosterId=%d callsign="%s"', session.worldRosterId, callsign);
@@ -537,8 +546,10 @@ function notifyRoomDeparture(
     ) {
       continue;
     }
-    other.socket.write(
+    sendToWorldSession(
+      other,
       buildCmd11PlayerEventPacket(session.worldRosterId, 0, callsign, nextSeq(other)),
+      'CMD11_DEPARTURE',
     );
   }
   connLog.info('[world] notified room of departure: rosterId=%d callsign="%s"', session.worldRosterId, callsign);
@@ -864,6 +875,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
   let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
 
   connLog.info('[world] client connected from %s (session %s)', remoteAddr, sessionId);
+  worldCaptures.set(sessionId, capture);
 
   const session: ClientSession = {
     id:                sessionId,
@@ -946,6 +958,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
       notifyRoomDeparture(players, session, connLog);
     }
     players.remove(session.id);
+    worldCaptures.delete(session.id);
     if (keepaliveTimer !== undefined) {
       clearInterval(keepaliveTimer);
     }
