@@ -7,11 +7,11 @@
  * ── Naming convention ────────────────────────────────────────────────────────
  * The research labels (Cmd64..Cmd73) follow the convention documented in
  * RESEARCH.md §19.6.1 and are used as-is in exported function names.
- * They are NOT the dispatch-table indices.  The relationship is:
+ * They ARE the dispatch-table indices.  The relationship is:
  *
- *   wire_byte  = ResearchCmd + 0x25   (e.g. Cmd64 → wire 0x65)
+ *   wire_byte  = ResearchCmd + 0x21   (e.g. Cmd64 → wire 0x61)
  *   tableIndex = wire_byte  − 0x21   (dispatch slot used by buildGamePacket)
- *   tableIndex = ResearchCmd + 4
+ *   tableIndex = ResearchCmd
  *
  * ── Coordinate encoding ──────────────────────────────────────────────────────
  * World coordinates are stored with a fixed-point centre offset:
@@ -42,7 +42,7 @@ import {
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /** World-coordinate bias added before type3 encoding. CONFIRMED §19.6.1. */
-const COORD_BIAS = 0x18e4258; // 26,099,288
+const COORD_BIAS = 0x18e4258; // 26,100,312
 
 /** Neutral-point bias for type1 velocity/motion fields. CONFIRMED §19.2. */
 export const MOTION_NEUTRAL = 0x0e1c; // 3,612
@@ -95,7 +95,7 @@ function encodeLongString(s: string, maxBytes: number): Buffer {
   return Buffer.concat([Buffer.from([raw.length + 0x21]), raw]);
 }
 
-// ── Cmd64 / wire 0x65 / table index 68 ───────────────────────────────────────
+// ── Cmd64 / wire 0x61 / table index 64 ───────────────────────────────────────
 // CONFIRMED — handler Combat_Cmd64_AddActor_v123 @ 0040d390 — Remote actor add.
 //
 // Wire layout (confirmed by Ghidra decompile):
@@ -153,10 +153,10 @@ export function buildCmd64RemoteActorPacket(actor: Cmd64RemoteActor, seq = 0): B
     encodeAsByte(actor.statusByte),
     encodeB85_2(actor.mechId),
   ]);
-  return buildGamePacket(68, args, true, seq); // wire 0x65
+  return buildGamePacket(64, args, true, seq); // wire 0x61
 }
 
-// ── Cmd65 / wire 0x66 / table index 69 ───────────────────────────────────────
+// ── Cmd65 / wire 0x62 / table index 65 ───────────────────────────────────────
 // CONFIRMED — handler FUN_0040d830 — Server→client combat position/motion sync.
 //
 // Wire layout (after seq+cmd):
@@ -203,10 +203,10 @@ export function buildCmd65PositionSyncPacket(pos: Cmd65PositionSync, seq = 0): B
     encodeLegVel(pos.legVel),
     encodeSpeedMag(pos.speedMag),
   ]);
-  return buildGamePacket(69, args, true, seq); // wire 0x66
+  return buildGamePacket(65, args, true, seq); // wire 0x62
 }
 
-// ── Cmd66 / wire 0x67 / table index 70 ───────────────────────────────────────
+// ── Cmd66 / wire 0x63 / table index 66 ───────────────────────────────────────
 // CONFIRMED — handler FUN_0040de50 — Remote actor damage code/value update.
 //
 // Wire layout:
@@ -229,10 +229,10 @@ export function buildCmd66ActorDamagePacket(
     encodeAsByte(damageCode),
     encodeAsByte(damageValue),
   ]);
-  return buildGamePacket(70, args, true, seq); // wire 0x67
+  return buildGamePacket(66, args, true, seq); // wire 0x63
 }
 
-// ── Cmd67 / wire 0x68 / table index 71 ───────────────────────────────────────
+// ── Cmd67 / wire 0x64 / table index 67 ───────────────────────────────────────
 // CONFIRMED — handler FUN_0040de80 — Local actor damage code/value update.
 //
 // Wire layout:
@@ -252,10 +252,10 @@ export function buildCmd67LocalDamagePacket(
     encodeAsByte(damageCode),
     encodeAsByte(damageValue),
   ]);
-  return buildGamePacket(71, args, true, seq); // wire 0x68
+  return buildGamePacket(67, args, true, seq); // wire 0x64
 }
 
-// ── Cmd68 / wire 0x69 / table index 72 ───────────────────────────────────────
+// ── Cmd68 / wire 0x65 / table index 68 ───────────────────────────────────────
 // CONFIRMED — handler FUN_0040e390 — Projectile/effect spawn.
 //
 // Wire layout:
@@ -299,10 +299,10 @@ export function buildCmd68ProjectileSpawnPacket(p: Cmd68ProjectileSpawn, seq = 0
     encodeCoordY(p.impactY),
     encodeB85_2(p.impactZ),
   ]);
-  return buildGamePacket(72, args, true, seq); // wire 0x69
+  return buildGamePacket(68, args, true, seq); // wire 0x65
 }
 
-// ── Cmd69 / wire 0x6a / table index 73 ───────────────────────────────────────
+// ── Cmd69 / wire 0x66 / table index 69 ───────────────────────────────────────
 // PARTIAL — handler FUN_0040e570 — Impact/effect at coordinate.
 //
 // Wire layout (from static RE):
@@ -339,10 +339,10 @@ export function buildCmd69ImpactAtCoordPacket(p: Cmd69ImpactAtCoord, seq = 0): B
     encodeCoordY(p.impactY),
     encodeB85_2(p.impactZ),
   ]);
-  return buildGamePacket(73, args, true, seq); // wire 0x6a
+  return buildGamePacket(69, args, true, seq); // wire 0x66
 }
 
-// ── Cmd70 / wire 0x6b / table index 74 ───────────────────────────────────────
+// ── Cmd70 / wire 0x67 / table index 70 ───────────────────────────────────────
 // CONFIRMED — handler FUN_0040e700 — Actor animation/status transition.
 //
 // Wire layout:
@@ -369,10 +369,10 @@ export function buildCmd70ActorTransitionPacket(
     encodeAsByte(slot),
     encodeAsByte(subcommand),
   ]);
-  return buildGamePacket(74, args, true, seq); // wire 0x6b
+  return buildGamePacket(70, args, true, seq); // wire 0x67
 }
 
-// ── Cmd71 / wire 0x6c / table index 75 ───────────────────────────────────────
+// ── Cmd71 / wire 0x68 / table index 71 ───────────────────────────────────────
 // CONFIRMED — handler FUN_0040eae0 — Reset current projectile/effect globals.
 //
 // No wire arguments.  Sets DAT_00478df8 and DAT_00478dfc to −1, clearing
@@ -381,10 +381,10 @@ export function buildCmd70ActorTransitionPacket(
 
 /** Build a Cmd71 reset-effect-state packet. CONFIRMED §19.6.1. */
 export function buildCmd71ResetEffectStatePacket(seq = 0): Buffer {
-  return buildGamePacket(75, Buffer.alloc(0), true, seq); // wire 0x6c
+  return buildGamePacket(71, Buffer.alloc(0), true, seq); // wire 0x68
 }
 
-// ── Cmd72 / wire 0x6d / table index 76 ───────────────────────────────────────
+// ── Cmd72 / wire 0x69 / table index 72 ───────────────────────────────────────
 // PARTIAL — handler Combat_Cmd72_InitLocalActor_v123 @ 00445110 — Local bootstrap.
 //
 // This is the first packet sent to a connecting combat client.  It seeds all
@@ -579,10 +579,10 @@ export function buildCmd72LocalBootstrapPacket(opts: Cmd72LocalBootstrap, seq = 
 
   parts.push(encodeLongString(m.actorDisplayName.substring(0, 31), 31));
 
-  return buildGamePacket(76, Buffer.concat(parts), true, seq); // wire 0x6d
+  return buildGamePacket(72, Buffer.concat(parts), true, seq); // wire 0x69
 }
 
-// ── Cmd73 / wire 0x6e / table index 77 ───────────────────────────────────────
+// ── Cmd73 / wire 0x6a / table index 73 ───────────────────────────────────────
 // PARTIAL — handler FUN_0040e2f0 — Actor rate/bias-field update.
 //
 // Wire layout:
@@ -608,5 +608,5 @@ export function buildCmd73ActorRatePacket(
     encodeAsByte(rateA),
     encodeAsByte(rateB),
   ]);
-  return buildGamePacket(77, args, true, seq); // wire 0x6e
+  return buildGamePacket(73, args, true, seq); // wire 0x6a
 }
