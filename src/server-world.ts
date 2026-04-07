@@ -347,13 +347,18 @@ function handleComstarTextReply(
     clean,
   );
 
-  target.socket.write(
-    buildCmd36MessageViewPacket(
-      getComstarId(session),
-      buildComstarDeliveryText(senderName, clean),
-      nextSeq(target),
-    ),
-  );
+  if (!target.socket.destroyed) {
+    send(
+      target.socket,
+      buildCmd36MessageViewPacket(
+        getComstarId(session),
+        buildComstarDeliveryText(senderName, clean),
+        nextSeq(target),
+      ),
+      capture,
+      'CMD36_COMSTAR_DELIVERY',
+    );
+  }
   send(
     session.socket,
     buildCmd3BroadcastPacket(ack, nextSeq(session)),
@@ -598,7 +603,7 @@ async function handleWorldLogin(
     const character = await findCharacter(session.accountId);
     if (character) {
       session.displayName = character.display_name;
-      session.allegiance  = character.allegiance ?? undefined;
+      session.allegiance  = character.allegiance;
       connLog.info(
         '[world-login] character loaded from DB: displayName="%s" allegiance=%s',
         character.display_name, character.allegiance,
@@ -849,6 +854,9 @@ function sendWorldInitSequence(
     'CMD10_ROOM_SYNC',
   );
 
+  // Cmd3 — TextBroadcast: welcome message. g_chatReady is set to 1 by Cmd4, so
+  // this is the earliest point at which Cmd3 will be displayed by the client.
+  send(socket, buildCmd3BroadcastPacket(WELCOME_TEXT, nextSeq(session)), capture, 'CMD3_WELCOME');
 
   // Cmd5 — CursorNormal: restore the arrow cursor.
   send(socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');

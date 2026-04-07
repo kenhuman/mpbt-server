@@ -14,7 +14,7 @@ export interface CharacterRow {
   id: number;
   account_id: number;
   display_name: string;
-  allegiance: Allegiance | null;
+  allegiance: Allegiance;
   created_at: Date;
 }
 

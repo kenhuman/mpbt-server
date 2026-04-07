@@ -55,6 +55,21 @@ const players = new PlayerRegistry();
 // Defaults to 127.0.0.1 (loopback only — works when client is on the same machine).
 const SERVER_HOST = process.env['SERVER_HOST'] ?? '127.0.0.1';
 
+// Validate the redirect address at startup so a misconfigured SERVER_HOST
+// surfaces immediately rather than crashing on the first player login.
+{
+  const redirectAddr = `${SERVER_HOST}:${WORLD_PORT}`;
+  const colonCount   = (redirectAddr.match(/:/g) ?? []).length;
+  const addrLen      = Buffer.byteLength(redirectAddr, 'ascii');
+  if (colonCount !== 1 || addrLen > 39) {
+    process.stderr.write(
+      `[startup] invalid REDIRECT addr "${redirectAddr}" ` +
+      `(${colonCount} colons, ${addrLen} bytes) — check SERVER_HOST\n`,
+    );
+    process.exit(1);
+  }
+}
+
 const MECH_SEND_LIMIT = 20; // Client (FUN_0043A370) stores mechs in parallel static arrays.
                            // Array stride analysis (Ghidra RE):
                            //   DAT_004dc510 (slot_info, int×N) + N×4 = DAT_004dc560 (mech_id)
@@ -409,7 +424,7 @@ function handleGameData(
       if (character) {
         // Returning player: character on file → straight to world.
         session.displayName = character.display_name;
-        session.allegiance  = character.allegiance ?? undefined;
+        session.allegiance  = character.allegiance;
         connLog.info(
           '[game] character found: displayName="%s" allegiance=%s → REDIRECT to world',
           character.display_name, character.allegiance,
@@ -420,9 +435,7 @@ function handleGameData(
           mechTypeString: MECHS[0]?.typeString ?? '',
           accountId:      accountId,
           displayName:    character.display_name,
-          // Only pass allegiance if it's actually set; null means the wizard
-          // was never completed → world server should show the picker again.
-          ...(character.allegiance ? { allegiance: character.allegiance } : {}),
+          allegiance: character.allegiance,
         });
         issueWorldRedirect(session, connLog, capture);
       } else {
@@ -452,7 +465,7 @@ function handleGameData(
     if (listId === 0 && selection > 0 && session.mechListSent && !session.awaitingMechConfirm) {
       // M6 pre-combat mech-window selection.
       const chosenSlot = selection - 1;
-      (session as ClientSession & { _pendingSlot?: number })._pendingSlot = chosenSlot;
+      session.pendingMechSlot = chosenSlot;
       connLog.info('[game] mech selected (slot=%d) → sending CONFIRM dialog', chosenSlot);
       const confirmPkt = buildMenuDialogPacket(CONFIRM_DIALOG_ID, 'CONFIRM', ['Launch!', 'Cancel'], nextSeq(session));
       send(session.socket, confirmPkt, capture, 'CONFIRM_DIALOG');
@@ -461,7 +474,7 @@ function handleGameData(
     } else if (listId === CONFIRM_DIALOG_ID && selection > 0 && session.awaitingMechConfirm) {
       // M6 pre-combat launch-confirm dialog.
       if (selection === 1) {
-        const pendingSlot = (session as ClientSession & { _pendingSlot?: number })._pendingSlot ?? 0;
+        const pendingSlot = session.pendingMechSlot ?? 0;
         const selectedMech = MECHS.find(m => m.slot === pendingSlot) ?? MECHS[0];
         recordWorldLaunch(session, selectedMech, connLog);
         connLog.info(
@@ -507,7 +520,7 @@ function handleGameData(
 
     createCharacter(session.accountId!, displayName, allegiance).then((character) => {
       session.displayName = character.display_name;
-      session.allegiance = character.allegiance ?? undefined;
+      session.allegiance = character.allegiance;
 
       connLog.info(
         '[game] char-creation Cmd9 accepted: displayName="%s" allegiance=%s → REDIRECT',

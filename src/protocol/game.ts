@@ -381,8 +381,8 @@ export function parseClientCmd4(
 
   const [textLen, offset] = decodeArgType1(payload, 3);
   const textEnd = offset + textLen;
-  // Client frames end with 3 CRC bytes plus trailing ESC.
-  if (textLen < 0 || textEnd + 4 > payload.length) return null;
+  // Client frames end with 3 CRC bytes; trailing ESC is optional (verifyInboundGameCRC §3).
+  if (textLen < 0 || textEnd + 3 > payload.length) return null;
 
   return {
     seq,
@@ -399,7 +399,8 @@ export function parseClientCmd4(
 export function parseClientCmd9CharacterCreationReply(
   payload: Buffer,
 ): { seq: number; subcmd: number; displayName: string; selection: number } | null {
-  if (payload.length < 10 || payload[0] !== 0x1B || payload[payload.length - 1] !== 0x1B) {
+  // Trailing ESC is optional — accept both CRC-only and CRC+ESC endings.
+  if (payload.length < 10 || payload[0] !== 0x1B) {
     return null;
   }
   const seq = payload[1] - 0x21;
@@ -410,8 +411,8 @@ export function parseClientCmd9CharacterCreationReply(
   const textLen = payload[4] - 0x21;
   const textStart = 5;
   const textEnd = textStart + textLen;
-  // Selection byte plus three CRC bytes plus trailing ESC must remain.
-  if (textLen < 0 || textEnd + 5 > payload.length) return null;
+  // Selection byte + 3 CRC bytes must remain; trailing ESC is optional.
+  if (textLen < 0 || textEnd + 4 > payload.length) return null;
 
   return {
     seq,
@@ -439,7 +440,8 @@ export function parseClientCmd21TextReply(
   //   [0x1B ESC] [seq] [cmd] [type4 dialog/count] [type1 text_len] [text] [crc x3] [0x1B ESC]
   // A live first-login Cmd37(0) probe on 2026-04-06 confirmed that zero-target
   // cmd-21 replies end exactly with CRC+ESC after the text payload.
-  if (payload.length < 14 || payload[0] !== 0x1B || payload[payload.length - 1] !== 0x1B) {
+  // Trailing ESC is optional — accept both CRC-only and CRC+ESC endings.
+  if (payload.length < 14 || payload[0] !== 0x1B) {
     return null;
   }
   const seq = payload[1] - 0x21;
@@ -453,8 +455,8 @@ export function parseClientCmd21TextReply(
   [textLen, offset] = decodeArgType1(payload, offset);
 
   const textEnd = offset + textLen;
-  // Three CRC bytes plus trailing ESC must remain after the raw text bytes.
-  if (textLen < 0 || textEnd + 4 > payload.length) return null;
+  // 3 CRC bytes must remain after the raw text bytes; trailing ESC is optional.
+  if (textLen < 0 || textEnd + 3 > payload.length) return null;
 
   return {
     seq,

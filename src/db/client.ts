@@ -28,3 +28,13 @@ export const pool = new Pool({ connectionString: databaseUrl });
 pool.on('error', (err: Error) => {
   process.stderr.write(`[db] idle client error: ${err.message}\n`);
 });
+
+// Verify DB connectivity at startup so misconfiguration surfaces immediately
+// rather than on the first player login.
+void pool.connect().then(client => {
+  client.release();
+}).catch((err: unknown) => {
+  const msg = err instanceof Error ? err.message : String(err);
+  process.stderr.write(`[db] startup connectivity check failed: ${msg}\n`);
+  process.exit(1);
+});

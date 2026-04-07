@@ -67,6 +67,12 @@ export interface ClientSession {
    */
   selectedMechSlot?: number;
 
+  /**
+   * Pending mech slot chosen in the mech-select dialog, held until the
+   * player confirms their selection (cmd-7 confirm reply).
+   */
+  pendingMechSlot?: number;
+
   // ── Persistence fields (set after DB lookup / character creation) ─────────
 
   /** Database account row ID; set after successful login & DB auth. */

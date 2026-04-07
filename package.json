@@ -17,7 +17,7 @@
     "aries-protocol"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "type": "module",
   "main": "dist/server.js",
