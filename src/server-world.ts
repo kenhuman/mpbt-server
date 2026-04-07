@@ -569,11 +569,18 @@ async function handleWorldLogin(
   // Retrieve the mech the player picked in the lobby.
   const launch = launchRegistry.consume(session.username);
   if (launch) {
+    session.accountId       = launch.accountId;
+    session.displayName     = launch.displayName;
+    session.allegiance      = launch.allegiance;
     session.selectedMechId   = launch.mechId;
     session.selectedMechSlot = launch.mechSlot;
     connLog.info(
-      '[world-login] launch record found: mech=%s (id=%d slot=%d)',
-      launch.mechTypeString, launch.mechId, launch.mechSlot,
+      '[world-login] launch record found: displayName="%s" allegiance=%s mech=%s (id=%d slot=%d)',
+      session.displayName ?? session.username,
+      session.allegiance ?? '(none)',
+      launch.mechTypeString,
+      launch.mechId,
+      launch.mechSlot,
     );
   } else {
     session.selectedMechId   = FALLBACK_MECH_ID;

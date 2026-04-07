@@ -333,6 +333,37 @@ export function parseClientCmd4(
 }
 
 /**
+ * Parse a client-sent cmd-9 character creation reply.
+ *
+ * CONFIRMED from MPBTWIN.EXE FUN_0042dbf0 -> FUN_0040d400:
+ *   [subcmd byte == 1] [encodeString typed_name] [selected-index byte]
+ */
+export function parseClientCmd9CharacterCreationReply(
+  payload: Buffer,
+): { seq: number; subcmd: number; displayName: string; selection: number } | null {
+  if (payload.length < 10 || payload[0] !== 0x1B || payload[payload.length - 1] !== 0x1B) {
+    return null;
+  }
+  const seq = payload[1] - 0x21;
+  const cmd = payload[2] - 0x21;
+  if (cmd !== 9) return null;
+
+  const subcmd = payload[3] - 0x21;
+  const textLen = payload[4] - 0x21;
+  const textStart = 5;
+  const textEnd = textStart + textLen;
+  // Selection byte plus three CRC bytes plus trailing ESC must remain.
+  if (textLen < 0 || textEnd + 5 > payload.length) return null;
+
+  return {
+    seq,
+    subcmd,
+    displayName: payload.subarray(textStart, textEnd).toString('latin1'),
+    selection: payload[textEnd] - 0x21,
+  };
+}
+
+/**
  * Parse a client-sent cmd-21 editable-text reply.
  *
  * CONFIRMED by MPBTWIN.EXE:
@@ -345,7 +376,14 @@ export function parseClientCmd4(
 export function parseClientCmd21TextReply(
   payload: Buffer,
 ): { seq: number; dialogId: number; text: string } | null {
-  if (payload.length < 15 || payload[0] !== 0x1B) return null;
+  // Client game frames arrive here without a decoded inner 0x20 separator byte.
+  // The packet body is:
+  //   [0x1B ESC] [seq] [cmd] [type4 dialog/count] [type1 text_len] [text] [crc x3] [0x1B ESC]
+  // A live first-login Cmd37(0) probe on 2026-04-06 confirmed that zero-target
+  // cmd-21 replies end exactly with CRC+ESC after the text payload.
+  if (payload.length < 14 || payload[0] !== 0x1B || payload[payload.length - 1] !== 0x1B) {
+    return null;
+  }
   const seq = payload[1] - 0x21;
   const cmd = payload[2] - 0x21;
   if (cmd !== 21) return null;
@@ -357,8 +395,8 @@ export function parseClientCmd21TextReply(
   [textLen, offset] = decodeArgType1(payload, offset);
 
   const textEnd = offset + textLen;
-  if (payload.length < textEnd + 5) return null;
-  if (payload[textEnd] !== 0x20 || payload[payload.length - 1] !== 0x1B) return null;
+  // Three CRC bytes plus trailing ESC must remain after the raw text bytes.
+  if (textLen < 0 || textEnd + 4 > payload.length) return null;
 
   return {
     seq,

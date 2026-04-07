@@ -10,6 +10,12 @@
  */
 
 export interface PendingLaunch {
+  /** Database account row ID, when the launch came from an authenticated lobby session. */
+  accountId?: number;
+  /** Character callsign shown in world UI. */
+  displayName?: string;
+  /** House allegiance selected during character creation. */
+  allegiance?: string;
   /** Selected mech ID (from MechEntry.id — the MPBT.MSG variant table index). */
   mechId: number;
   /** Selected mech slot (0-based sort position in the mech list). */

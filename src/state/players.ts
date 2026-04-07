@@ -8,7 +8,7 @@ export type SessionPhase =
   | 'connected'     // TCP accepted, waiting for first bytes
   | 'auth'          // parsing login packet
   | 'lobby'         // authenticated; about to look up or create character
-  | 'char-creation' // first-login character creation in progress (allegiance dialog)
+  | 'char-creation' // first-login character creation in progress (callsign + allegiance)
   | 'world'         // in the game world (RPS/arena) after REDIRECT
   | 'closing';      // disconnect in progress
 

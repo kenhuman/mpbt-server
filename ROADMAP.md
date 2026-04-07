@@ -118,10 +118,10 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 | `characters` table + allegiance enum | ✅ | One character per account; `display_name UNIQUE`; allegiance CHECK constraint `Davion\|Steiner\|Liao\|Marik\|Kurita` |
 | `npm run db:migrate` — idempotent schema apply | ✅ | Reads `src/db/schema.sql`; safe to re-run |
 | `ClientSession` — add `accountId`, `displayName`, `allegiance` | ✅ | Set from DB after login; `'char-creation'` phase added |
-| Character creation flow (first login) | ✅ | cmd-3 → no character in DB → send House allegiance dialog (cmd-7) → persist → REDIRECT |
+| Character creation flow (first login) | ✅ | cmd-3 → no character in DB → send `Cmd9` callsign + House prompt → persist typed display name and allegiance → seed launch context → REDIRECT |
 | Post-login direct world entry (returning player) | ✅ | cmd-3 → character found → REDIRECT to port 2001 immediately; no mech-select shown |
 | World server uses `displayName` as Cmd4 callsign | ✅ | Falls back to `username` if character data unavailable (e.g. test direct-connect) |
-| Display name entry (name selection dialog) | 🔬 | Stronger RE now points to server `Cmd9` as the likely authentic first-login prompt: it opens `MPBT.MSG[5]` (`"Enter your character's name"`), then a numbered selector titled `MPBT.MSG[6]` (`"Choose your allegiance:"`), and submits outbound `cmd 9, subcmd 1, <typed name>, <selected-index>`. This supersedes the earlier `Cmd36`/`Cmd37` hypothesis; `Cmd36` is the read/reply viewer, `Cmd37` opens the ComStar compose editor, and the live `Cmd37(0)` probe is only a compatibility bridge. Live GUI probe on 2026-04-06 confirmed `Cmd9` returns typed name + selected House (`Moosington`, index 4 → Marik) and can advance to REDIRECT. Remaining work: replace the current username-as-display-name placeholder with a clean `Cmd9` implementation and seed normal launch/world context. |
+| Display name entry (name selection dialog) | ✅ | Implemented with server `Cmd9`, the likely authentic first-login prompt: it opens `MPBT.MSG[5]` (`"Enter your character's name"`), then a numbered selector titled `MPBT.MSG[6]` (`"Choose your allegiance:"`), and submits outbound `cmd 9, subcmd 1, <typed name>, <selected-index>`. This supersedes the earlier `Cmd36`/`Cmd37` hypothesis; `Cmd36` is the read/reply viewer, `Cmd37` opens the ComStar compose editor, and the live `Cmd37(0)` probe is only a compatibility bridge. Live GUI probe confirmed the wire path; socket smoke now confirms persistence, launch-context seeding, and returning-account world entry with the typed callsign in `Cmd4`. |
 
 **Known M3 limitations / M4 work:**
 - Initial room-sync uses `Cmd10`; the earlier `Cmd9(count=0)` placeholder was removed, and `Cmd9` is now tied to the first-login name + allegiance prompt rather than room presence.
@@ -131,10 +131,10 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 
 **Verification:**
 - *New player:* connect, select House allegiance, enter world — Cmd4 callsign shows username; allegiance persisted to DB.
-- *Returning player:* connect, skip allegiance dialog, enter world directly — no mech-select screen shown.
+- *Returning player:* connect, skip character creation, enter world directly — no mech-select screen shown.
 - *Wrong password:* second login with wrong credentials → connection closed.
 - *Mech select (M6 path):* cmd-26 visible only when explicitly triggered; pre-combat flow unaffected.
-- *First-login `Cmd9` probe:* live GUI client rendered the `MPBT.MSG[5]` / `[6]` name + allegiance path, returned `cmd 9 / subcmd 1` with typed name `Moosington` and selected index `4`, persisted `Marik`, and advanced to REDIRECT. The older `Cmd37(0)` probe remains a compatibility bridge, not the authentic original name-entry UI.
+- *First-login `Cmd9` implementation:* socket smoke confirmed `Cmd9` prompt → typed callsign + House reply → persisted character → REDIRECT → world init `6,4,10,3,5`, with `Cmd4` containing the typed callsign on both first-login and returning-account paths. The older `Cmd37(0)` probe remains a compatibility bridge, not the authentic original name-entry UI.
 
 ---
 
