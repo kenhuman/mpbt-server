@@ -1519,6 +1519,39 @@ configuration) in detail — not covered in this file because the server does no
 implement COMMEG32-level timing; see `commeg32_message_types.md` in that repo for the
 full `ParseProtocolMessage` switch-table and timing histogram structures.
 
+Fresh audit on 2026-04-06 against `RazorWing/solaris` `main` at commit
+`bcf5913` (`Solaris Prototype Server`) confirms the repo is small and source-only:
+`solaris_server.py` plus four RE notes (`mpbtwin_protocol.md`, `mpbtwin_state.md`,
+`commeg32_connection_analysis.md`, `commeg32_message_types.md`). Two caveats matter
+before importing anything else:
+
+- The RazorWing `MPBTWIN.EXE` hash (`MD5 60c8febf6b4e0a319367e3c6557d705e`) does not
+  match the local target (`MD5 8735070e8f3eaa387d43db2223bca5cc`, SHA256
+  `118dd4267e5bcfa762f511b8f7488afd03d090d48653fdffaf327d02effe13df`). Its COMMEG32
+  hash also differs from ours (`RazorWing MD5 fdd292992368094a3f2da589c5fd1da3` vs
+  local `MD5 6b6694d4647d61afcc018bd5058bb1ca`). Treat handler addresses and command
+  table semantics as hints only.
+- Their direct-launch path (`MPBTWIN.EXE /S=127.0.0.1:2001`) is not the same as our
+  `play.pcgi`/INITAR/lobby/REDIRECT flow. It is still useful as a possible future
+  direct-connect test harness, especially for the `MMC` combat banner path, but it
+  bypasses the account and world-launch context that our server now emulates.
+
+Useful follow-up leads from the fresh audit:
+
+- The COMMEG timing model is the main unexplored transport-level value: type `28`
+  configures `TargetTime`, `SendFreq`, and `PingFreq`; type `27` records ping RTT; type
+  `29` sends a 168-byte latency histogram report. This is not needed for current M3/M4
+  stability, but it is the best starting point if later long-running GUI sessions expose
+  timing warnings or disconnects.
+- `commeg32_message_types.md` also documents type `26` as UI text/error delivery via
+  WM `0x7F6`. Our server should continue avoiding `Msg.TEXT_MSG` for normal gameplay
+  because current local RE already shows it behaves like a fatal/error text path, not
+  a chat primitive.
+- The RazorWing `mpbtwin_protocol.md` combat/position command notes (`Type P/D/S`,
+  position offset `26100312`, rotation multiplier `182`) may be useful for M5/M7 RE,
+  but only after revalidating the corresponding handlers in our binary. In our current
+  RPS/world table, cmd `3` is already proven to be text broadcast, not position sync.
+
 ### RE Process
 
 1. Open `COMMEG32.DLL` in Ghidra.  Run auto-analysis.
