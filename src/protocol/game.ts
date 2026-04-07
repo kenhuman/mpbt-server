@@ -48,6 +48,8 @@ export function encodeB85_2(v: number): Buffer {
 
 /** Encode v with FUN_00402be0(3, v) → 4 raw bytes (range 0..52,200,624). */
 export function encodeB85_3(v: number): Buffer {
+  const MAX = 85 ** 4 - 1; // 52,200,624
+  if (v < 0 || v > MAX) throw new RangeError(`encodeB85_3: value ${v} out of range 0..${MAX}`);
   const d0 = Math.floor(v / (85 * 85 * 85));
   let r    = v % (85 * 85 * 85);
   const d1 = Math.floor(r / (85 * 85));
@@ -59,6 +61,8 @@ export function encodeB85_3(v: number): Buffer {
 
 /** Encode v with FUN_00402be0(4, v) → 5 raw bytes (range 0..4,437,053,124). */
 export function encodeB85_4(v: number): Buffer {
+  const MAX = 85 ** 5 - 1; // 4,437,053,124
+  if (v < 0 || v > MAX) throw new RangeError(`encodeB85_4: value ${v} out of range 0..${MAX}`);
   const digits = new Array<number>(5);
   let current = v;
   for (let i = 4; i >= 0; i -= 1) {

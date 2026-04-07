@@ -1280,8 +1280,10 @@ Cmd36, which correctly skips both the new-user and returning-user dialog flows e
 - We do **not** send Cmd36. Client proceeds from welcome → cmd-3 → Cmd4 arena without
   any user-creation dialog.
 - The allegiance picker and character name our server previously showed via Cmd7 was our
-  own addition (not related to Cmd36). That has been replaced by server-side auto-create
-  in `handleWorldLogin` (see §5 and `src/server-world.ts`).
+  own addition (not related to Cmd36). In the current implementation, character creation
+  happens in the lobby flow when processing the Cmd9 reply and inserting the record into
+  the database; `handleWorldLogin` only consumes `launchRegistry` state for world entry
+  and does not create character data.
 - `FUN_00415f50` (keyboard handler at `LAB_00415f50`) and `FUN_00416170` (ESC/Space remap)
   are inline label targets inside the Cmd36 dialog; they are not independently reachable
   from the dispatch table.

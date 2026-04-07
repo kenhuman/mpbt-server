@@ -22,7 +22,6 @@
 
 import * as net    from 'net';
 import * as crypto from 'crypto';
-import * as path   from 'path';
 
 import { WORLD_PORT, Msg } from './protocol/constants.js';
 import { PacketParser, buildPacket, hexDump } from './protocol/aries.js';
