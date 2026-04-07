@@ -46,19 +46,26 @@ export function encodeB85_2(v: number): Buffer {
   return Buffer.from([d0 + 0x21, d1 + 0x21, d2 + 0x21]);
 }
 
+/** Encode v with FUN_00402be0(3, v) → 4 raw bytes (range 0..52,200,624). */
+export function encodeB85_3(v: number): Buffer {
+  const d0 = Math.floor(v / (85 * 85 * 85));
+  let r    = v % (85 * 85 * 85);
+  const d1 = Math.floor(r / (85 * 85));
+  r %= 85 * 85;
+  const d2 = Math.floor(r / 85);
+  const d3 = r % 85;
+  return Buffer.from([d0 + 0x21, d1 + 0x21, d2 + 0x21, d3 + 0x21]);
+}
+
 /** Encode v with FUN_00402be0(4, v) → 5 raw bytes (range 0..4,437,053,124). */
 export function encodeB85_4(v: number): Buffer {
-  const b3 = 85 * 85 * 85;
-  const b4 = 85 * b3;
-  const d0 = Math.floor(v / b4);
-  const r1 = v % b4;
-  const d1 = Math.floor(r1 / b3);
-  const r2 = r1 % b3;
-  const d2 = Math.floor(r2 / (85 * 85));
-  const r3 = r2 % (85 * 85);
-  const d3 = Math.floor(r3 / 85);
-  const d4 = r3 % 85;
-  return Buffer.from([d0 + 0x21, d1 + 0x21, d2 + 0x21, d3 + 0x21, d4 + 0x21]);
+  const digits = new Array<number>(5);
+  let current = v;
+  for (let i = 4; i >= 0; i -= 1) {
+    digits[i] = current % 85;
+    current = Math.floor(current / 85);
+  }
+  return Buffer.from(digits.map(digit => digit + 0x21));
 }
 
 /** Encode v with FUN_00402f40 encoding → 1 raw byte. */
@@ -82,6 +89,21 @@ export function encodeString(s: string): Buffer {
   if (raw.includes(0x1b)) throw new RangeError('encodeString: text must not contain ESC (0x1B)');
   if (raw.length > 84) throw new RangeError(`encodeString: string too long (${raw.length} > 84)`);
   return Buffer.concat([Buffer.from([raw.length + 0x21]), raw]);
+}
+
+/**
+ * Encode a raw latin1 string using the base-85(1) length prefix used by
+ * FUN_0040c130 / FUN_00403100. This is distinct from encodeString().
+ */
+function encodeB85LengthString(s: string): Buffer {
+  const raw = Buffer.from(s, 'latin1');
+  if (raw.includes(0x1b)) {
+    throw new RangeError('encodeB85LengthString: text must not contain ESC (0x1B)');
+  }
+  if (raw.length > (85 * 85 - 1)) {
+    throw new RangeError(`encodeB85LengthString: string too long (${raw.length} > 7224)`);
+  }
+  return Buffer.concat([encodeB85_1(raw.length), raw]);
 }
 
 // ── CRC algorithm ─────────────────────────────────────────────────────────────
@@ -342,6 +364,105 @@ export function parseClientCmd7(
   return { seq, listId, selection };
 }
 
+/**
+ * Parse a client-sent world cmd-4 free-text frame.
+ * RPS sender path: FUN_0040d280 -> FUN_00403100
+ * Wire layout (args after cmd byte):
+ *   [type1 2B: textLen] [raw text bytes]
+ * Returns null if the frame is malformed or truncated.
+ */
+export function parseClientCmd4(
+  payload: Buffer,
+): { seq: number; text: string } | null {
+  if (payload.length < 9 || payload[0] !== 0x1B) return null;
+  const seq = payload[1] - 0x21;
+  const cmd = payload[2] - 0x21;
+  if (cmd !== 4) return null;
+
+  const [textLen, offset] = decodeArgType1(payload, 3);
+  const textEnd = offset + textLen;
+  // Client frames end with 3 CRC bytes plus trailing ESC.
+  if (textLen < 0 || textEnd + 4 > payload.length) return null;
+
+  return {
+    seq,
+    text: payload.subarray(offset, textEnd).toString('latin1'),
+  };
+}
+
+/**
+ * Parse a client-sent cmd-9 character creation reply.
+ *
+ * CONFIRMED from MPBTWIN.EXE FUN_0042dbf0 -> FUN_0040d400:
+ *   [subcmd byte == 1] [encodeString typed_name] [selected-index byte]
+ */
+export function parseClientCmd9CharacterCreationReply(
+  payload: Buffer,
+): { seq: number; subcmd: number; displayName: string; selection: number } | null {
+  if (payload.length < 10 || payload[0] !== 0x1B || payload[payload.length - 1] !== 0x1B) {
+    return null;
+  }
+  const seq = payload[1] - 0x21;
+  const cmd = payload[2] - 0x21;
+  if (cmd !== 9) return null;
+
+  const subcmd = payload[3] - 0x21;
+  const textLen = payload[4] - 0x21;
+  const textStart = 5;
+  const textEnd = textStart + textLen;
+  // Selection byte plus three CRC bytes plus trailing ESC must remain.
+  if (textLen < 0 || textEnd + 5 > payload.length) return null;
+
+  return {
+    seq,
+    subcmd,
+    displayName: payload.subarray(textStart, textEnd).toString('latin1'),
+    selection: payload[textEnd] - 0x21,
+  };
+}
+
+/**
+ * Parse a client-sent cmd-21 editable-text reply.
+ *
+ * CONFIRMED by MPBTWIN.EXE:
+ *   local compose builder FUN_00416db0 submits cmd 21 via FUN_00418760:
+ *     [type4 dialog_id] [raw-string via FUN_00403100]
+ *
+ * The dialog itself may be opened locally by the `listId=1000` inquiry submenu
+ * or by server command 37 (`FUN_00416d40`), which wraps FUN_00416db0.
+ */
+export function parseClientCmd21TextReply(
+  payload: Buffer,
+): { seq: number; dialogId: number; text: string } | null {
+  // Client game frames arrive here without a decoded inner 0x20 separator byte.
+  // The packet body is:
+  //   [0x1B ESC] [seq] [cmd] [type4 dialog/count] [type1 text_len] [text] [crc x3] [0x1B ESC]
+  // A live first-login Cmd37(0) probe on 2026-04-06 confirmed that zero-target
+  // cmd-21 replies end exactly with CRC+ESC after the text payload.
+  if (payload.length < 14 || payload[0] !== 0x1B || payload[payload.length - 1] !== 0x1B) {
+    return null;
+  }
+  const seq = payload[1] - 0x21;
+  const cmd = payload[2] - 0x21;
+  if (cmd !== 21) return null;
+
+  let offset = 3;
+  let textLen = 0;
+  let dialogId = 0;
+  [dialogId, offset] = decodeArgType4(payload, offset);
+  [textLen, offset] = decodeArgType1(payload, offset);
+
+  const textEnd = offset + textLen;
+  // Three CRC bytes plus trailing ESC must remain after the raw text bytes.
+  if (textLen < 0 || textEnd + 4 > payload.length) return null;
+
+  return {
+    seq,
+    dialogId,
+    text: payload.subarray(offset, textEnd).toString('latin1'),
+  };
+}
+
 // ── Command 7 — server menu/dialog ───────────────────────────────────────────
 // CONFIRMED by FUN_004112b0: server sends cmd 7, client shows a numbered menu.
 //
@@ -388,6 +509,35 @@ export function buildMenuDialogPacket(
   seq    = 0,
 ): Buffer {
   return buildGamePacket(7, buildMenuDialogArgs(listId, title, items), false, seq);
+}
+
+// ── Command 36 — Read / Reply message view (server→client) ──────────────────
+// CONFIRMED from MPBTWIN.EXE FUN_004161a0:
+//
+// Wire layout (args after seq+cmd bytes):
+//   [type4 5B: dialog_id]
+//   [strlen 2B: text_len via FUN_00402be0(1)]
+//   [text_len bytes: raw text]
+//
+// dialog_id == 0:
+//   opens a read-only text page with Enter / optional paging controls.
+// dialog_id != 0:
+//   opens the same page but adds Reply; pressing R reopens the local compose
+//   builder FUN_00416db0(dialog_id, NULL), and that later emits cmd 21.
+
+export function buildCmd36MessageViewArgs(dialogId: number, text: string): Buffer {
+  return Buffer.concat([
+    encodeB85_4(dialogId),
+    encodeB85LengthString(text),
+  ]);
+}
+
+export function buildCmd36MessageViewPacket(
+  dialogId: number,
+  text: string,
+  seq = 0,
+): Buffer {
+  return buildGamePacket(36, buildCmd36MessageViewArgs(dialogId, text), false, seq);
 }
 
 // ── Command 20 — Text dialog (server→client) ──────────────────────────────────

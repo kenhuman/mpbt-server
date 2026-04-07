@@ -10,18 +10,18 @@
  */
 
 export interface PendingLaunch {
+  /** Database account row ID, when the launch came from an authenticated lobby session. */
+  accountId?: number;
+  /** Character callsign shown in world UI. */
+  displayName?: string;
+  /** House allegiance selected during character creation. */
+  allegiance?: string;
   /** Selected mech ID (from MechEntry.id — the MPBT.MSG variant table index). */
   mechId: number;
   /** Selected mech slot (0-based sort position in the mech list). */
   mechSlot: number;
   /** Mech designation string (e.g. "AS7-D"). */
   mechTypeString: string;
-  /** Database account ID — used by the world server to update character data. */
-  accountId?: number;
-  /** Character display name set by the lobby. */
-  displayName?: string;
-  /** House allegiance set by the lobby. */
-  allegiance?: string;
 }
 
 class LaunchRegistry {

@@ -8,6 +8,7 @@ export type SessionPhase =
   | 'connected'     // TCP accepted, waiting for first bytes
   | 'auth'          // parsing login packet
   | 'lobby'         // authenticated; about to look up or create character
+  | 'char-creation' // first-login character creation in progress (callsign + allegiance)
   | 'world'         // in the game world (RPS/arena) after REDIRECT
   | 'closing';      // disconnect in progress
 
@@ -35,6 +36,26 @@ export interface ClientSession {
   awaitingMechConfirm: boolean;
   /** Server→client sequence number 0..41, incremented per game frame. */
   serverSeq: number;
+  /** True once the world init sequence has been sent in response to the first world cmd-3. */
+  worldInitialized?: boolean;
+  /**
+   * Stable per-connection roster identifier used by world presence packets
+   * (Cmd10/Cmd11/Cmd12/Cmd13). This is distinct from accountId and only needs to be
+   * unique within the current server process.
+   */
+  worldRosterId?: number;
+  /**
+   * Current room-presence state byte used by Cmd10/Cmd11 updates.
+   * 5 = standing, 6..12 = booth 1..7.
+   */
+  worldPresenceStatus?: number;
+  /**
+   * Most recent world inquiry target, used to page follow-up record requests
+   * such as Cmd7(0x95, 2) after Cmd14_PersonnelRecord.
+   */
+  worldInquiryTargetId?: number;
+  /** Current personnel-record page number for the active inquiry target. */
+  worldInquiryPage?: number;
   /**
    * Mech ID selected in the lobby and used to initialize the world arena.
    * Set on world-server sessions (via launchRegistry.consume); undefined on lobby sessions.
@@ -85,9 +106,22 @@ export class PlayerRegistry {
     this.sessions.delete(id);
   }
 
+  all(): ClientSession[] {
+    return [...this.sessions.values()];
+  }
+
   /** Sessions currently in a given room. */
   inRoom(roomId: string): ClientSession[] {
-    return [...this.sessions.values()].filter(s => s.roomId === roomId);
+    return this.all().filter(s => s.roomId === roomId);
+  }
+
+  /** World sessions that are currently live and initialized. */
+  worldSessions(): ClientSession[] {
+    return this.all().filter(
+      session => session.phase === 'world' &&
+        session.worldInitialized &&
+        !session.socket.destroyed,
+    );
   }
 
   /** Broadcast raw bytes to all sessions in a room except the sender. */

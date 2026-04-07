@@ -14,7 +14,6 @@
  *   Client → Server: SYNC          (type 0x00, cmd-3 capabilities frame)
  *   Server → Client: Cmd6 CursorBusy   (show hourglass while loading)
  *   Server → Client: Cmd4 SceneInit    (create arena window; sets g_chatReady=1)
- *   Server → Client: Cmd9 RoomList     (set roster ready flag)
  *   Server → Client: Cmd3 Broadcast    (welcome message; requires g_chatReady=1)
  *   Server → Client: Cmd5 CursorNormal (restore cursor)
  *
@@ -34,20 +33,30 @@ import {
   buildWelcomePacket,
 } from './protocol/auth.js';
 import {
+  buildCmd36MessageViewPacket,
+  buildMenuDialogPacket,
+  parseClientCmd4,
+  parseClientCmd21TextReply,
+  parseClientCmd7,
+  verifyInboundGameCRC,
+} from './protocol/game.js';
+import {
   buildCmd3BroadcastPacket,
+  buildCmd10RoomPresenceSyncPacket,
+  buildCmd11PlayerEventPacket,
+  buildCmd13PlayerArrivalPacket,
+  buildCmd14PersonnelRecordPacket,
+  buildCmd48KeyedTripleStringListPacket,
   buildCmd4SceneInitPacket,
   buildCmd5CursorNormalPacket,
   buildCmd6CursorBusyPacket,
-  buildCmd9RoomPlayerListPacket,
-  buildCmd10RoomPresencePacket,
 } from './protocol/world.js';
-import { buildMenuDialogPacket, verifyInboundGameCRC } from './protocol/game.js';
 import { PlayerRegistry, ClientSession } from './state/players.js';
 import { launchRegistry } from './state/launch.js';
 import { loadMechs } from './data/mechs.js';
 import { Logger } from './util/logger.js';
 import { CaptureLogger } from './util/capture.js';
-import { findCharacter, createCharacter, ALLEGIANCES, type Allegiance, updateCharacterAllegiance } from './db/characters.js';
+import { findCharacter } from './db/characters.js';
 
 // ── Shared mech catalog (same on-disk data as lobby) ─────────────────────────
 // Loaded once at module import time.  Provides a fallback when a player's
@@ -68,38 +77,12 @@ const FALLBACK_MECH_ID = WORLD_MECHS.length > 0 ? WORLD_MECHS[0].id : 0;
 // Default arena name shown in the window title.
 const DEFAULT_SCENE_NAME = 'Solaris Arena';
 const WELCOME_TEXT       = 'Welcome to the game world.';
-
-/**
- * listId sent in the server Cmd7 allegiance-picker dialog.
- * The client echoes it back in its cmd-7 reply so we can identify the response.
- * Must be a small integer (< 85) and must NOT be one of the special-cased IDs
- * that the client handles differently (0x22, 0x34, 0x0c, 0x25, 8, 0x3E8).
- */
-const ALLEGIANCE_LIST_ID = 5;
-
-/**
- * listId for the post-allegiance "welcome" confirmation dialog.
- * Sent immediately after the player picks their house; covers the right panel
- * so the permanent "Choose your allegiance:" background art (baked into sprites,
- * not changeable from server side) is not mistaken for another prompt.
- * When the player clicks Continue the client sends cmd-7(WELCOME_DIALOG_ID, 1)
- * and we respond with Cmd5 to restore the cursor.
- */
-const WELCOME_DIALOG_ID = 6;
-
-/**
- * Map of player-typed text → canonical allegiance.
- * Accepts numbers 1-5 or house names (lower-cased before lookup).
- * Confirmed cmd-4 wire format: client sends raw typed text as
- *   [length_hi = len/85 + 0x21] [length_lo = len%85 + 0x21] [raw ASCII bytes].
- */
-const ALLEGIANCE_TEXT_MAP: Readonly<Record<string, Allegiance>> = {
-  '1': 'Davion',  'davion':  'Davion',
-  '2': 'Steiner', 'steiner': 'Steiner',
-  '3': 'Liao',    'liao':    'Liao',
-  '4': 'Marik',   'marik':   'Marik',
-  '5': 'Kurita',  'kurita':  'Kurita',
-};
+const DEFAULT_ROOM_ID    = 'world_default_room';
+const ALL_ROSTER_LIST_ID = 0x3F4;
+const INQUIRY_MENU_ID    = 1000;
+const PERSONNEL_LIST_ID  = 0x3F2;
+const PERSONNEL_MORE_ID  = 0x95;
+let nextWorldRosterId    = 1;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -116,6 +99,443 @@ function nextSeq(session: ClientSession): number {
   const s = session.serverSeq;
   session.serverSeq = (session.serverSeq + 1) % 43;
   return s;
+}
+
+function getDisplayName(session: ClientSession): string {
+  return ((session.displayName ?? session.username) || 'Pilot').slice(0, 84);
+}
+
+function getPresenceStatus(session: ClientSession): number {
+  return session.worldPresenceStatus ?? 5;
+}
+
+function getComstarId(session: ClientSession): number {
+  if (session.accountId !== undefined) {
+    return 100000 + session.accountId;
+  }
+  return 900000 + (session.worldRosterId ?? 0);
+}
+
+function getPresenceLocation(session: ClientSession): string {
+  const status = getPresenceStatus(session);
+  if (status <= 5) return 'Standing';
+  if (status <= 12) return `Booth ${status - 5}`;
+  return `Status ${status}`;
+}
+
+function currentRoomPresenceEntries(players: PlayerRegistry, session: ClientSession) {
+  if (session.worldRosterId === undefined) {
+    return [];
+  }
+
+  const entries = [
+    {
+      rosterId: session.worldRosterId,
+      status:   getPresenceStatus(session),
+      callsign: getDisplayName(session),
+    },
+  ];
+
+  for (const other of players.inRoom(session.roomId)) {
+    if (
+      other.id === session.id ||
+      other.phase !== 'world' ||
+      !other.worldInitialized ||
+      other.worldRosterId === undefined ||
+      other.socket.destroyed
+    ) {
+      continue;
+    }
+
+    entries.push({
+      rosterId: other.worldRosterId,
+      status:   getPresenceStatus(other),
+      callsign: getDisplayName(other),
+    });
+  }
+
+  return entries;
+}
+
+function findWorldTargetBySelectionId(
+  players: PlayerRegistry,
+  targetId: number,
+): ClientSession | undefined {
+  return players.worldSessions().find(other =>
+    getComstarId(other) === targetId || other.worldRosterId === targetId,
+  );
+}
+
+function buildAllRosterEntries(players: PlayerRegistry) {
+  return players.worldSessions()
+    .slice()
+    .sort((a, b) => getComstarId(a) - getComstarId(b))
+    .map(other => ({
+      itemId: getComstarId(other),
+      col1:   getDisplayName(other),
+      col2:   DEFAULT_SCENE_NAME,
+      col3:   getPresenceLocation(other),
+    }));
+}
+
+function buildPersonnelRecordLines(target: ClientSession, page: number): string[] {
+  if (page <= 1) {
+    return [
+      'Rank     : Warrior',
+      `House    : ${target.allegiance ?? 'Unaffiliated'}`,
+      `Sector   : ${DEFAULT_SCENE_NAME}`,
+      `Location : ${getPresenceLocation(target)}`,
+      'Status   : Online',
+      `Account  : ${target.username || 'Unknown'}`,
+    ];
+  }
+
+  return [
+    'Stable   : Independent',
+    `Mech ID  : ${target.selectedMechId ?? FALLBACK_MECH_ID}`,
+    `Roster   : ${target.worldRosterId ?? 0}`,
+    'Standing : 0',
+    'Winnings : 0 cb',
+    'Record   : Prototype page 2',
+  ];
+}
+
+function buildComstarDeliveryText(senderName: string, text: string): string {
+  const raw = `ComStar message from ${senderName}\\${text}`;
+  let trimmed = raw.replace(/\x1b/g, '?');
+  while (Buffer.byteLength(trimmed, 'latin1') > (85 * 85 - 1)) {
+    trimmed = trimmed.slice(0, -1);
+  }
+  return trimmed;
+}
+
+function sendAllRosterList(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const entries = buildAllRosterEntries(players);
+  connLog.info('[world] sending Cmd48 all-roster list (%d entries)', entries.length);
+  send(
+    session.socket,
+    buildCmd48KeyedTripleStringListPacket(
+      ALL_ROSTER_LIST_ID,
+      'All Personnel Online',
+      entries,
+      nextSeq(session),
+    ),
+    capture,
+    'CMD48_ALL_ROSTER',
+  );
+}
+
+function sendInquiryMenu(
+  session: ClientSession,
+  target: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const targetId = getComstarId(target);
+  session.worldInquiryTargetId = targetId;
+  session.worldInquiryPage = undefined;
+
+  connLog.info(
+    '[world] sending inquiry submenu: target=%d handle="%s"',
+    targetId,
+    getDisplayName(target),
+  );
+  send(
+    session.socket,
+    buildMenuDialogPacket(
+      INQUIRY_MENU_ID,
+      'Personal inquiry on:',
+      ['Send a ComStar message', 'Access personnel data'],
+      nextSeq(session),
+    ),
+    capture,
+    'CMD7_INQUIRY_MENU',
+  );
+}
+
+function sendPersonnelRecord(
+  players: PlayerRegistry,
+  session: ClientSession,
+  targetId: number,
+  page: number,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const target = findWorldTargetBySelectionId(players, targetId);
+  if (!target) {
+    connLog.warn('[world] personnel record target not found: id=%d page=%d', targetId, page);
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket('Personnel record unavailable.', nextSeq(session)),
+      capture,
+      'CMD3_PERSONNEL_MISSING',
+    );
+    return;
+  }
+
+  const resolvedTargetId = getComstarId(target);
+  session.worldInquiryTargetId = resolvedTargetId;
+  session.worldInquiryPage = page;
+
+  connLog.info(
+    '[world] sending Cmd14 personnel record: target=%d handle="%s" page=%d',
+    resolvedTargetId,
+    getDisplayName(target),
+    page,
+  );
+  send(
+    session.socket,
+    buildCmd14PersonnelRecordPacket(
+      {
+        comstarId:     resolvedTargetId,
+        battlesToDate: 0,
+        lines:         buildPersonnelRecordLines(target, page),
+      },
+      nextSeq(session),
+    ),
+    capture,
+    page <= 1 ? 'CMD14_PERSONNEL_P1' : 'CMD14_PERSONNEL_P2',
+  );
+}
+
+function handleComstarTextReply(
+  players: PlayerRegistry,
+  session: ClientSession,
+  dialogId: number,
+  text: string,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const clean = text.replace(/\x1b/g, '?').replace(/\s+/g, ' ').trim();
+  if (clean.length === 0) {
+    connLog.warn('[world] cmd-21 ComStar text ignored (empty)');
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket('ComStar message not sent: empty text.', nextSeq(session)),
+      capture,
+      'CMD3_COMSTAR_EMPTY',
+    );
+    return;
+  }
+
+  const target = findWorldTargetBySelectionId(players, dialogId);
+  if (!target) {
+    connLog.warn('[world] cmd-21 ComStar target unavailable: id=%d', dialogId);
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket('ComStar target unavailable.', nextSeq(session)),
+      capture,
+      'CMD3_COMSTAR_MISSING',
+    );
+    return;
+  }
+
+  const senderName = getDisplayName(session);
+  const targetName = getDisplayName(target);
+  const ack = `ComStar sent to ${targetName}.`;
+
+  connLog.info(
+    '[world] cmd-21 ComStar: from="%s" to="%s" target=%d text=%j',
+    senderName,
+    targetName,
+    dialogId,
+    clean,
+  );
+
+  target.socket.write(
+    buildCmd36MessageViewPacket(
+      getComstarId(session),
+      buildComstarDeliveryText(senderName, clean),
+      nextSeq(target),
+    ),
+  );
+  send(
+    session.socket,
+    buildCmd3BroadcastPacket(ack, nextSeq(session)),
+    capture,
+    'CMD3_COMSTAR_ACK',
+  );
+}
+
+function nextAvailableBooth(players: PlayerRegistry, roomId: string, excludeId: string): number {
+  const occupied = new Set<number>();
+  for (const other of players.inRoom(roomId)) {
+    if (
+      other.id === excludeId ||
+      other.phase !== 'world' ||
+      !other.worldInitialized ||
+      other.socket.destroyed
+    ) {
+      continue;
+    }
+
+    const booth = getPresenceStatus(other) - 5;
+    if (booth > 0) occupied.add(booth);
+  }
+
+  for (let booth = 1; booth <= 7; booth += 1) {
+    if (!occupied.has(booth)) return booth;
+  }
+
+  return 1;
+}
+
+function updateRoomPresenceStatus(
+  players: PlayerRegistry,
+  session: ClientSession,
+  status: number,
+  connLog: Logger,
+): void {
+  if (
+    !session.roomId ||
+    session.worldRosterId === undefined ||
+    !session.worldInitialized
+  ) {
+    return;
+  }
+
+  if (getPresenceStatus(session) === status) {
+    connLog.debug('[world] room presence unchanged: rosterId=%d status=%d', session.worldRosterId, status);
+    return;
+  }
+
+  session.worldPresenceStatus = status;
+  const callsign = getDisplayName(session);
+  for (const other of players.inRoom(session.roomId)) {
+    if (
+      other.phase !== 'world' ||
+      !other.worldInitialized ||
+      other.socket.destroyed
+    ) {
+      continue;
+    }
+    other.socket.write(
+      buildCmd11PlayerEventPacket(session.worldRosterId, status, callsign, nextSeq(other)),
+    );
+  }
+
+  connLog.info(
+    '[world] room presence update: rosterId=%d status=%d callsign="%s"',
+    session.worldRosterId,
+    status,
+    callsign,
+  );
+}
+
+function handleRoomMenuSelection(
+  players: PlayerRegistry,
+  session: ClientSession,
+  selection: number,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  if (selection === 1) {
+    connLog.info('[world] room menu: all-roster request');
+    sendAllRosterList(players, session, connLog, capture);
+    return;
+  }
+
+  if (selection === 0) {
+    const booth = nextAvailableBooth(players, session.roomId, session.id);
+    connLog.info('[world] room menu: new booth requested -> booth %d', booth);
+    updateRoomPresenceStatus(players, session, 5 + booth, connLog);
+    return;
+  }
+
+  if (selection === 2) {
+    connLog.info('[world] room menu: stand requested');
+    updateRoomPresenceStatus(players, session, 5, connLog);
+    return;
+  }
+
+  const booth = selection - 2;
+  if (booth < 1 || booth > 7) {
+    connLog.warn('[world] room menu: unsupported booth selection=%d', selection);
+    return;
+  }
+
+  connLog.info('[world] room menu: join booth %d', booth);
+  updateRoomPresenceStatus(players, session, 5 + booth, connLog);
+}
+
+function handleWorldTextCommand(
+  players: PlayerRegistry,
+  session: ClientSession,
+  text: string,
+  connLog: Logger,
+): void {
+  const clean = text.replace(/\x1b/g, '?').trim();
+  if (clean.length === 0) {
+    connLog.debug('[world] cmd-4 text ignored (empty)');
+    return;
+  }
+
+  const line = `${getDisplayName(session)}: ${clean}`;
+  connLog.info('[world] cmd-4 text: %s', line);
+
+  for (const other of players.inRoom(session.roomId)) {
+    if (
+      other.id === session.id ||
+      other.phase !== 'world' ||
+      !other.worldInitialized ||
+      other.socket.destroyed
+    ) {
+      continue;
+    }
+
+    other.socket.write(buildCmd3BroadcastPacket(line, nextSeq(other)));
+  }
+}
+
+function notifyRoomArrival(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+): void {
+  if (!session.roomId || session.worldRosterId === undefined) return;
+  const callsign = getDisplayName(session);
+  for (const other of players.inRoom(session.roomId)) {
+    if (
+      other.id === session.id ||
+      other.phase !== 'world' ||
+      !other.worldInitialized ||
+      other.socket.destroyed
+    ) {
+      continue;
+    }
+    other.socket.write(
+      buildCmd13PlayerArrivalPacket(session.worldRosterId, callsign, nextSeq(other)),
+    );
+  }
+  connLog.info('[world] notified room of arrival: rosterId=%d callsign="%s"', session.worldRosterId, callsign);
+}
+
+function notifyRoomDeparture(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+): void {
+  if (!session.roomId || session.worldRosterId === undefined) return;
+  const callsign = getDisplayName(session);
+  for (const other of players.inRoom(session.roomId)) {
+    if (
+      other.id === session.id ||
+      other.phase !== 'world' ||
+      !other.worldInitialized ||
+      other.socket.destroyed
+    ) {
+      continue;
+    }
+    other.socket.write(
+      buildCmd11PlayerEventPacket(session.worldRosterId, 0, callsign, nextSeq(other)),
+    );
+  }
+  connLog.info('[world] notified room of departure: rosterId=%d callsign="%s"', session.worldRosterId, callsign);
 }
 
 // ── Login handler ─────────────────────────────────────────────────────────────
@@ -145,18 +565,23 @@ async function handleWorldLogin(
   const { login } = result;
   session.username = login.username || '(unknown)';
   session.phase    = 'world';
+  session.roomId   = DEFAULT_ROOM_ID;
 
   // Retrieve the mech the player picked in the lobby.
   const launch = launchRegistry.consume(session.username);
   if (launch) {
+    session.accountId       = launch.accountId;
+    session.displayName     = launch.displayName;
+    session.allegiance      = launch.allegiance;
     session.selectedMechId   = launch.mechId;
     session.selectedMechSlot = launch.mechSlot;
-    if (launch.accountId !== undefined) session.accountId   = launch.accountId;
-    if (launch.displayName !== undefined) session.displayName = launch.displayName;
-    if (launch.allegiance !== undefined) session.allegiance  = launch.allegiance;
     connLog.info(
-      '[world-login] launch record found: mech=%s (id=%d slot=%d)',
-      launch.mechTypeString, launch.mechId, launch.mechSlot,
+      '[world-login] launch record found: displayName="%s" allegiance=%s mech=%s (id=%d slot=%d)',
+      session.displayName ?? session.username,
+      session.allegiance ?? '(none)',
+      launch.mechTypeString,
+      launch.mechId,
+      launch.mechSlot,
     );
   } else {
     session.selectedMechId   = FALLBACK_MECH_ID;
@@ -167,13 +592,9 @@ async function handleWorldLogin(
     );
   }
 
-  // Ensure session has both displayName and allegiance before cmd-3 arrives.
-  // Returning players: lobby populates both from the launch record.
-  // New players: lobby sets displayName but deliberately omits allegiance so the
-  //   world server knows to create the character.  We auto-create here using a
-  //   default allegiance (Davion) — this bypasses the Cmd7 wizard entirely.
-  // Direct-connect (testing): neither field set; fall back to DB then auto-create.
-  if (session.accountId !== undefined && session.allegiance === undefined) {
+  // displayName and allegiance are set by the lobby before REDIRECT.
+  // If missing (e.g. direct connection for testing), fall back to DB lookup.
+  if (!session.displayName && session.accountId !== undefined) {
     const character = await findCharacter(session.accountId);
     if (character) {
       session.displayName = character.display_name;
@@ -182,36 +603,6 @@ async function handleWorldLogin(
         '[world-login] character loaded from DB: displayName="%s" allegiance=%s',
         character.display_name, character.allegiance,
       );
-    } else {
-      // First login — auto-create a character so the Cmd7 allegiance picker is
-      // never shown.  Use the lobby-supplied displayName (= username by default)
-      // with 'Davion' as the starting house.  If the name is already taken
-      // (edge case / race), append the accountId and retry once.
-      const DEFAULT_ALLEGIANCE: Allegiance = 'Davion';
-      const baseName = (session.displayName ?? session.username).slice(0, 84) || 'Pilot';
-      let created: Awaited<ReturnType<typeof createCharacter>> | null = null;
-      for (let attempt = 0; attempt < 2 && created === null; attempt++) {
-        const name = attempt === 0 ? baseName : `${baseName}${session.accountId}`;
-        try {
-          created = await createCharacter(session.accountId, name, DEFAULT_ALLEGIANCE);
-        } catch (err: unknown) {
-          if ((err as { code?: string }).code !== '23505') throw err;
-          connLog.warn('[world-login] display name "%s" taken, retrying with suffix', name);
-        }
-      }
-      if (created) {
-        session.displayName = created.display_name;
-        session.allegiance  = created.allegiance ?? undefined;
-        connLog.info(
-          '[world-login] auto-created character: displayName="%s" allegiance=%s',
-          created.display_name, created.allegiance,
-        );
-      } else {
-        connLog.warn(
-          '[world-login] could not auto-create character for "%s" (accountId=%d) — wizard will show',
-          session.username, session.accountId,
-        );
-      }
     }
   }
 
@@ -247,6 +638,7 @@ async function handleWorldLogin(
 //   cmd 29 — FUN_00427710 (unknown; observed in some sessions)
 
 function handleWorldGameData(
+  players: PlayerRegistry,
   session: ClientSession,
   payload: Buffer,
   connLog: Logger,
@@ -284,29 +676,18 @@ function handleWorldGameData(
   connLog.info('[world] client seq=%d cmd=%d', seq, cmdIdx);
 
   if (cmdIdx === 3) {
-    // Cmd-3: client capabilities / ready signal (RPS mode).
-    // Called by FUN_0040d3c0 immediately after the world-MMW welcome is received.
-    // The client also sends cmd-3 again after allegiance is picked (cmd-5/cmd-7).
-    // Guard against re-running the full init once the arena is already up:
-    // just acknowledge so the client exits the busy-cursor state without
-    // clobbering the existing arena windows.
-    if (session.arenaInitialized) {
-      connLog.info('[world] cmd-3 (re-trigger): arena already initialized, acking only (allegiance=%s)', session.allegiance);
-      send(
-        session.socket,
-        buildCmd3BroadcastPacket(
-          `You are a ${session.allegiance} pilot. Your character is ready.`,
-          nextSeq(session),
-        ),
-        capture,
-        'CMD3_READY',
-      );
-      send(session.socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
+    if (session.worldInitialized) {
+      connLog.debug('[world] duplicate cmd-3 after initialization — ignoring');
       return;
     }
+    // Cmd-3: client capabilities / ready signal (RPS mode).
+    // Called by FUN_0040d3c0 immediately after the world-MMW welcome is received.
+    // Respond with the world initialization sequence exactly once.
     connLog.info('[world] cmd-3 (client-ready) → sending world init sequence');
+    sendWorldInitSequence(players, session, connLog, capture);
+    session.worldInitialized = true;
     session.arenaInitialized = true;
-    sendWorldInitSequence(session, connLog, capture);
+    notifyRoomArrival(players, session, connLog);
 
   } else if (cmdIdx === 1) {
     // Cmd-1 PingAck: client acknowledging a server ping; no server reply needed.
@@ -317,304 +698,94 @@ function handleWorldGameData(
     // COMMEG32 Ordinal_7 sends the reply directly; server does not need to act.
     connLog.debug('[world] cmd-2 (ping-request) — client handles reply via COMMEG32');
 
-  } else if (cmdIdx === 5) {
-    // Cmd-5: allegiance selection from the character-creation wizard.
-    // Triggered by FUN_0040d2d0 in MPBTWIN.EXE when the player clicks one of the
-    // arenaOptions items (button IDs 0x101-0x105) in the Cmd4-driven picker UI.
-    //
-    // Wire format (args after seq+cmd):
-    //   [1 byte: type+0x21]  — decoded as ALLEGIANCES array index (0-4)
-    //
-    // arenaOptions[0] (button 0x100) is hardcoded to Help and never sends cmd-5.
-    // arenaOptions[1..5] have types 0..4 mapping directly to ALLEGIANCES indices:
-    //   0=Davion, 1=Steiner, 2=Liao, 3=Marik, 4=Kurita
-    if (payload.length < 4) {
-      connLog.debug('[world] cmd-5 (allegiance-pick): payload too short');
+  } else if (cmdIdx === 4) {
+    const parsed = parseClientCmd4(payload);
+    if (!parsed) {
+      connLog.warn('[world] cmd-4 parse failed');
       return;
     }
-    const allegianceType = payload[3] - 0x21;
-    if (allegianceType < 0 || allegianceType >= ALLEGIANCES.length) {
-      connLog.warn('[world] cmd-5 (allegiance-pick): type=%d out of range', allegianceType);
+    handleWorldTextCommand(players, session, parsed.text, connLog);
+
+  } else if (cmdIdx === 21) {
+    const parsed = parseClientCmd21TextReply(payload);
+    if (!parsed) {
+      connLog.warn('[world] cmd-21 parse failed');
       return;
     }
-    const allegiance = ALLEGIANCES[allegianceType] as Allegiance;
-    connLog.info('[world] cmd-5 (allegiance-pick): player chose %s', allegiance);
-    applyAllegiancePick(session, allegiance, 'cmd-5', connLog, capture);
+    handleComstarTextReply(players, session, parsed.dialogId, parsed.text, connLog, capture);
 
   } else if (cmdIdx === 7) {
-    // Cmd-7: player selected an item in a server-sent menu dialog (FUN_0040d2f0).
-    // Wire format (args after seq+cmd):
-    //   [listId: B85_1 (2B)][selectedValue: B85_4 (5B)]
-    // Two sub-cases based on listId:
-    //   ALLEGIANCE_LIST_ID (5) — allegiance picker (value = 1..5 → ALLEGIANCES[value-1])
-    //   WELCOME_DIALOG_ID  (6) — post-allegiance confirmation (any value → cursor restore)
-    if (payload.length < 10) {
-      connLog.debug('[world] cmd-7 (menu-select): payload too short');
-      return;
-    }
-    const listId = (payload[3] - 0x21) * 85 + (payload[4] - 0x21);
-    // Decode B85_4 selection value (5 bytes, payload[5..9]).
-    const selectionValue =
-      (payload[5] - 0x21) * 52326577 +
-      (payload[6] - 0x21) * 614125 +
-      (payload[7] - 0x21) * 7225 +
-      (payload[8] - 0x21) * 85 +
-      (payload[9] - 0x21);
-
-    if (listId === WELCOME_DIALOG_ID) {
-      // Player clicked "Continue" (or pressed ESC) in the post-allegiance welcome
-      // dialog.  Restore cursor — client's FUN_00412190 raised hourglass before
-      // sending cmd-7 — and confirm the character is ready.
-      connLog.info('[world] cmd-7 (welcome-dismiss): sel=%d house=%s', selectionValue, session.allegiance ?? '?');
-      send(session.socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
-      send(
-        session.socket,
-        buildCmd3BroadcastPacket('Your pilot is ready. Good luck!', nextSeq(session)),
-        capture,
-        'CMD3_READY',
-      );
+    const parsed = parseClientCmd7(payload);
+    if (!parsed) {
+      connLog.warn('[world] cmd-7 parse failed');
       return;
     }
 
-    if (listId !== ALLEGIANCE_LIST_ID) {
-      connLog.debug('[world] cmd-7: unrecognised listId=%d — ignoring', listId);
-      return;
-    }
-    if (session.allegiance !== undefined) {
-      // Allegiance already set (e.g. player reopened the dialog somehow).
-      // FUN_00412190 always raises the hourglass before sending cmd-7, so we
-      // must restore the cursor even when ignoring the pick.
-      connLog.debug('[world] cmd-7: allegiance already set — restoring cursor');
-      send(session.socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
-      return;
-    }
-    // selectionValue=0 means ESC pressed (dialog closed without picking).
-    if (selectionValue === 0) {
-      connLog.info('[world] cmd-7: player pressed ESC in allegiance dialog — no pick');
-      return;
-    }
-    const allegianceIdx = selectionValue - 1;   // client sends 1-based
-    if (allegianceIdx < 0 || allegianceIdx >= ALLEGIANCES.length) {
-      connLog.warn('[world] cmd-7: selectionValue=%d out of range', selectionValue);
-      return;
-    }
-    const allegiance = ALLEGIANCES[allegianceIdx] as Allegiance;
-    connLog.info('[world] cmd-7 (allegiance dialog): player chose %s', allegiance);
-    // skipReinit=true: scene is already initialised; a second Cmd4 would crash
-    // the client by overflowing the fixed-size DAT_004ddf70 window array.
-    applyAllegiancePick(session, allegiance, 'cmd-7', connLog, capture, true);
-
-  } else if (cmdIdx === 4) {
-    // Cmd-4: chat text from the player (FUN_0040d280 in MPBTWIN.EXE).
-    // The player types text in the chat box and presses Enter; the client
-    // sends the raw input string with a 2-byte base-85 length prefix:
-    //   [hi = len/85 + 0x21] [lo = len%85 + 0x21] [raw ASCII bytes]
-    // During first-login (session.allegiance === undefined) we parse the text
-    // as a house name or number to select the player's allegiance faction.
-    if (payload.length < 5) {
-      connLog.debug('[world] cmd-4 (chat): payload too short');
-      return;
-    }
-    const textLen = (payload[3] - 0x21) * 85 + (payload[4] - 0x21);
-    if (textLen <= 0 || payload.length < 5 + textLen) {
-      connLog.debug('[world] cmd-4 (chat): invalid text length=%d', textLen);
-      return;
-    }
-    const chatText = payload.subarray(5, 5 + textLen).toString('latin1').trim();
-    connLog.info('[world] cmd-4 (chat): text="%s"', chatText);
-
-    if (session.allegiance !== undefined) {
-      // Allegiance is already set.  The player is typing in the chat box,
-      // which the client may interpret as name/callsign entry during its
-      // character-creation wizard.  Echo a friendly acknowledgement so the
-      // player knows their allegiance is locked in and character is ready.
-      connLog.info('[world] cmd-4 (chat): allegiance already set — echoing status to player');
-      send(
-        session.socket,
-        buildCmd3BroadcastPacket(
-          `You are a ${session.allegiance} pilot. Character creation is complete.`,
-          nextSeq(session),
-        ),
-        capture,
-        'CMD3_STATUS',
-      );
+    connLog.info('[world] cmd-7 menu reply: listId=%d selection=%d', parsed.listId, parsed.selection);
+    if (parsed.listId === 3) {
+      handleRoomMenuSelection(players, session, parsed.selection, connLog, capture);
       return;
     }
 
-    const picked = ALLEGIANCE_TEXT_MAP[chatText.toLowerCase()];
-    if (!picked) {
-      connLog.info('[world] cmd-4 (chat): unrecognised allegiance text "%s"', chatText);
-      send(
-        session.socket,
-        buildCmd3BroadcastPacket(
-          `"${chatText}" is not valid. Type 1-5 or: Davion Steiner Liao Marik Kurita`,
-          nextSeq(session),
-        ),
-        capture,
-        'CMD3_INVALID',
-      );
+    if (parsed.listId === ALL_ROSTER_LIST_ID && parsed.selection > 0) {
+      const target = findWorldTargetBySelectionId(players, parsed.selection - 1);
+      if (!target) {
+        connLog.warn('[world] all-roster selection target not found: selection=%d', parsed.selection);
+        return;
+      }
+      sendInquiryMenu(session, target, connLog, capture);
       return;
     }
-    connLog.info('[world] cmd-4 (chat): player chose %s', picked);
-    applyAllegiancePick(session, picked, 'cmd-4', connLog, capture);
 
+    if (parsed.listId === INQUIRY_MENU_ID && parsed.selection > 0) {
+      const targetId = session.worldInquiryTargetId;
+      if (targetId === undefined) {
+        connLog.warn('[world] inquiry submenu reply with no active target');
+        return;
+      }
+
+      const target = findWorldTargetBySelectionId(players, targetId);
+      if (!target) {
+        connLog.warn('[world] inquiry submenu target unavailable: target=%d', targetId);
+        return;
+      }
+
+      if (parsed.selection === 1) {
+        connLog.info(
+          '[world] inquiry submenu: local ComStar compose expected for target=%d',
+          targetId,
+        );
+        return;
+      }
+
+      if (parsed.selection === 2) {
+        connLog.info('[world] inquiry submenu: personnel data for target=%d', targetId);
+        sendPersonnelRecord(players, session, targetId, 1, connLog, capture);
+        return;
+      }
+
+      connLog.warn('[world] inquiry submenu: unsupported selection=%d', parsed.selection);
+      return;
+    }
+
+    if (parsed.listId === PERSONNEL_LIST_ID && parsed.selection > 0) {
+      sendPersonnelRecord(players, session, parsed.selection - 1, 1, connLog, capture);
+      return;
+    }
+
+    if (parsed.listId === PERSONNEL_MORE_ID && parsed.selection === 2) {
+      if (session.worldInquiryTargetId === undefined) {
+        connLog.warn('[world] cmd-7 personnel more with no active record target');
+        return;
+      }
+      sendPersonnelRecord(players, session, session.worldInquiryTargetId, 2, connLog, capture);
+      return;
+    }
+
+    connLog.debug('[world] cmd-7 ignored: unsupported listId=%d', parsed.listId);
   } else {
     connLog.debug('[world] cmd=%d — not yet handled (M3 stub)', cmdIdx);
   }
-}
-
-/**
- * Shared handler called when the player selects their allegiance, regardless
- * of how the selection was delivered (cmd-5 button click or cmd-4 chat text).
- *
- * Persists the choice to the database (INSERT new character or UPDATE existing)
- * and then sends the post-allegiance arena reinit sequence to the client.
- *
- * @param skipReinit  When true, skip the Cmd4 SceneInit reinit and only send
- *   Cmd3 + Cmd5.  Use this when the scene is already initialised (e.g. after a
- *   Cmd7 dialog pick).  A second Cmd4 would call FUN_00414b70 which leaks the
- *   old mech-display / chat windows without destroying them first, overflowing
- *   the fixed-size DAT_004ddf70 window array → NULL return from FUN_00431880 →
- *   crash on the next DAT_00472ca4 write.
- */
-function applyAllegiancePick(
-  session:    ClientSession,
-  allegiance: Allegiance,
-  source:     string,
-  connLog:    Logger,
-  capture:    CaptureLogger,
-  skipReinit  = false,
-): void {
-  session.allegiance = allegiance;
-
-  if (session.accountId !== undefined) {
-    const displayName = session.displayName ?? session.username;
-    // For first-time players the character does not yet exist in the DB (the
-    // lobby deferred creation to here).  Try to INSERT; if the record already
-    // exists (reconnect race / returning player edge-case) fall back to UPDATE.
-    createCharacter(session.accountId, displayName, allegiance)
-      .then(() => connLog.info(
-        '[world] %s: character created (displayName="%s" allegiance=%s)',
-        source, displayName, allegiance,
-      ))
-      .catch((err: unknown) => {
-        const pgErr = err as { code?: string };
-        if (pgErr.code === '23505') {
-          // Character already exists — just update allegiance.
-          updateCharacterAllegiance(session.accountId!, allegiance).catch((err2: unknown) => {
-            const m2 = err2 instanceof Error ? err2.message : String(err2);
-            connLog.error('[world] %s: failed to update allegiance: %s', source, m2);
-          });
-        } else {
-          const msg = err instanceof Error ? err.message : String(err);
-          connLog.error('[world] %s: failed to create character: %s', source, msg);
-        }
-      });
-  } else {
-    connLog.warn('[world] %s: no accountId — allegiance not persisted to DB', source);
-  }
-
-  if (skipReinit) {
-    // Scene already initialised.  Instead of restoring the cursor immediately,
-    // send a welcome confirmation dialog that covers the right-panel area where
-    // the permanent "Choose your allegiance:" background art lives.  Without
-    // this, the baked-in sprite text confuses the player into thinking they
-    // need to pick again.  FUN_004112b0 (Cmd7 dialog setup) calls FUN_00433ec0
-    // at the end, so the hourglass is cleared when the welcome dialog appears.
-    // Cursor is fully restored in the WELCOME_DIALOG_ID cmd-7 response handler.
-    connLog.info('[world] %s: sending welcome dialog (no reinit)', source);
-    const { socket } = session;
-    send(
-      socket,
-      buildCmd3BroadcastPacket(
-        `Welcome to House ${allegiance}! Click #1 below to continue.`,
-        nextSeq(session),
-      ),
-      capture,
-      'CMD3_ALLEGIANCE',
-    );
-    send(
-      socket,
-      buildMenuDialogPacket(
-        WELCOME_DIALOG_ID,
-        `House ${allegiance}: Welcome, Pilot!`,
-        ['[ Continue ]'],
-        nextSeq(session),
-      ),
-      capture,
-      'CMD7_WELCOME_DIALOG',
-    );
-  } else {
-    connLog.info('[world] %s: sending post-allegiance reinit', source);
-    sendPostAllegianceReinit(session, allegiance, connLog, capture);
-  }
-}
-
-/**
- * Respond to the client after it sends cmd-5 (allegiance picked).
- *
- * The client calls FUN_00433ef0 (hourglass) right after sending cmd-5 and then
- * waits for the server.  We re-initialize the arena window with sessionFlags=0x30
- * (has-opponents | clear-arena) so that the client READS a new arenaOptions count
- * from the wire (flag 0x10 triggers wire-read in FUN_00414b70).  Sending count=0
- * clears DAT_004e6a70 on the client; without this, the client reuses the stale
- * count-6 from the initial Cmd4 and redraws the wizard.
- */
-function sendPostAllegianceReinit(
-  session:   ClientSession,
-  allegiance: string,
-  connLog:   Logger,
-  capture:   CaptureLogger,
-): void {
-  const { socket } = session;
-  const mechId    = session.selectedMechId ?? FALLBACK_MECH_ID;
-  const callsign  = (session.displayName ?? session.username).slice(0, 84) || 'Pilot';
-
-  // Cmd6 — hourglass while the arena reloads.
-  send(socket, buildCmd6CursorBusyPacket(nextSeq(session)), capture, 'CMD6_BUSY');
-
-  // Cmd4 — reinit WITH flag 0x10 so the client reads the new arenaOptions count
-  // (0) from wire.  This zeroes DAT_004e6a70 and removes the wizard buttons.
-  send(
-    socket,
-    buildCmd4SceneInitPacket(
-      {
-        sessionFlags:    0x30,  // has-opponents (0x10) + clear-arena (0x20)
-        playerScoreSlot: 0,
-        playerMechId:    mechId,
-        opponents:       [],    // all 4 slots absent
-        callsign,
-        sceneName:       DEFAULT_SCENE_NAME,
-        arenaOptions:    [],    // explicitly empty → writes count=0 to wire
-      },
-      nextSeq(session),
-    ),
-    capture,
-    'CMD4_REINIT',
-  );
-
-  // Cmd9 — reset roster ready flag.
-  send(socket, buildCmd9RoomPlayerListPacket([], nextSeq(session)), capture, 'CMD9_ROOM_LIST');
-
-  // Cmd10 — reset room presence (self only, empty room).
-  const selfId = session.accountId ?? 1;
-  send(
-    socket,
-    buildCmd10RoomPresencePacket({ id: selfId, name: callsign }, [], nextSeq(session)),
-    capture,
-    'CMD10_ROOM_PRESENCE',
-  );
-
-  // Cmd3 — notify the player of their allegiance.
-  send(
-    socket,
-    buildCmd3BroadcastPacket(`Allegiance set to ${allegiance}.`, nextSeq(session)),
-    capture,
-    'CMD3_ALLEGIANCE',
-  );
-
-  // Cmd5 — restore arrow cursor (clears the hourglass).
-  send(socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
 }
 
 /**
@@ -623,11 +794,18 @@ function sendPostAllegianceReinit(
  * Order:
  *   1. Cmd6 — show busy cursor (hourglass)
  *   2. Cmd4 — SceneInit (creates game window and sets g_chatReady=1)
- *   3. Cmd9 — RoomPlayerList (empty room; sets roster ready flag)
+ *   3. Cmd10 — RoomPresenceSync (self + current room occupants)
  *   4. Cmd3 — TextBroadcast (welcome message; requires g_chatReady=1)
  *   5. Cmd5 — restore normal cursor
+ *
+ * Cmd9 is intentionally omitted here. Newer RE ties it to the original
+ * character name + allegiance prompt (`FUN_0040C310 -> FUN_0042DA40 ->
+ * FUN_00413800(0x3fd, MPBT.MSG[5]) -> FUN_0042DAA0(MPBT.MSG[6])`), not a
+ * passive world-entry roster sync. Cmd10 (`FUN_0040C370`) seeds the same
+ * `DAT_004e1870` roster table later updated by Cmd13/Cmd11.
  */
 function sendWorldInitSequence(
+  players: PlayerRegistry,
   session: ClientSession,
   connLog: Logger,
   capture: CaptureLogger,
@@ -645,9 +823,6 @@ function sendWorldInitSequence(
   //   sessionFlags 0x30 = has-opponents (0x10) + clear-arena-data (0x20).
   //   All 4 opponent slots are absent → wire values of 0 → stored as -1 → buttons hidden.
   //   callsign and sceneName are provided via the has-opponents (0x10) branch reads.
-  // arenaOptions (type-7 items) are NOT sent: the client renders them in DAT_004ddf60
-  // which is NOT in the click-dispatcher's window list (DAT_004ddf70), so they appear
-  // but are NEVER clickable.  We use a Cmd7 dialog instead for new players.
   const sceneInit = buildCmd4SceneInitPacket(
     {
       sessionFlags:     0x30,   // has-opponents + clear-arena resets
@@ -656,58 +831,24 @@ function sendWorldInitSequence(
       opponents:        [],     // all 4 slots = "no opponent" (wire 0x21 / [0x21,0x21])
       callsign,
       sceneName:        DEFAULT_SCENE_NAME,
-      arenaOptions:     [],     // always empty — see note above
+      arenaOptions:     [],
     },
     nextSeq(session),
   );
   connLog.info('[world] sending Cmd4 SceneInit (mech_id=%d callsign="%s")', mechId, callsign);
   send(socket, sceneInit, capture, 'CMD4_SCENE_INIT');
 
-  // Cmd9 — RoomPlayerList: empty room, sets DAT_004ddfc0+0x44 = 8 (roster ready flag).
+  // Cmd10 — RoomPresenceSync: seed the live room roster table before later
+  // Cmd13/Cmd11 incremental updates are applied.
+  const roomPresenceEntries = currentRoomPresenceEntries(players, session);
+  connLog.info('[world] sending Cmd10 RoomPresenceSync (%d entries)', roomPresenceEntries.length);
   send(
     socket,
-    buildCmd9RoomPlayerListPacket([], nextSeq(session)),
+    buildCmd10RoomPresenceSyncPacket(roomPresenceEntries, nextSeq(session)),
     capture,
-    'CMD9_ROOM_LIST',
+    'CMD10_ROOM_SYNC',
   );
 
-  // Cmd10 — RoomPresence: who is in the room right now.
-  // Slot 0 is always the receiving player (self); it is stored but NOT displayed.
-  // Subsequent slots are other occupants shown as "Here you see Alice, Bob."
-  // We send an empty room (just the self slot + terminator) — no "Here you see…" text.
-  const selfId = session.accountId ?? 1;
-  send(
-    socket,
-    buildCmd10RoomPresencePacket({ id: selfId, name: callsign }, [], nextSeq(session)),
-    capture,
-    'CMD10_ROOM_PRESENCE',
-  );
-
-  // Cmd7 — MenuDialog: allegiance-picker popup for new players only.
-  // Creates a clickable bordered dialog at screen (256,221)-(640,480) — the right-side
-  // panel that overlaps the "Choose your allegiance" background art.  Items are type-0
-  // (text rows), fully clickable via the standard window dispatcher (DAT_004ddf70).
-  // When the player clicks a house row the client sends cmd-7 back with the listId
-  // (ALLEGIANCE_LIST_ID) and the 1-based item index.
-  if (session.allegiance === undefined) {
-    send(
-      socket,
-      buildMenuDialogPacket(
-        ALLEGIANCE_LIST_ID,
-        'Choose your allegiance',
-        ['Davion', 'Steiner', 'Liao', 'Marik', 'Kurita'],
-        nextSeq(session),
-      ),
-      capture,
-      'CMD7_ALLEGIANCE_DIALOG',
-    );
-  }
-
-  // Cmd3 — TextBroadcast: welcome message (visible in the chat scroll at top of screen).
-  const welcomeMsg = session.allegiance === undefined
-    ? 'NEW PILOT: Click your Great House in the dialog, or type 1-5 below and press Enter.'
-    : `Welcome to Solaris 7, ${callsign}. You are in the reception area. The arena is quiet.`;
-  send(socket, buildCmd3BroadcastPacket(welcomeMsg, nextSeq(session)), capture, 'CMD3_WELCOME');
 
   // Cmd5 — CursorNormal: restore the arrow cursor.
   send(socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
@@ -737,7 +878,10 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     mechListSent:      false,
     awaitingMechConfirm: false,
     serverSeq:         0,
+    worldInitialized:  false,
     arenaInitialized:  false,
+    worldRosterId:     nextWorldRosterId++,
+    worldPresenceStatus: 5,
   };
   players.add(session);
 
@@ -774,7 +918,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
           break;
 
         case Msg.SYNC:
-          handleWorldGameData(session, pkt.payload, connLog, capture);
+          handleWorldGameData(players, session, pkt.payload, connLog, capture);
           break;
 
         case Msg.KEEPALIVE:
@@ -802,6 +946,9 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
       '[world] client disconnected (phase=%s, bytes=%d)',
       session.phase, session.bytesReceived,
     );
+    if (session.phase === 'world' && session.worldInitialized) {
+      notifyRoomDeparture(players, session, connLog);
+    }
     players.remove(session.id);
     capture.close();
   });

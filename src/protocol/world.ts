@@ -11,7 +11,14 @@
  * Confirmed by Ghidra RE of MPBTWIN.EXE; individual handlers documented below.
  */
 
-import { buildGamePacket, encodeAsByte, encodeB85_1, encodeB85_4, encodeString } from './game.js';
+import {
+  buildGamePacket,
+  encodeAsByte,
+  encodeB85_1,
+  encodeB85_3,
+  encodeB85_4,
+  encodeString,
+} from './game.js';
 
 // ── Cmd 3 — Text Broadcast ────────────────────────────────────────────────────
 // CONFIRMED: FUN_0040C190 handler; RPS mode only.
@@ -198,7 +205,7 @@ export function buildCmd6CursorBusyPacket(seq = 0): Buffer {
   return buildGamePacket(6, Buffer.alloc(0), false, seq);
 }
 
-// ── Cmd 9 — Room Player List ─────────────────────────────────────────────────
+// ── Cmd 9 — Character Name + Allegiance Prompt ───────────────────────────────
 // CONFIRMED: FUN_0040C310.
 //
 // Wire args:
@@ -206,16 +213,19 @@ export function buildCmd6CursorBusyPacket(seq = 0): Buffer {
 //   [byte: count]             FUN_00402f40
 //   [count × Frame_ReadArg]   FUN_0040c0d0 = encodeString format per entry
 //
-// Each entry is stored into DAT_004de000[i] (40-byte slots); full entry format
-// is TBD (M4 RE work).  For M3 send count=0 (empty room) so only the roster
-// ready flag (DAT_004ddfc0+0x44 = 8) is set, avoiding a crash from parsing
-// unknown entry layouts.
+// Each entry is stored into DAT_004de000[i] as a null-terminated string in a
+// 40-byte slot. The client then opens FUN_00413800(0x3fd, MPBT.MSG[5], NULL),
+// i.e. "Enter your character's name". After Enter, FUN_0042daa0 formats these
+// entries as "%d. %s" under MPBT.MSG[6], "Choose your allegiance:".
+//
+// Selecting an entry sends client cmd 9 subcmd 1:
+//   [0x09] [0x01] [typed-name string] [selected-index byte]
 
 /**
- * Build a Cmd9 (RoomPlayerList) packet.
- * @param entries  Raw player entry strings (format TBD; leave empty for M3).
+ * Build a Cmd9 character-creation prompt packet.
+ * @param entries  Allegiance/choice strings shown after the player enters a name.
  */
-export function buildCmd9RoomPlayerListPacket(entries: string[] = [], seq = 0): Buffer {
+export function buildCmd9CharacterCreationPromptPacket(entries: string[] = [], seq = 0): Buffer {
   const parts: Buffer[] = [
     encodeAsByte(1),              // sentinel = 1 (gate: == '\x01')
     encodeAsByte(entries.length), // count
@@ -226,161 +236,199 @@ export function buildCmd9RoomPlayerListPacket(entries: string[] = [], seq = 0): 
   return buildGamePacket(9, Buffer.concat(parts), false, seq);
 }
 
-// ── Cmd 10 — Room Presence ("Here You See") ──────────────────────────────────
+// ── Cmd 10 — Room Presence Sync ──────────────────────────────────────────────
 // CONFIRMED: FUN_0040C370.
 //
-// Describes the current occupants of the room.  Always reads at least one
-// player entry unconditionally (slot 0 = the receiving player themselves;
-// their entry is stored but NOT displayed in the "Here you see…" text).
-// Subsequent entries are displayed as "Here you see Alice, Bob and Charlie."
-//
 // Wire args:
-//   ─ Slot 0 (self) — always read first; not shown in description ─
-//   [type4  5B]  player_id       FUN_00402b10(4)  → DAT_004e1874
-//   [byte   1B]  status + 0x21   FUN_00402f40     → DAT_004e1872 = status - 5
-//   [string    ] name            FUN_0040c0d0     → DAT_004e1878
-//   ─ Additional players (loop until status byte == 0x54 + 0x21 = 0x75) ─
-//   [type4  5B]  player_id                        → slot 1, 2, …
-//   [byte   1B]  status byte  — if == 0x75, loop ends; no name follows
-//   [string    ] name            (only if status_byte != 0x75)
+//   [type4: roster/session id]
+//   [byte: status]
+//   [Frame_ReadArg: callsign]
+//   [repeat zero or more times]
+//   [type4: ignored terminator value]
+//   [byte: 0x54 terminator]
 //
-// Status values (wire = status + 0x21, stored = status - 5):
-//   5 = standing in the room (stored 0)  — use for normal presence
-//   6 = in booth 1 (stored 1), 7 = in booth 2, etc.
-//
-// Display strings (MPBT.MSG, 1-based):
-//   0x0f = "Here you see "   0x10 = " and "   0x11 = ", "   0x12 = "."
-//
-// For M4: send self slot then an immediate terminator for an empty room.
+// The client clears and repopulates its live room roster table from this batch,
+// then renders a natural-language occupant list to the world chat window.
+// Status byte 5 seeds a normal present occupant (stored internally as 0).
 
-export interface RoomPlayer {
-  /** Unique player ID (up to 32 bits, encoded as type4). */
-  id: number;
-  /** Callsign / display name (≤ 84 bytes). */
-  name: string;
-  /**
-   * Room status (raw value before +0x21 encoding).
-   *   5 = standing (not at a booth)
-   *   6 = at booth 1, 7 = at booth 2, etc.
-   */
+export interface Cmd10PresenceEntry {
+  /** Stable per-connection roster/session identifier. */
+  rosterId: number;
+  /** Presence state byte. 5 = normal present occupant. */
   status?: number;
+  /** Callsign shown in the world roster/chat UI. */
+  callsign: string;
 }
 
-/**
- * Build a Cmd10 (RoomPresence / "Here You See") packet.
- *
- * @param self    The receiving player's own slot (always slot 0; not displayed).
- * @param others  Additional players in the room (displayed in "Here you see…").
- */
-export function buildCmd10RoomPresencePacket(
-  self:   RoomPlayer,
-  others: RoomPlayer[] = [],
-  seq     = 0,
-): Buffer {
-  const STANDING = 5;
-  const TERMINATOR_STATUS = 0x54; // wire byte 0x75 → loop exits, no name follows
+function buildCmd10Args(entries: Cmd10PresenceEntry[]): Buffer {
+  if (entries.length === 0) {
+    throw new RangeError('buildCmd10Args: at least one presence entry is required');
+  }
 
-  const parts: Buffer[] = [
-    // Slot 0 — self (always read, never displayed)
-    encodeB85_4(self.id),
-    encodeAsByte(self.status ?? STANDING),
-    encodeString(self.name.slice(0, 84)),
-  ];
-
-  for (const p of others) {
+  const parts: Buffer[] = [];
+  for (const entry of entries) {
     parts.push(
-      encodeB85_4(p.id),
-      encodeAsByte(p.status ?? STANDING),
-      encodeString(p.name.slice(0, 84)),
+      encodeB85_4(entry.rosterId),
+      encodeAsByte(entry.status ?? 5),
+      encodeString(entry.callsign.slice(0, 84)),
     );
   }
 
-  // Terminator: any id + status byte 0x54 (wire 0x75) → loop stops, no name read
-  parts.push(encodeB85_4(0), encodeAsByte(TERMINATOR_STATUS));
-
-  return buildGamePacket(10, Buffer.concat(parts), false, seq);
+  // FUN_0040C370 always reads one last type4 before the terminating 0x54 byte.
+  parts.push(encodeB85_4(0), encodeAsByte(0x54));
+  return Buffer.concat(parts);
 }
 
-// ── Cmd 11 — Player Status Change ────────────────────────────────────────────
+/** Build a Cmd10 room-presence sync packet. */
+export function buildCmd10RoomPresenceSyncPacket(entries: Cmd10PresenceEntry[], seq = 0): Buffer {
+  return buildGamePacket(10, buildCmd10Args(entries), false, seq);
+}
+
+// ── Cmd 11 — Player Event ────────────────────────────────────────────────────
 // CONFIRMED: FUN_0040C6C0.
 //
-// Notifies the client that a player in the room changed state (left the room,
-// moved to a booth, stood up, left for battle, etc.).
-//
 // Wire args:
-//   [type4  5B]  player_id       FUN_00402b10(4)  → lookup in DAT_004e1870 table
-//   [byte   1B]  status + 0x21   FUN_00402f40
-//   [string    ] player_name     FUN_0040c0d0     (read even if player unknown)
+//   [type4: roster/session id]
+//   [byte: status]
+//   [Frame_ReadArg: callsign]
 //
-// Status values and the MPBT.MSG string displayed (1-based):
-//   0       → 0x14 = "%s leaves."
-//   1..4    → 0x15 = "%s leaves heading %s."  [direction strings at DAT_00472a34]
-//   5       → 0x16 = "%s stands."
-//   0x54    → 0x17 = "%s leaves for battle."
-//   6..N    → 0x18 = "%s goes to booth %d."  [booth = status - 5]
+// Minimal useful status for M4:
+//   0 = left room / departed
 
-export const PlayerStatus = {
-  LEAVES:          0,
-  LEAVES_NORTH:    1,
-  LEAVES_SOUTH:    2,
-  LEAVES_EAST:     3,
-  LEAVES_WEST:     4,
-  STANDS:          5,
-  LEAVES_BATTLE:   0x54,
-  BOOTH:           (n: number) => 5 + n,   // n = 1-based booth number
-} as const;
-
-/**
- * Build a Cmd11 (PlayerStatusChange) packet.
- *
- * @param playerId  Must match the id sent in a prior Cmd10 or Cmd13.
- * @param name      Player's callsign (≤ 84 bytes).
- * @param status    One of the PlayerStatus constants.
- */
-export function buildCmd11PlayerStatusPacket(
-  playerId: number,
-  name:     string,
-  status:   number,
-  seq       = 0,
+/** Build a Cmd11 player-event packet. */
+export function buildCmd11PlayerEventPacket(
+  rosterId: number,
+  status: number,
+  callsign: string,
+  seq = 0,
 ): Buffer {
-  return buildGamePacket(11, Buffer.concat([
-    encodeB85_4(playerId),
-    encodeAsByte(status),
-    encodeString(name.slice(0, 84)),
-  ]), false, seq);
+  return buildGamePacket(
+    11,
+    Buffer.concat([
+      encodeB85_4(rosterId),
+      encodeAsByte(status),
+      encodeString(callsign.slice(0, 84)),
+    ]),
+    false,
+    seq,
+  );
 }
 
-// ── Cmd 13 — Player Enters Room ──────────────────────────────────────────────
+// ── Cmd 13 — Player Arrival ──────────────────────────────────────────────────
 // CONFIRMED: FUN_0040C920.
 //
-// Announces that a player has entered the current room.  The client looks up
-// the player_id in its local table (DAT_004e1870) and either reuses an
-// existing slot or allocates a new one.  If the world is active (g_chatReady),
-// it appends "%s enters the room." to the chat scroll window.
+// Wire args:
+//   [type4: roster/session id]
+//   [Frame_ReadArg: callsign]
+
+/** Build a Cmd13 player-arrival packet. */
+export function buildCmd13PlayerArrivalPacket(
+  rosterId: number,
+  callsign: string,
+  seq = 0,
+): Buffer {
+  return buildGamePacket(
+    13,
+    Buffer.concat([
+      encodeB85_4(rosterId),
+      encodeString(callsign.slice(0, 84)),
+    ]),
+    false,
+    seq,
+  );
+}
+
+// ── Cmd 14 — Personnel Record ────────────────────────────────────────────────
+// CONFIRMED: FUN_00415700.
 //
 // Wire args:
-//   [type4  5B]  player_id       FUN_00402b10(4)
-//   [string    ] player_name     FUN_0040c0d0
+//   [type4: comstar id]
+//   [type3: battles to date]
+//   [type4: legacy/unused]
+//   [type4: legacy/unused]
+//   [Frame_ReadArg × 6: body lines]
 //
-// MPBT.MSG string used: index 0x19 = "%s enters the room."
-//
-// Typical use: send Cmd13 AFTER Cmd10 to announce a new arrival to occupants
-// already in the room.  For the joining player themselves, skip Cmd13 and
-// instead use Cmd10 (slot 0 = self) to record their own slot.
+// The client formats its own header lines for handle / ComStar ID / battles,
+// then appends the six payload strings verbatim as the record body.
 
-/**
- * Build a Cmd13 (PlayerEnters) packet.
- *
- * @param playerId  Unique player ID (must be consistent with Cmd10/Cmd11).
- * @param name      Player's callsign (≤ 84 bytes).
- */
-export function buildCmd13PlayerEntersPacket(
-  playerId: number,
-  name:     string,
-  seq       = 0,
+export interface Cmd14PersonnelRecordOptions {
+  comstarId: number;
+  battlesToDate?: number;
+  legacyA?: number;
+  legacyB?: number;
+  lines: string[];
+}
+
+function buildCmd14Args(opts: Cmd14PersonnelRecordOptions): Buffer {
+  const lines = opts.lines.slice(0, 6);
+  while (lines.length < 6) lines.push('');
+
+  return Buffer.concat([
+    encodeB85_4(opts.comstarId),
+    encodeB85_3(opts.battlesToDate ?? 0),
+    encodeB85_4(opts.legacyA ?? 0),
+    encodeB85_4(opts.legacyB ?? 0),
+    ...lines.map(line => encodeString(line.slice(0, 84))),
+  ]);
+}
+
+/** Build a Cmd14 personnel-record page packet. */
+export function buildCmd14PersonnelRecordPacket(
+  opts: Cmd14PersonnelRecordOptions,
+  seq = 0,
 ): Buffer {
-  return buildGamePacket(13, Buffer.concat([
-    encodeB85_4(playerId),
-    encodeString(name.slice(0, 84)),
-  ]), false, seq);
+  return buildGamePacket(14, buildCmd14Args(opts), false, seq);
+}
+
+// ── Cmd 48 — Keyed Triple-String List ────────────────────────────────────────
+// CONFIRMED: FUN_00411DF0 -> FUN_00411E20(1).
+//
+// Wire args:
+//   [type1: list_id]
+//   [Frame_ReadArg: title]
+//   [byte: count]
+//   [repeat count times:
+//      type4 item_id
+//      Frame_ReadArg col1
+//      Frame_ReadArg col2
+//      Frame_ReadArg col3
+//   ]
+//
+// The client renders each row as "N. <item_id> <col1> <col2> <col3>" and
+// sends Cmd7(list_id, item_id + 1) when the user selects a row.
+
+export interface Cmd48ListEntry {
+  itemId: number;
+  col1: string;
+  col2: string;
+  col3: string;
+}
+
+function buildCmd48Args(listId: number, title: string, entries: Cmd48ListEntry[]): Buffer {
+  const parts: Buffer[] = [
+    encodeB85_1(listId),
+    encodeString(title.slice(0, 84)),
+    encodeAsByte(entries.length),
+  ];
+
+  for (const entry of entries) {
+    parts.push(
+      encodeB85_4(entry.itemId),
+      encodeString(entry.col1.slice(0, 84)),
+      encodeString(entry.col2.slice(0, 84)),
+      encodeString(entry.col3.slice(0, 84)),
+    );
+  }
+
+  return Buffer.concat(parts);
+}
+
+/** Build a Cmd48 keyed triple-string list packet. */
+export function buildCmd48KeyedTripleStringListPacket(
+  listId: number,
+  title: string,
+  entries: Cmd48ListEntry[],
+  seq = 0,
+): Buffer {
+  return buildGamePacket(48, buildCmd48Args(listId, title, entries), false, seq);
 }
