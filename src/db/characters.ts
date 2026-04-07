@@ -14,7 +14,7 @@ export interface CharacterRow {
   id: number;
   account_id: number;
   display_name: string;
-  allegiance: Allegiance;
+  allegiance: Allegiance | null;
   created_at: Date;
 }
 
@@ -49,6 +49,19 @@ export async function createCharacter(
     [accountId, displayName, allegiance],
   );
   return res.rows[0]!;
+}
+
+/**
+ * Update the allegiance for an existing character.
+ */
+export async function updateCharacterAllegiance(
+  accountId: number,
+  allegiance: Allegiance,
+): Promise<void> {
+  await pool.query(
+    `UPDATE characters SET allegiance = $1 WHERE account_id = $2`,
+    [allegiance, accountId],
+  );
 }
 
 /**

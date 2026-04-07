@@ -188,10 +188,27 @@ The CRC is a 19-bit linear-feedback shift register.
 
 ### Parameters
 
+The CRC seed depends on **both** the connection mode (RPS/Combat) **and** the direction of the frame.
+
+**Server → Client** (outbound; seed used when generating CRC to send):
+
 | Context | Init value | Notes |
 |---------|-----------|-------|
-| Lobby | `0x0A5C25` | Derived: `(0xFFFFFFE0 + 0x0A5C45) & 0xFFFFFFFF` |
-| Combat | `0x0A5C45` | Read directly from `Frame_VerifyCRC` (`FUN_00402e30`) |
+| Lobby / RPS | `0x0A5C25` | Derived: `(0xFFFFFFE0 + 0x0A5C45) & 0xFFFFFFFF` |
+| Combat       | `0x0A5C45` | Read directly from `Frame_VerifyCRC` (`FUN_00402e30`) |
+
+**Client → Server** (inbound; seed used to validate received frames):
+
+| Context | Init value | Notes |
+|---------|-----------|-------|
+| Lobby / RPS | `0x0C2525` (795,941) | Confirmed by independent RE — RazorWing/solaris `INBOUND_SEED_RPS` |
+| Combat       | `0x0C4545` (804,165) | Confirmed by independent RE — RazorWing/solaris `INBOUND_SEED_COMBAT` |
+
+Both pairs follow the same nibble-rotation pattern:
+- Outbound RPS: `0xA5C25` → Inbound RPS: `0xC2525`
+- Outbound Combat: `0xA5C45` → Inbound Combat: `0xC4545`
+
+The algorithm is **identical** in both directions; only the initial seed differs.
 
 ### Coverage
 
@@ -745,19 +762,65 @@ stats text directly from `buildMechExamineText()` (see §14) rather than the
 legacy `"#NNN"` shortcode, because our MPBT.MSG does not have the correct
 pre-formatted stats at the expected line numbers.
 
-### Post-Redirect Game World Protocol
+### Post-Redirect Game World Protocol — RESOLVED (see §18)
 
-- After REDIRECT, the client opens a new TCP connection to the address in the
-  REDIRECT payload
-- The game world protocol has not been analysed; a second capture session
-  against the live server (or further Ghidra work on `FUN_100014e0` case 0 for
-  the new connection) is needed
+### Secondary Connection (`DAT_1001a080`) — RESOLVED (see §17–§18)
 
-### Secondary Connection (`DAT_1001a080`)
+### Client cmd-5 — Allegiance Selection — RESOLVED
 
-- Set by `Aries_Connect` (`FUN_100011c0`) after REDIRECT
-- The data arriving on this connection is fed to a different game window/loop
-- Relationship to the lobby connection is not fully understood
+**Confirmed by decompiling `FUN_00413790` (arena-window click handler) and
+`FUN_0040d2d0` in MPBTWIN.EXE.**
+
+When the player clicks an allegiance button in the Cmd4 arena UI:
+
+| Button ID | Source | Action |
+|-----------|--------|--------|
+| `0x100` | `FUN_00413790` | Intercepts as **Help**: calls `FUN_00404450` → opens `SOLARIS.HLP` |
+| `0x101`–`0x105` | `FUN_00413790` | Allegiance selection: calls `FUN_0040d2d0(option_type_byte)` |
+
+`FUN_0040d2d0`:
+```c
+void FUN_0040d2d0(char type_byte) {
+    FUN_00403030('\x05');  // write cmd index 5 (wire 0x26)
+    FUN_00403050(type_byte); // write type_byte raw (type_byte + 0x21 on wire)
+    FUN_00429440();          // flush / finalize frame
+}
+```
+
+### Client cmd-5 Wire Format (Client → Server)
+
+```
+\x1B  [seq+0x21]  \x26  [type_byte+0x21]  \x20  [CRC×3]  \x1B
+                  ^^^   ^^^^^^^^^^^^^^^^
+                  cmd=5 allegiance type index
+```
+
+`type_byte` = the `type` field the SERVER wrote into the Cmd4 arena-option entry
+for that button:
+- `type = 0` → `ALLEGIANCES[0]` = `'Davion'`
+- `type = 1` → `ALLEGIANCES[1]` = `'Steiner'`
+- `type = 2` → `ALLEGIANCES[2]` = `'Liao'`
+- `type = 3` → `ALLEGIANCES[3]` = `'Marik'`
+- `type = 4` → `ALLEGIANCES[4]` = `'Kurita'`
+
+### Cmd4 Arena-Options — Character-Creation Allegiance Buttons — RESOLVED
+
+**Confirmed by decompiling `FUN_00414b70` (Cmd4_SceneInit handler) in MPBTWIN.EXE.**
+
+The `arena_option_count` + option entries at the end of the Cmd4 wire format
+create the allegiance-picker buttons in the character-creation UI:
+
+- Count stored in `DAT_004e6a70`.
+- Option strings (40 bytes each) stored in `DAT_004816e8`.
+- Each option creates a button with ID `option_index + 0x100`.
+- **Button 0x100 is always intercepted as a Help button** (opens `SOLARIS.HLP`).
+  The first option in the list must therefore be a dummy placeholder.
+- Effective allegiance buttons: IDs **0x101–0x105** (options 1–5).
+
+**Server sends 6 options** (dummy at index 0, five houses at indices 1–5);
+client displays six buttons but only five are selectable as allegiances.
+
+Button width: `0x78` (120 px) if ≤ 5 options; `0x4f` (79 px) if > 5 (max 6).
 
 ### Command 0x1D (Cancel/Close) — RESOLVED
 
@@ -1149,6 +1212,82 @@ Frame-reading helpers referenced below:
 | 13 | `0x2e` | `FUN_0040C920` | `Cmd13_PlayerArrival` | Reads 4-byte session-ID + callsign string. Searches player table for matching session-ID (update) or first free slot (insert). Sets active flag, stores callsign, resets timer field to 0, appends "{callsign} entered" line (MSG `0x19`) to chat. |
 | 14 | `0x2f` | `FUN_00415700` | `Cmd14_PersonnelRecord` | Reads payload: `type4 comstar_id`, `type3 battles_to_date`, two additional `type4` values currently unused by the display code, then six `Frame_ReadArg` strings. Creates a type-2 modal text page. The visible header lines are formatted locally as selected-handle (`MPBT.MSG[0x98]` / `Handle  : %s`), ComStar ID, and `MPBT.MSG[0xa0]` (`Battles to date: %ld`); the six payload strings are appended verbatim as the remaining body lines. The installed key handler closes on Enter/ESC, but pressing Space sends `Cmd7(0x95, 2)` and flushes, making `0x95` the strongest current candidate for the personnel-record `More` / next-page request. |
 
+---
+
+## 18b. Cmd36 — User Creation Wizard (`FUN_004161A0`) — RESOLVED
+
+**Confirmed by decompiling `FUN_004161A0` (Cmd36 handler) in MPBTWIN.EXE.**
+
+Cmd36 is the **original Kesmai new/returning player detection command**, sent by the real
+server early in the RPS session to present either a "Create New Pilot" wizard or a
+"Continue as Existing Pilot" dialog.
+
+### Wire Format
+
+```
+[B85_4 int: iVar3 / accountId]  [B85 string: dialog display text]
+```
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `iVar3` | B85_4 (5 bytes) | `0` = new user; non-zero = returning accountId |
+| string | B85 string | Player callsign or prompt text shown in dialog |
+
+### Client Behaviour
+
+`FUN_004161A0` reads `iVar3` from the wire and branches:
+
+**`iVar3 == 0` — New player:**
+- Creates a medium-width dialog (`FUN_004145a0(4)`) at position (0, 0xdd)–(0x280, 0x103)
+- Adds two clickable buttons:
+  - Button `0x0d` — "Proceed as new pilot" (always present)
+  - Button `0x6d` — scroll/more (only if dialog text > 10 lines: `uVar6 != 0`)
+- Sets `DAT_004ddfc0+0x44 = 0x21` (roster ready flag)
+- Keyboard handler at `LAB_00415f50` (scroll up/down, Escape → dismiss)
+- Clicking button `0x0d` → `FUN_004160c0` + `FUN_00411200` → closes dialog, shows arena
+
+**`iVar3 != 0` — Returning player:**
+- Same dialog but adds a third button:
+  - Button `0x72` — "Continue as existing pilot"
+  - Button `0x0d` — "Create new pilot instead"
+  - Button `0x6d` — scroll (if text > 10 lines)
+- Keyboard handler at `LAB_00415f50` (same scroll)
+- `DAT_00472c94[0x50d]` set to `LAB_00416170` (ESC/Space → remap to button press)
+- Clicking button `0x72` — "Continue": closes dialog, **then** calls `FUN_00416db0(iVar3, 0)`
+  which opens a second confirm dialog with the player's character data
+- Clicking button `0x0d` — "New": closes dialog, shows arena directly (same as new-user path)
+
+### Second Dialog — `FUN_00416db0` (Returning-User Confirm)
+
+Opened after clicking "Continue" with `param_1 = accountId`:
+- Creates another dialog with two buttons: `0x132` (OK/confirm) and `0x1b` (cancel)
+- Loads up to 1000 character data entries from a supplied array; if >999, stores as a single int
+- Keyboard at `LAB_00416b90`; scroll at `LAB_00417460`; Escape at `LAB_00416d10`
+- Pressing OK → confirm account → enter arena
+- Pressing Cancel → closes this dialog, returns to the wizard (account selection)
+
+### Bypass Conditions
+
+The wizard is triggered **entirely by receiving Cmd36**. There is no client-side allegiance
+or callsign state that prevents it from firing, and there is no prior-message path that
+stores callsign/allegiance into globals checked here.
+
+**The only way to bypass the wizard is to never send Cmd36.** Our emulator does not send
+Cmd36, which correctly skips both the new-user and returning-user dialog flows entirely.
+
+### Emulator Notes
+
+- We do **not** send Cmd36. Client proceeds from welcome → cmd-3 → Cmd4 arena without
+  any user-creation dialog.
+- The allegiance picker and character name our server previously showed via Cmd7 was our
+  own addition (not related to Cmd36). That has been replaced by server-side auto-create
+  in `handleWorldLogin` (see §5 and `src/server-world.ts`).
+- `FUN_00415f50` (keyboard handler at `LAB_00415f50`) and `FUN_00416170` (ESC/Space remap)
+  are inline label targets inside the Cmd36 dialog; they are not independently reachable
+  from the dispatch table.
+
+---
+
 **Correction note for §8**: The lobby dispatch table entry at index 3 was previously labelled
 `Cmd3_Thunk — Calls Cmd3_SendCapabilities (FUN_0040d3c0)`.  Decompilation of `FUN_0040C190`
 confirms it does **not** call `FUN_0040d3c0`.  `FUN_0040d3c0` is called directly from the welcome
@@ -1188,6 +1327,30 @@ Additional world-client senders confirmed after the first real-client M4 pass:
   analysis was done purely through static RE
 - **Custom TypeScript server** (`src/server.ts`) — used to trigger client paths
   and observe what the binary did next
+
+### Third-Party Cross-Reference — RazorWing/solaris
+
+An independent MPBT RE project at [https://github.com/RazorWing/solaris](https://github.com/RazorWing/solaris)
+cross-validates several findings in this document. **Important caveat**: it analyses
+a different build of `Mpbtwin.exe` (MD5: `60c8febf6b4e0a319367e3c6557d705e`) — function
+addresses and dispatch table offsets do not match our binary's. The **protocol wire
+format** (base-85 encoding, 19-bit LFSR checksum, ESC framing) is identical.
+
+Specific confirmed findings from that repo:
+
+| Finding | Our RESEARCH.md | RazorWing source |
+|---------|----------------|-----------------|
+| Outbound CRC seeds | `0x0A5C25` / `0x0A5C45` | `calculate_checksum()` seeds 678949/678981 ✓ |
+| **Inbound CRC seeds (NEW)** | `0x0C2525` / `0x0C4545` | `INBOUND_SEED_RPS=795941`, `INBOUND_SEED_COMBAT=804165` |
+| COMMEG32 queue msg type=0 | §17 — all game packets use type 0 | `build_queue_message()` confirms |
+| Short-format flag byte non-zero | §17 — `buffer[3] != 0` for short msg | `flag = 0x01` in `build_short_message()` |
+| Cmd7 wire format | §11 | `build_cmd7_packet()` matches exactly |
+| ESC `0x1B` frame delimiter | §3 | `encode_final_packet()` suffix `b'\x1B'` |
+
+The repo also documents COMMEG32 ARIES message types 0/27/28/29 (heartbeat/ping/timing
+configuration) in detail — not covered in this file because the server does not currently
+implement COMMEG32-level timing; see `commeg32_message_types.md` in that repo for the
+full `ParseProtocolMessage` switch-table and timing histogram structures.
 
 ### RE Process
 

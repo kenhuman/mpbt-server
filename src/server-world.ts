@@ -38,6 +38,7 @@ import {
   parseClientCmd4,
   parseClientCmd21TextReply,
   parseClientCmd7,
+  verifyInboundGameCRC,
 } from './protocol/game.js';
 import {
   buildCmd3BroadcastPacket,
@@ -597,7 +598,7 @@ async function handleWorldLogin(
     const character = await findCharacter(session.accountId);
     if (character) {
       session.displayName = character.display_name;
-      session.allegiance  = character.allegiance;
+      session.allegiance  = character.allegiance ?? undefined;
       connLog.info(
         '[world-login] character loaded from DB: displayName="%s" allegiance=%s',
         character.display_name, character.allegiance,
@@ -656,6 +657,10 @@ function handleWorldGameData(
     return;
   }
 
+  if (!verifyInboundGameCRC(payload)) {
+    connLog.warn('[world] inbound CRC mismatch (seq=0x%s) — processing anyway', payload[1].toString(16));
+  }
+
   const seq = payload[1] - 0x21;
 
   // ACK request: seq byte > 42 means client wants an ACK.
@@ -677,10 +682,11 @@ function handleWorldGameData(
     }
     // Cmd-3: client capabilities / ready signal (RPS mode).
     // Called by FUN_0040d3c0 immediately after the world-MMW welcome is received.
-    // Respond with the world initialization sequence.
+    // Respond with the world initialization sequence exactly once.
     connLog.info('[world] cmd-3 (client-ready) → sending world init sequence');
     sendWorldInitSequence(players, session, connLog, capture);
     session.worldInitialized = true;
+    session.arenaInitialized = true;
     notifyRoomArrival(players, session, connLog);
 
   } else if (cmdIdx === 1) {
@@ -880,6 +886,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     awaitingMechConfirm: false,
     serverSeq:         0,
     worldInitialized:  false,
+    arenaInitialized:  false,
     worldRosterId:     nextWorldRosterId++,
     worldPresenceStatus: 5,
   };

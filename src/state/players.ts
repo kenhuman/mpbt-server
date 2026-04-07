@@ -78,10 +78,17 @@ export interface ClientSession {
    */
   displayName?: string;
   /**
-   * House allegiance chosen during character creation: one of
-   * Davion | Steiner | Liao | Marik | Kurita.
+   * House allegiance — one of Davion | Steiner | Liao | Marik | Kurita.
+   * Set from the characters table after login, or persisted from cmd-5 during
+   * the first-login allegiance-picker wizard (wire format confirmed via RE).
    */
   allegiance?: string;
+  /**
+   * True once the Cmd4 SceneInit / world init sequence has been sent.
+   * Used to distinguish the first cmd-3 (needs full init) from subsequent
+   * re-triggers (e.g. post-allegiance-pick) that only need an ack.
+   */
+  arenaInitialized: boolean;
 }
 
 export class PlayerRegistry {

@@ -31,6 +31,7 @@ import {
   parseClientCmd7,
   parseClientCmd9CharacterCreationReply,
   decodeArgType4,
+  verifyInboundGameCRC,
   type MechEntry,
 } from './protocol/game.js';
 import { buildCmd9CharacterCreationPromptPacket } from './protocol/world.js';
@@ -153,6 +154,7 @@ function handleConnection(socket: net.Socket): void {
     mechListSent: false,
     awaitingMechConfirm: false,
     serverSeq: 0,
+    arenaInitialized: false,
   };
   players.add(session);
 
@@ -369,6 +371,10 @@ function handleGameData(
     return;
   }
 
+  if (!verifyInboundGameCRC(payload)) {
+    connLog.warn('[game] inbound CRC mismatch (seq=0x%s) — processing anyway', payload[1].toString(16));
+  }
+
   const seq = payload[1] - 0x21;
 
   // ACK request: client uses seq > 42 to request server acknowledgment.
@@ -385,13 +391,13 @@ function handleGameData(
   if (cmdIdx === 3 && session.phase === 'lobby') {
     // cmd 3 = client-ready signal.
     //
-    // NEW POST-M3 FLOW (issues #26/#27):
+    // LOGIN FLOW (issues #26/#27):
     //   Look up the player's character in the DB.
     //   - Character exists → REDIRECT immediately to world port (issue #27).
     //   - No character     → send Cmd9 callsign + allegiance prompt (issue #26).
     //
-    // The pre-combat mech select (cmd-26) is NOT sent here anymore; it belongs
-    // to the M6 combat-entry path, not the initial login flow.
+    // The Cmd9 path was captured from the live MPBTWIN.EXE client and preserves
+    // the typed callsign before the world REDIRECT.
     const accountId = session.accountId;
     if (accountId === undefined) {
       connLog.error('[game] cmd-3 received but session has no accountId — possible auth race');
@@ -403,11 +409,21 @@ function handleGameData(
       if (character) {
         // Returning player: character on file → straight to world.
         session.displayName = character.display_name;
-        session.allegiance  = character.allegiance;
+        session.allegiance  = character.allegiance ?? undefined;
         connLog.info(
           '[game] character found: displayName="%s" allegiance=%s → REDIRECT to world',
           character.display_name, character.allegiance,
         );
+        launchRegistry.record(session.username, {
+          mechId:         MECHS[0]?.id ?? 0,
+          mechSlot:       0,
+          mechTypeString: MECHS[0]?.typeString ?? '',
+          accountId:      accountId,
+          displayName:    character.display_name,
+          // Only pass allegiance if it's actually set; null means the wizard
+          // was never completed → world server should show the picker again.
+          ...(character.allegiance ? { allegiance: character.allegiance } : {}),
+        });
         issueWorldRedirect(session, connLog, capture);
       } else {
         // First login: no character → prompt for callsign + House allegiance.
@@ -422,7 +438,7 @@ function handleGameData(
     });
 
   } else if (cmdIdx === 7) {
-    // cmd 7: dialog reply.  Handles three distinct sub-cases:
+    // cmd 7: dialog reply. Handles two lobby mech-selection sub-cases:
     //   A) Mech-window selection (M6 pre-combat, future) (listId = 0)
     //   B) Launch-confirm dialog (M6 pre-combat, future) (listId = CONFIRM_DIALOG_ID)
     const parsed = parseClientCmd7(payload);
@@ -491,7 +507,7 @@ function handleGameData(
 
     createCharacter(session.accountId!, displayName, allegiance).then((character) => {
       session.displayName = character.display_name;
-      session.allegiance = character.allegiance;
+      session.allegiance = character.allegiance ?? undefined;
 
       connLog.info(
         '[game] char-creation Cmd9 accepted: displayName="%s" allegiance=%s → REDIRECT',
