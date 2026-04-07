@@ -35,6 +35,7 @@ import {
   buildCmd36MessageViewPacket,
   buildMenuDialogPacket,
   parseClientCmd4,
+  parseClientCmd5SceneAction,
   parseClientCmd10MapReply,
   parseClientCmd21TextReply,
   parseClientCmd7,
@@ -805,6 +806,19 @@ function handleWorldGameData(
     }
     handleWorldTextCommand(players, session, parsed.text, connLog, capture);
 
+  } else if (cmdIdx === 5) {
+    const parsed = parseClientCmd5SceneAction(payload);
+    if (!parsed) {
+      connLog.warn('[world] cmd-5 scene action parse failed');
+      return;
+    }
+    connLog.info('[world] cmd-5 scene action: type=%d', parsed.actionType);
+    if (parsed.actionType === 4) {
+      sendSolarisTravelMap(session, connLog, capture);
+      return;
+    }
+    connLog.warn('[world] cmd-5 unsupported scene action type=%d', parsed.actionType);
+
   } else if (cmdIdx === 10) {
     const parsed = parseClientCmd10MapReply(payload);
     if (!parsed) {
@@ -939,7 +953,7 @@ function sendWorldInitSequence(
       opponents:        [],     // all 4 slots = "no opponent" (wire 0x21 / [0x21,0x21])
       callsign,
       sceneName:        DEFAULT_SCENE_NAME,
-      arenaOptions:     [],
+      arenaOptions:     [{ type: 4, label: 'Travel' }],
     },
     nextSeq(session),
   );
