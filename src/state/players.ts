@@ -65,6 +65,11 @@ export interface ClientSession {
    */
   worldPresenceStatus?: number;
   /**
+   * Current map room/location identifier from IS.MAP / SOLARIS.MAP.
+   * This is separate from roomId, which is a server-side grouping key.
+   */
+  worldMapRoomId?: number;
+  /**
    * Most recent world inquiry target, used to page follow-up record requests
    * such as Cmd7(0x95, 2) after Cmd14_PersonnelRecord.
    */

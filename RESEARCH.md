@@ -1873,6 +1873,14 @@ yet change room state. The follow-up needed for real navigation is to identify
 what server response follows a successful room selection: likely another map
 command or a world-scene update, but that is not confirmed yet.
 
+Engineering follow-up on this branch adds a prototype trigger and state update:
+typing `/map` or `/travel` into the world chat sends `Cmd43` with Solaris
+travel context `0xc6`; a returned `cmd 10` selection moves the session into a
+server-side `map_room_<roomId>` grouping, sends a fresh `Cmd10` room-presence
+sync, sends a `Cmd3` travel-complete line, and notifies occupants in the target
+room with `Cmd13`. This is a validation bridge, not yet the authentic terminal
+or tram request path.
+
 ---
 
 ## Appendix A — Confirmed Function Reference
