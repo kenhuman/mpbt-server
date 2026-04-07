@@ -226,6 +226,7 @@ export function buildCmd6CursorBusyPacket(seq = 0): Buffer {
  * @param entries  Allegiance/choice strings shown after the player enters a name.
  */
 export function buildCmd9CharacterCreationPromptPacket(entries: string[] = [], seq = 0): Buffer {
+  if (entries.length > 222) throw new RangeError(`Cmd9 entry count ${entries.length} exceeds 222-byte limit`);
   const parts: Buffer[] = [
     encodeAsByte(1),              // sentinel = 1 (gate: == '\x01')
     encodeAsByte(entries.length), // count
@@ -405,13 +406,14 @@ export interface Cmd48ListEntry {
 }
 
 function buildCmd48Args(listId: number, title: string, entries: Cmd48ListEntry[]): Buffer {
+  const capped = entries.length > 222 ? entries.slice(0, 222) : entries;
   const parts: Buffer[] = [
     encodeB85_1(listId),
     encodeString(title.slice(0, 84)),
-    encodeAsByte(entries.length),
+    encodeAsByte(capped.length),
   ];
 
-  for (const entry of entries) {
+  for (const entry of capped) {
     parts.push(
       encodeB85_4(entry.itemId),
       encodeString(entry.col1.slice(0, 84)),
