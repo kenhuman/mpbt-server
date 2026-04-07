@@ -819,8 +819,9 @@ function sendWorldInitSequence(
   const { socket } = session;
   const mechId     = session.selectedMechId ?? FALLBACK_MECH_ID;
   // Prefer the character display name (set from DB after login); fall back to
-  // the login username only when character data is unavailable.
-  const callsign   = (session.displayName ?? session.username).slice(0, 84) || 'Pilot';
+  // the login username only when character data is unavailable. getDisplayName()
+  // also strips C0/DEL control bytes and clamps to 84 bytes.
+  const callsign   = getDisplayName(session);
 
   // Cmd6 — CursorBusy (hourglass while arena loads)
   send(socket, buildCmd6CursorBusyPacket(nextSeq(session)), capture, 'CMD6_BUSY');
