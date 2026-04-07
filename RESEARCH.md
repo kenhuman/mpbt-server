@@ -2058,6 +2058,21 @@ Wire:  ESC '!'  [0x0C+0x21=0x2D]  [0x04+0x21=0x25]  [CRC]
 
 Current implication: the TIC/weapon UI is mostly local state, and the confirmed wire request is the compact `cmd 12, action 0` fire command. The likely server response chain is still `Cmd68` projectile/effect spawn plus `Cmd70` actor animation/status and later damage packets, but hit/damage semantics are not yet decoded.
 
+**Client shot-geometry writer — `Combat_WriteCmd10ShotGeometry_v123` (`0x0040e230`):**
+```c
+Frame_WriteByte(0x0a);                 // client cmd 10
+Frame_WriteByte(sourceWeaponOrSlot);
+Frame_WriteByte(targetServerSlot + 1);  // 0 if no target
+Frame_WriteByte(targetAttach + 1);
+Frame_WriteType(1, angleA / 0xb6 + 0x0e1c);
+Frame_WriteType(1, angleB / 0xb6 + 0x0e1c);
+Frame_WriteType(3, x + 0x18e4258);
+Frame_WriteType(3, y + 0x18e4258);
+Frame_WriteType(2, z);
+```
+
+This helper is only called through `Combat_FireSelectedTicGroup_v123` / `FUN_00449480` in the local fire-preview path, and it does **not** flush by itself. Treat it as a shot-geometry write helper until live capture proves when the frame is flushed relative to the compact `cmd 12/action 0` fire request.
+
 **Channel / mode command — `FUN_0043d920()`:**
 ```
 RPS mode    (DAT_0047d05c == 3):  cmd byte 0x21 ('!') + data byte 0x21 → raw 0x42
@@ -2145,7 +2160,7 @@ Key handlers for combat bootstrap and position sync:
 |-----|-----------|---------|--------------|
 | 64 | `0x65` | `FUN_0040d390` | Remote actor/mech add. Reads a server slot byte, maps it through `DAT_00478d98`, copies multiple identity strings into the per-mech struct at `DAT_004f1d30 + index*0x49c`, reads a mech id via `FUN_004013a0(2)`, loads the local `.MEC`/mech data, and marks the actor active. |
 | 65 | `0x66` | `FUN_0040d830` | Primary server→client combat position/velocity sync. Reads one server slot byte, then `type3 x`, `type3 y`, `type2 z/altitude`, and four `type1` motion fields now mapped to facing/heading accumulator, throttle velocity, leg velocity, and a forward/speed magnitude term. It writes `DAT_004f1d4c/50/54`, `DAT_004f1d5c`, `DAT_004f1f7c`, `DAT_004f1f7a`, `DAT_004f20a2`, `DAT_004f1d9e`, and the corresponding delta/absolute-delta fields under the same per-mech struct. |
-| 68 | `0x69` | `FUN_0040e390` | Weapon/projectile/effect spawn candidate. Reads source actor, weapon/slot, optional target actor/slot, two `type1` angle/offset fields, and `type3/type3/type2` position; calls `FUN_00427300`/`FUN_00427400` and records an effect id in `DAT_00478df8` for later follow-up. |
+| 68 | `0x69` | `FUN_0040e390` | Projectile/effect spawn. Reads source actor, source weapon slot, optional target actor/attachment, two angle/offset seed fields, and fallback `type3/type3/type2` impact coordinates. It resolves source muzzle geometry, target attachment or fallback impact coordinates, allocates a transient projectile/effect object, and records the new effect id in `DAT_00478df8` for later follow-up. This is visual/effect sync, not yet a decoded damage result. |
 | 70 | `0x6b` | `FUN_0040e700` | Actor animation/status transition. Reads actor slot + subcommand and fans into animation helpers (`FUN_0043b400`/`470`/`4a0`/`4e0`/`500`/`520`/`540`) for stand/fall/jump/destruction-style transitions. |
 | 72 | `0x6d` | `FUN_00445110` | Local combat bootstrap. Reads a scenario/title string, maps the local server slot to local actor index 0, initializes global arena/mech fields, reads local actor identity strings, reads initial coordinates, loads mech data via `FUN_004456c0`, sets `DAT_0047ef60 |= 1`, and initializes local actor state at `DAT_004f1d30`. |
 
@@ -2165,6 +2180,40 @@ speedMag = Frame_ReadType(1) - 0x0e1c;          // DAT_004f20a2 and DAT_004f1d9e
 Dynamic capture is still needed for signed direction conventions, but the four trailing `type1` fields are no longer generic: the client derives interpolation deltas toward the decoded facing/throttle/leg targets and `FUN_004488e0` applies them into `DAT_004f1d5c`, `DAT_004f1f7c`, and `DAT_004f1f7a`, while `FUN_0042c830` consumes the `DAT_004f20a2`/`DAT_004f1d9e` forward/speed magnitude term. This is no longer an unknown server→client packet family: cmd 65 is the combat position/motion update that complements the client→server cmd 8/9 movement packets in §19.2.
 
 Implementation impact: a minimal combat prototype likely needs the `MMC` welcome/state handoff, then `Cmd72` to seed the local player, `Cmd64` for remote actors/bots, and periodic `Cmd65` actor position updates. `Cmd68`/`Cmd70` are likely needed once firing, projectile effects, and destruction/animation states enter scope.
+
+`Combat_Cmd68_SpawnWeaponEffect_v123` field flow:
+
+```c
+sourceActor = DAT_00478d98[Frame_ReadByte()];
+weaponSlot  = Frame_ReadByte();
+
+targetRaw   = Frame_ReadByte();
+targetActor = targetRaw - 1;
+if (targetActor == 9) {
+  targetActor = 0;                       // special local-actor encoding
+} else if (targetActor != -1) {
+  targetActor = DAT_00478d98[targetActor];
+}
+
+targetAttach = Frame_ReadByte() - 1;
+angleSeedA   = Frame_ReadType(1);        // transformed before helper call; helper recomputes angles from source/target geometry
+angleSeedB   = Frame_ReadType(1);
+impactX      = Frame_ReadType(3) - 0x18e4258;
+impactY      = Frame_ReadType(3) - 0x18e4258;
+impactZ      = Frame_ReadType(2);
+```
+
+Helper chain:
+
+| Helper | Current read |
+|--------|--------------|
+| `Combat_CalcProjectilePath_v123` (`0x00427300`) | Resolves the source weapon's muzzle position from the actor mech model, resolves a target attachment if present, otherwise preserves the server-provided impact coordinates, then calls the angle calculator. |
+| `Combat_CalcProjectileAngles_v123` (`0x004271d0`) | Calculates pitch and bearing from source position to target/impact position. |
+| `Combat_CalcProjectileDistance_v123` (`0x004272c0`) | Computes source-to-impact distance when the projectile flags indicate a ranged path. |
+| `Combat_AllocateProjectileEffect_v123` (`0x00427400`) | Allocates a projectile/effect object from `DAT_0047eb10`, stamps source/target actors, weapon slot, angles, coordinates, timing, effect class, and target impact metadata. |
+| `Combat_GetLastProjectileEffectId_v123` (`0x004276e0`) | Returns `DAT_004da2dc`, the projectile/effect slot selected by the allocator. |
+
+The current server implication is: answer confirmed fire requests (`cmd 12/action 0`) with `Cmd68` to make remote clients see the shot/effect, then later send still-unresolved hit/damage packets. `Cmd70` covers actor animation/status transitions such as stand/fall/jump/destruction-style state changes, but does not itself carry decoded damage numbers.
 
 ---
 
@@ -2225,6 +2274,7 @@ Key `MPBTWIN.EXE` v1.23 function addresses discovered this RE session:
 | `0x0040d2d0` | Throttle velocity accumulator → `DAT_004f1f7c` (±8190) |
 | `0x0040dca0` | **Movement packet builder** (100 ms timer, cmd 8/9) |
 | `0x0040de90` | Sequence + ACK handler — calls ACK stub |
+| `0x0040e230` | `Combat_WriteCmd10ShotGeometry_v123`: client cmd-10 shot geometry write helper; no local flush |
 | `0x0040eb20` | `Combat_SendCmd12Action_v123`: generic client cmd-12 action sender |
 | `0x0040eb40` | **ACK stub** — returns 0, no-op |
 | `0x00401a70` | Append CRC to outbuf |
@@ -2233,6 +2283,11 @@ Key `MPBTWIN.EXE` v1.23 function addresses discovered this RE session:
 | `0x004231c0` | `Combat_InputActionDispatch_v123`: combat UI/input action dispatcher; sends cmd-12 action `0` for weapon fire |
 | `0x00423f10` | `Combat_FireSelectedTicGroup_v123`: local TIC group fire/effect path |
 | `0x00424c70` | `Combat_SelectWeaponSlot_v123`: selected weapon slot/HUD highlighter |
+| `0x004271d0` | `Combat_CalcProjectileAngles_v123`: pitch/bearing from source to target/impact |
+| `0x004272c0` | `Combat_CalcProjectileDistance_v123`: source-to-impact distance |
+| `0x00427300` | `Combat_CalcProjectilePath_v123`: source muzzle + target attachment/fallback impact resolver |
+| `0x00427400` | `Combat_AllocateProjectileEffect_v123`: projectile/effect object allocator |
+| `0x004276e0` | `Combat_GetLastProjectileEffectId_v123`: returns last projectile/effect slot id |
 | `0x00433d10` | `.MEC` file loader (`mechdata\*.MEC`) |
 | `0x00434350` | WndProc / main window message handler |
 | `0x00435c10` | TCP flush thunk — CRC + `SendTCPData` + buffer reset |
