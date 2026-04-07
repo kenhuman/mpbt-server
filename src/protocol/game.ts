@@ -708,7 +708,7 @@ export function buildCmd20Packet(
 }
 
 // ── REDIRECT (ARIES type 0x03) ────────────────────────────────────────────────
-// CONFIRMED by COMMEG32.DLL FUN_100014e0 case 3:
+// CONFIRMED by COMMEG32.DLL REDIRECT dispatch case 3:
 //   Payload is exactly 120 bytes: addr[40] | internet[40] | password[40]
 //   All fields are null-terminated ASCII strings.
 //   addr → CString → FUN_100011c0 (establish new TCP connection)

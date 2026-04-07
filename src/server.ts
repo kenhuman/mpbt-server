@@ -5,7 +5,8 @@
  *
  *   1. Client connects (MPBTWIN.EXE configures address via play.pcgi server=host:port).
  *   2. Server sends LOGIN_REQUEST (type 0x16, empty payload) immediately.
- *   3. COMMEG32.DLL responds by calling FUN_10001420 → sends LOGIN packet (type 0x15).
+ *   3. COMMEG32.DLL responds by sending LOGIN (type 0x15).
+ *      v1.06 calls FUN_10001420; v1.23 calls FUN_10001de0.
  *   4. Server parses the LOGIN packet, extracts username/password.
  *   5. Server sends SYNC (type 0x00) as acknowledgment.
  *   6. Further game packets TBD (capture-driven).
@@ -223,8 +224,8 @@ function handleConnection(socket: net.Socket): void {
   keepaliveTimer?.unref();
 
   // ── SERVER SPEAKS FIRST ─────────────────────────────────────────────────────
-  // COMMEG32.DLL FUN_100014e0 case 0x16: when LOGIN_REQUEST arrives, it calls
-  // FUN_10001420() which builds and sends the type-0x15 LOGIN packet.
+  // COMMEG32.DLL receive-dispatch case 0x16: when LOGIN_REQUEST arrives, it
+  // calls the client LOGIN sender (v1.06 FUN_10001420; v1.23 FUN_10001de0).
   session.phase = 'auth';
   const loginReq = buildLoginRequest();
   connLog.info('Sending LOGIN_REQUEST (0x16) — %d bytes', loginReq.length);

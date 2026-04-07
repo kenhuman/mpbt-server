@@ -2096,6 +2096,20 @@ Source debug paths embedded in v1.23 `MPBTWIN.EXE`: `D:\btech\Source123\Combat.c
 
 **Server impact:** `parseLoginPayload()` reads `clientVer` as a raw string and logs it but does not enforce a specific value — no server code change required. Comments in `src/protocol/auth.ts` and `src/protocol/constants.ts` updated on this branch to document both strings.
 
+### COMMEG32 v1.23 Ghidra revalidation
+
+2026-04-07 follow-up in the v1.23 Ghidra project confirms the login wire layout is unchanged, but the key functions moved:
+
+- `CE_VersionString` at `10005300` returns `s_Kesmai_CommEngine_3_29_1001a220`.
+- `CE_VersionNumber` at `10005310` writes major `3`, minor `0x1d` (`29`).
+- `MakeTCPConnection` export `10004920` calls `FUN_10001b20`, which copies the version literal into the login block at `DAT_10021848` (`DAT_100217d8 + 0x70`), sets the `0x39` marker at `DAT_10021916`, clears `DAT_10021918`, and opens the socket.
+- v1.23 LOGIN sender is `FUN_10001de0`, not `FUN_10001420`. It initializes ARIES packet type `0x15`, copies `strlen(password) + 0x145` bytes from `DAT_100217d8`, writes `htons(strlen(password))` at `DAT_1002191a`, finalizes the ARIES header, and sends via `writebinary`.
+- v1.23 login payload field setters line up with the existing parser: `SetUserName` -> `DAT_100217d8`, version -> `DAT_10021848`, `SetUserEmailHandle` -> `DAT_10021898`, `SetInternet` -> `DAT_100218c0`, `SetProductCode` -> `DAT_10021914`, `SetServerIdent` -> `DAT_10021917`, `SetUserPassword` -> `DAT_1002191a`/`DAT_1002191c`.
+- v1.23 receive dispatcher is `FUN_10001eb0`; case `0` still forwards the raw SYNC payload to `MPBTWIN.EXE` via `WM_0x7f0`, and case `0x16` still sends LOGIN by calling `FUN_10001de0`.
+- `FUN_10001420` in v1.23 is now timing/failure telemetry, not LOGIN; it builds ARIES packet type `0x1b`.
+
+Server impact: no runtime change is required. The existing parser accepts both version strings and the payload offsets are unchanged. The docs/comments should avoid using `FUN_10001420` as a v1.23 login-builder address.
+
 **MPBTWIN.EXE — new combat state machine strings:**
 
 The v1.23 binary contains new debug/state-label strings absent from v1.06:
@@ -2151,8 +2165,8 @@ The v1.23 Ghidra project has been created with all three binaries analyzed. Work
 
 | Priority | Task | Binary | Notes |
 |----------|------|--------|-------|
-| 1 | Re-verify `FUN_10001420` (LOGIN builder) | COMMEG32 v1.23 | Confirm payload layout unchanged; check if `CE_VersionNumber`/`CE_VersionString` exports alter the version field |
-| 2 | Re-verify `Aries_RecvHandler` / case 0 | COMMEG32 v1.23 | §17 was confirmed on v1.06; confirm it still works identically |
+| 1 | Re-verify LOGIN builder | COMMEG32 v1.23 | Done 2026-04-07: v1.23 sender is `FUN_10001de0`; payload layout unchanged; `CE_VersionString`/`CE_VersionNumber` are exports only and do not require server-side version enforcement |
+| 2 | Re-verify `Aries_RecvHandler` / case 0 | COMMEG32 v1.23 | Done 2026-04-07: dispatcher is `FUN_10001eb0`; case `0` still forwards raw SYNC payload via `WM_0x7f0`; case `0x16` calls `FUN_10001de0` |
 | 3 | Trace new state machine in `MPBTWIN` | MPBTWIN v1.23 | Find the handler for `"Solaris RPS"` → `"Transition to combat - even"` → `"Solaris COMBAT"` — this defines the world→combat REDIRECT flow |
 | 4 | Re-verify world command dispatch table | MPBTWIN v1.23 | §18 addresses will have shifted; new entries may exist in v1.23 |
 | 5 | Trace `INITAR.DLL` launcher changes | INITAR v1.23 | Win32 API surface identical to v1.06 (confirmed by string extraction). Deeper RE needed to confirm pcgi field format is unchanged given +12 KB growth. |
