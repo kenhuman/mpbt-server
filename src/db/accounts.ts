@@ -59,6 +59,10 @@ export async function verifyOrRegister(
   | { ok: true;  account: AccountRow; created: boolean }
   | { ok: false; reason: string }
 > {
+  if (!username || !password) {
+    return { ok: false, reason: 'username and password are required' };
+  }
+
   const existing = await findAccount(username);
 
   if (!existing) {

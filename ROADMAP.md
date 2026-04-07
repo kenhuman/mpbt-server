@@ -102,10 +102,10 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 | Task | Status | Notes |
 |---|---|---|
 | `src/server-world.ts` — second TCP listener | ✅ | Port 2001; same `PacketParser` (ARIES); RPS CRC seed 0x0A5C25 |
-| `src/protocol/world.ts` — world command builders | ✅ | Cmd3 TextBroadcast, Cmd4 SceneInit, Cmd5/6 cursor, Cmd9 RoomList |
+| `src/protocol/world.ts` — world command builders | ✅ | Cmd3 TextBroadcast, Cmd4 SceneInit, Cmd5/6 cursor, Cmd9 character-creation prompt notes |
 | `src/state/launch.ts` — mech launch registry | ✅ | Bridges lobby→world: records selected mech before REDIRECT, consumed on world LOGIN |
 | `ClientSession` — add `'world'` phase | ✅ | Extended `src/state/players.ts`; `selectedMechId?` / `selectedMechSlot?` added |
-| Initial world handshake | ✅ | LOGIN_REQUEST → LOGIN → SYNC ack → MMW welcome → cmd-3 → Cmd6+Cmd4+Cmd9+Cmd3+Cmd5 |
+| Initial world handshake | ✅ | LOGIN_REQUEST → LOGIN → SYNC ack → MMW welcome → cmd-3 → Cmd6+Cmd4+Cmd10+Cmd3+Cmd5 |
 | Fix REDIRECT target to WORLD_PORT | ✅ | Lobby now redirects to port 2001; launch record stored before REDIRECT sends |
 | `gen-pcgi.ts` — separate lobby/world ports | N/A | `play.pcgi` always points to lobby (2000); REDIRECT carries the world address. Combat server is a separate dynamic spin-up (M6/M7). |
 
@@ -118,22 +118,23 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 | `characters` table + allegiance enum | ✅ | One character per account; `display_name UNIQUE`; allegiance CHECK constraint `Davion\|Steiner\|Liao\|Marik\|Kurita` |
 | `npm run db:migrate` — idempotent schema apply | ✅ | Reads `src/db/schema.sql`; safe to re-run |
 | `ClientSession` — add `accountId`, `displayName`, `allegiance` | ✅ | Set from DB after login; `'char-creation'` phase added |
-| Character creation flow (first login) | ✅ | cmd-3 → no character in DB → send House allegiance dialog (cmd-7) → persist → REDIRECT |
+| Character creation flow (first login) | ✅ | cmd-3 → no character in DB → send `Cmd9` callsign + House prompt → persist typed display name and allegiance → seed launch context → REDIRECT |
 | Post-login direct world entry (returning player) | ✅ | cmd-3 → character found → REDIRECT to port 2001 immediately; no mech-select shown |
 | World server uses `displayName` as Cmd4 callsign | ✅ | Falls back to `username` if character data unavailable (e.g. test direct-connect) |
-| Display name entry (name selection dialog) | 🔬 | Text-input wire format not yet RE'd. Current placeholder: login username is used as display name. See issue #26 for RE tasks. |
+| Display name entry (name selection dialog) | ✅ | Implemented with server `Cmd9`, the likely authentic first-login prompt: it opens `MPBT.MSG[5]` (`"Enter your character's name"`), then a numbered selector titled `MPBT.MSG[6]` (`"Choose your allegiance:"`), and submits outbound `cmd 9, subcmd 1, <typed name>, <selected-index>`. This supersedes the earlier `Cmd36`/`Cmd37` hypothesis; `Cmd36` is the read/reply viewer, `Cmd37` opens the ComStar compose editor, and the live `Cmd37(0)` probe is only a compatibility bridge. Live GUI probe confirmed the wire path; socket smoke now confirms persistence, launch-context seeding, and returning-account world entry with the typed callsign in `Cmd4`. |
 
 **Known M3 limitations / M4 work:**
-- `Cmd9` roster entries sent as empty (count=0); full per-player entry format TBD (M4 RE).
+- Initial room-sync uses `Cmd10`; the earlier `Cmd9(count=0)` placeholder was removed, and `Cmd9` is now tied to the first-login name + allegiance prompt rather than room presence.
 - `Cmd8` (session binary data / mech loadout) not yet sent; client mech stats display may be absent.
 - Arena navigation and movement not yet implemented (M5).
 - World server does not yet bounce a second REDIRECT to a combat server (M6/M7).
 
 **Verification:**
 - *New player:* connect, select House allegiance, enter world — Cmd4 callsign shows username; allegiance persisted to DB.
-- *Returning player:* connect, skip allegiance dialog, enter world directly — no mech-select screen shown.
+- *Returning player:* connect, skip character creation, enter world directly — no mech-select screen shown.
 - *Wrong password:* second login with wrong credentials → connection closed.
 - *Mech select (M6 path):* cmd-26 visible only when explicitly triggered; pre-combat flow unaffected.
+- *First-login `Cmd9` implementation:* socket smoke confirmed `Cmd9` prompt → typed callsign + House reply → persisted character → REDIRECT → world init `6,4,10,3,5`, with `Cmd4` containing the typed callsign on both first-login and returning-account paths. The older `Cmd37(0)` probe remains a compatibility bridge, not the authentic original name-entry UI.
 
 ---
 
@@ -145,14 +146,14 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 
 | Task | Status | Notes |
 |---|---|---|
-| Room broadcast | ❌ | Players see who is in their current location |
-| Player join / leave events | ❌ | Notify room occupants when someone arrives or departs |
-| F7 — team / lance channel | 🔬 | Wire format for scoped team broadcast unknown |
-| F8 — all-comm / chat-window toggle | 🔬 | May share a command code with the chat-window open/close packet |
-| ComStar DM — store and deliver | ❌ | Async private messages; server must persist unread messages per player |
-| All-roster query | 🔬 | Global presence query: returns every online player's ComStar ID, handle, current sector, and location; supports "send ComStar" and "view personnel record" from the list; triggered via KP5 |
+| Room broadcast | 🔧 | Same-room presence seeds the roster with `Cmd10`, then uses `Cmd13` arrival and `Cmd11(status=0)` departure for incremental updates. World `cmd-4` free-text relay is implemented as room-local chat fan-out to other clients via `Cmd3`. Validated with the local two-client socket harness and a one-client `MPBTWIN.EXE` launch. Pending: real multi-client GUI verification. |
+| Player join / leave events | 🔧 | Same-room `Cmd10` / `Cmd13` / `Cmd11(status=0)` path is implemented and passes the local two-client socket smoke harness. Social-room status transitions are partially implemented: `Cmd7(listId=3)` `selection=0` grabs a booth, `selection=2` stands, `selection>=3` joins booth `selection-2`, with `Cmd11(status=5..12)` updating the roster table. Pending: real-client behavior with multiple GUI clients. |
+| F7 — team / lance channel | ❌ | Arena-only; requires `Cmd8` team assignment — moved to M7 |
+| F8 — all-comm / chat-window toggle | ❌ | Arena-only; wire format unknown — moved to M7 |
+| ComStar DM — store and deliver | 🔧 | `Cmd36` delivers received messages with a nonzero reply target; sender uses client `cmd 21` to submit text; the local `listId=1000` submenu can open compose without a server round-trip. Pending: offline persistence, unread delivery on login, exact message-body formatting, and real-GUI confirmation of the `Reply` flow. |
+| All-roster query | 🔧 | KP5 → `Cmd7(listId=3, selection=1)` sends `Cmd48_KeyedTripleStringList` (`0x51`) with live world sessions as rows; row picks open the inquiry submenu at `listId=1000`; `Cmd7(0x3f2, target_id + 1)` opens personnel data. Pending: confirm local `1000` submenu behavior against the real GUI client. |
 
-**Verification:** Two clients in different rooms; each sees the other on the all-roster; a ComStar message is delivered even after the recipient moves rooms.
+**Verification:** Local direct world-session smoke now covers `Cmd48` all-roster listing, row-pick inquiry submenu, `cmd 21` text submit, `Cmd36` inbound message delivery to the selected online target, and sender acknowledgment.
 
 ---
 
@@ -215,6 +216,8 @@ The world uses two distinct room types: **bar** (social spaces, Tier Ranking ter
 | Synchronized position | ❌ | Each client sees other mechs move in real time |
 | Synchronized damage | ❌ | Damage dealt by one client is reflected in all clients' views |
 | Match orchestration | ❌ | Ready-up, start, 15-min timer, end, sanctioned-match flag |
+| F7 — team / lance channel | 🔬 | Scoped broadcast to your lance teammates; wire format unknown; requires `Cmd8` team assignment to be established |
+| F8 — all-comm channel | 🔬 | Broadcast to all players in the current arena match; may share command code with chat-window toggle; wire format unknown |
 
 **Verification:** Two `MPBTWIN.EXE` instances connect, enter the same arena, see each other, and fight to completion.
 
@@ -250,7 +253,7 @@ The world uses two distinct room types: **bar** (social spaces, Tier Ranking ter
 | SCentEx ranking model | ❌ | Damage inflicted vs. damage sustained determines rank change after each sanctioned match |
 | Player fame stat | ❌ | Per-character fame tracked (BT-MAN p. 9) |
 | Tier Ranking display | ❌ | Displayed at bar terminals; served by the world navigation layer |
-| Personnel record | ❌ | Per-character record viewable by other players via the all-roster |
+| Personnel record | 🔬 | First page is now identified: `Cmd7(0x3f2, target_id + 1)` triggers world `Cmd14_PersonnelRecord` (`0x2f`), which displays the selected handle, ComStar ID, battles-to-date, and six server-formatted text lines. Follow-up trace on the built-in `Cmd7(0x95, 2)` `More` request did not reveal a distinct second-page command handler; strongest current inference is that later pages are delivered as additional `Cmd14` payloads. A minimal two-page server prototype is now implemented on the branch and passes a direct world-session socket smoke (`Cmd48 -> Cmd14 page 1 -> Cmd7(0x95, 2) -> Cmd14 page 2`). Remaining unknowns: exact mapping of the six text lines and the meaning of two legacy/unused `type4` payload slots. |
 | SCentEx result reporting protocol | 🔬 | How does the server communicate sanctioned match results to the ranking system? |
 
 **Verification:** Two players complete a sanctioned match; both observe updated rankings at a bar terminal.
@@ -267,7 +270,7 @@ Work these in order when sitting down with Ghidra:
 4. **Cmd 20 server response** (`FUN_00401c90`) — needed for M1; can be worked in parallel with items 1–3.
 5. **Combat CRC crossover** — when/how the client switches to the combat CRC seed.
 6. **`SOLARIS.MAP` / `IS.MAP` exit graph** — decode room-to-room connections from the map files (unlocks M5 world map without full world-server RE).
-7. **F7 / F8 chat channel wire format** — are team and all-comm differentiated by command code or a flag in the packet? (M4 prerequisite).
+7. **F7 / F8 chat channel wire format** — are team and all-comm differentiated by command code or a flag in the packet? (M7 prerequisite; both channels require `Cmd8` team assignment and are arena-phase only).
 8. **Movement packets** (M5 prerequisite).
 9. **Weapon fire / damage packets** (M6 prerequisite).
 10. **TIC circuit wire format** (M6 prerequisite).
@@ -287,7 +290,7 @@ These are gaps we know exist. They are not bugs — they are the RE frontier.
 - **ACK reply format for seq > 42** — the trigger is documented (RESEARCH.md §9) but the reply packet format is not.
 - **Combat CRC crossover point** — the server currently always uses lobby CRC init; the transition rule is unknown.
 - **`SOLARIS.MAP` / `IS.MAP` exit graph** — room topology source files identified and partially decoded (shared global room namespace confirmed: IS.MAP rooms 1–145, SOLARIS.MAP rooms 146+); full exit connections and room-type classification still unknown.
-- **F7 / F8 chat channel differentiation** — two distinct broadcast channels exist (team and all-comm); wire-format difference is unknown.
+- **F7 / F8 chat channel differentiation** — two distinct broadcast channels exist (team/lance and all-comm); both are arena-phase constructs gated on `Cmd8` team assignment; wire-format difference is unknown. Tracked in M7.
 - **Bar booth terminal commands** — what packets does the client send when activating Tier Ranking / ComStar terminals at a bar?
 - **Tram / monorail command** — protocol for the cross-sector navigation shortcut is unknown.
 - **SCentEx result-reporting protocol** — how does the server communicate sanctioned match results?

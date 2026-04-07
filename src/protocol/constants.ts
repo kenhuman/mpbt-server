@@ -28,13 +28,9 @@ export const ARIES_PORT = 2000; // CONFIRMED — controlled by play.pcgi product
  *   Port string is parsed via func_0x10011012 (strings → number)
  *
  * The addr field in REDIRECT must be in "host:port" format.
- *
- * NOTE: No separate world listener exists yet.  REDIRECT currently points to
- * ARIES_PORT so the client re-connects to the same server instead of a dead
- * port.  This constant is reserved for future M3 world-server work.
- * TODO (M3): open a second net.createServer on WORLD_PORT.
+ * CONFIRMED — src/server-world.ts listens on this port; lobby REDIRECT carries "host:2001".
  */
-export const WORLD_PORT = 2001; // reserved; no hardcoded port in binary (value comes from REDIRECT addr)
+export const WORLD_PORT = 2001; // CONFIRMED — world server listener; value comes from REDIRECT addr field
 
 /**
  * Maximum raw receive buffer per read.
@@ -72,7 +68,9 @@ export enum Msg {
                         //             12-byte header + payload starting at DAT_1001f888
                         //             Payload layout (offsets from payload start):
                         //               +0x000 (wire+12): username    (null-padded, field ~112 bytes)
-                        //               +0x070 (wire+124): "Kesmai Comm Engine 3.22" (80 bytes)
+                        //               +0x070 (wire+124): client version string, 80 bytes
+                        //                                   v1.06: "Kesmai Comm Engine 3.22"
+                        //                                   v1.23: "Kesmai CommEngine 3.29"
                         //               +0x0C0 (wire+204): email handle (40 bytes)
                         //               +0x0E8 (wire+244): internet/service id (80 bytes)
                         //               +0x13C (wire+328): htons(product_code) 2 bytes

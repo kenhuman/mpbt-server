@@ -52,6 +52,19 @@ export async function createCharacter(
 }
 
 /**
+ * Update the allegiance for an existing character.
+ */
+export async function updateCharacterAllegiance(
+  accountId: number,
+  allegiance: Allegiance,
+): Promise<void> {
+  await pool.query(
+    `UPDATE characters SET allegiance = $1 WHERE account_id = $2`,
+    [allegiance, accountId],
+  );
+}
+
+/**
  * Check whether a display name is already taken by another character.
  * Used to re-prompt when a chosen name is unavailable.
  */

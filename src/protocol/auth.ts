@@ -11,7 +11,8 @@
  *
  *   3. Server parses the payload:
  *        +0x000  username      null-terminated, field width ~112 bytes
- *        +0x070  client ver    "Kesmai Comm Engine 3.22", 80 bytes
+ *        +0x070  client ver    80-byte field; v1.06: "Kesmai Comm Engine 3.22"
+ *                              v1.23: "Kesmai CommEngine 3.29" (no space; version bump)
  *        +0x0C0  email handle  40 bytes
  *        +0x0E8  service id    SetInternet() value, 80 bytes (e.g. "BATTLETECH")
  *        +0x13C  product port  htons(product_code), 2 bytes
@@ -35,7 +36,9 @@ import type { Logger } from '../util/logger.js';
 // ── Layout constants (payload offsets) ────────────────────────────────────────
 // All CONFIRMED by RE of COMMEG32.DLL Set*() export functions and FUN_10001420.
 const OFF_USERNAME   = 0x000; // null-terminated, up to 64 chars, field ~112 bytes wide
-const OFF_CLIENT_VER = 0x070; // "Kesmai Comm Engine 3.22" — 80-byte field
+const OFF_CLIENT_VER = 0x070; // 80-byte client version string field
+                              // v1.06: "Kesmai Comm Engine 3.22"
+                              // v1.23: "Kesmai CommEngine 3.29" (no space; COMMEG32 bump)
 const OFF_EMAIL      = 0x0C0; // SetUserEmailHandle() value — 40-byte field
 const OFF_SERVICE    = 0x0E8; // SetInternet() value — 80-byte field
 const OFF_PORT       = 0x13C; // htons(product_code) as uint16

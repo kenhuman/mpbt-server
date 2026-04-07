@@ -26,8 +26,9 @@ contributors who want to extend or audit the server emulator.
 16. [Open Questions](#16-open-questions)
 17. [COMMEG32.DLL — Secondary Connection Protocol (M2 RE)](#17-commeg32dll--secondary-connection-protocol-m2-re)
 18. [Game World Protocol — MPBTWIN.EXE RE](#18-game-world-protocol--mpbtwinexe-re)
-19. [Methodology](#19-methodology)
-20. [MEC File Binary Format](#20-mec-file-binary-format)
+19. [Client v1.23 Migration Notes](#19-client-v123-migration-notes)
+20. [Methodology](#19-methodology)
+21. [MEC File Binary Format](#20-mec-file-binary-format)
 
 ---
 
@@ -188,10 +189,27 @@ The CRC is a 19-bit linear-feedback shift register.
 
 ### Parameters
 
+The CRC seed depends on **both** the connection mode (RPS/Combat) **and** the direction of the frame.
+
+**Server → Client** (outbound; seed used when generating CRC to send):
+
 | Context | Init value | Notes |
 |---------|-----------|-------|
-| Lobby | `0x0A5C25` | Derived: `(0xFFFFFFE0 + 0x0A5C45) & 0xFFFFFFFF` |
-| Combat | `0x0A5C45` | Read directly from `Frame_VerifyCRC` (`FUN_00402e30`) |
+| Lobby / RPS | `0x0A5C25` | Derived: `(0xFFFFFFE0 + 0x0A5C45) & 0xFFFFFFFF` |
+| Combat       | `0x0A5C45` | Read directly from `Frame_VerifyCRC` (`FUN_00402e30`) |
+
+**Client → Server** (inbound; seed used to validate received frames):
+
+| Context | Init value | Notes |
+|---------|-----------|-------|
+| Lobby / RPS | `0x0C2525` (795,941) | Confirmed by independent RE — RazorWing/solaris `INBOUND_SEED_RPS` |
+| Combat       | `0x0C4545` (804,165) | Confirmed by independent RE — RazorWing/solaris `INBOUND_SEED_COMBAT` |
+
+Both pairs follow the same nibble-rotation pattern:
+- Outbound RPS: `0xA5C25` → Inbound RPS: `0xC2525`
+- Outbound Combat: `0xA5C45` → Inbound Combat: `0xC4545`
+
+The algorithm is **identical** in both directions; only the initial seed differs.
 
 ### Coverage
 
@@ -482,21 +500,39 @@ sends type4(item_data[k-1] + 1)
 → picking item 1 sends type4(1), picking item 2 sends type4(2), etc.
 ```
 
-### Special list_id Values to Avoid
+### Special list_id Values / Shared Callback Cases
 
-These values cause the client to keep the dialog open after a pick (special
-sub-menu logic):
+The numbered-list selection callback used by `Cmd7`, `Cmd16`, `Cmd19`, and
+`Cmd48` has a few hard-coded `list_id` branches:
 
 | Value (decimal) | Hex | Notes |
 |:---:|:---:|-------|
-| 8 | `0x08` | — |
-| 12 | `0x0c` | — |
-| 34 | `0x22` | — |
-| 37 | `0x25` | — |
-| 52 | `0x34` | — |
-| 1000 | `0x3E8` | Triggers sub-menu logic |
+| 8 | `0x08` | Shared keep-open path; exact feature still unresolved. |
+| 12 | `0x0c` | Shared keep-open path; exact feature still unresolved. |
+| 34 | `0x22` | Shared keep-open path; additionally, if the selected `item_id == 100`, the client opens the exit-confirmation MessageBox via `FUN_00404410()`. |
+| 37 | `0x25` | Shared keep-open path; exact feature still unresolved. |
+| 46 | `0x2e` | `Cmd48`-specific builder special case: installs `FUN_00411e00`, which just synthesizes an Enter/close path (`FUN_0042ffe0(..., 0x0d)` -> `FUN_00419370()`). This looks like modal boilerplate, not the KP5 inquiry fork. |
+| 52 | `0x34` | Shared keep-open path; exact feature still unresolved. |
+| 1000 | `0x3E8` | Local synthetic `Personal inquiry on:` submenu built by `FUN_00412980()`, not a proven server-assigned `Cmd48` list id. |
 
 Use any other positive integer as `list_id` to get a simple dismiss-on-pick dialog.
+
+### Local Inquiry Submenu (`list_id = 1000`)
+
+`FUN_00412980()` builds a two-option local submenu using:
+
+- `MPBT.MSG[0x90]` = `Personal inquiry on:`
+- `MPBT.MSG[0x91]` = `Send a ComStar message`
+- `MPBT.MSG[0x92]` = `Access personnel data`
+
+The follow-up actions are now confirmed:
+
+- Option 1 (`Send a ComStar message`) opens the editable dialog builder
+  `FUN_00416db0(target_id, NULL)`. Pressing its `Send` button (`MPBT.MSG[0xA5]`)
+  emits client `cmd 21` with `type4(target_id)` followed by the typed message
+  string via `FUN_00416b90()`.
+- Option 2 (`Access personnel data`) emits `Cmd7(0x3f2, target_id + 1)` from
+  `FUN_00412190()`.
 
 ### ESC / Cancel Handling (`Cmd7_OnMenuEsc` / `FUN_004122d0`)
 
@@ -727,19 +763,65 @@ stats text directly from `buildMechExamineText()` (see §14) rather than the
 legacy `"#NNN"` shortcode, because our MPBT.MSG does not have the correct
 pre-formatted stats at the expected line numbers.
 
-### Post-Redirect Game World Protocol
+### Post-Redirect Game World Protocol — RESOLVED (see §18)
 
-- After REDIRECT, the client opens a new TCP connection to the address in the
-  REDIRECT payload
-- The game world protocol has not been analysed; a second capture session
-  against the live server (or further Ghidra work on `FUN_100014e0` case 0 for
-  the new connection) is needed
+### Secondary Connection (`DAT_1001a080`) — RESOLVED (see §17–§18)
 
-### Secondary Connection (`DAT_1001a080`)
+### Client cmd-5 — Allegiance Selection — RESOLVED
 
-- Set by `Aries_Connect` (`FUN_100011c0`) after REDIRECT
-- The data arriving on this connection is fed to a different game window/loop
-- Relationship to the lobby connection is not fully understood
+**Confirmed by decompiling `FUN_00413790` (arena-window click handler) and
+`FUN_0040d2d0` in MPBTWIN.EXE.**
+
+When the player clicks an allegiance button in the Cmd4 arena UI:
+
+| Button ID | Source | Action |
+|-----------|--------|--------|
+| `0x100` | `FUN_00413790` | Intercepts as **Help**: calls `FUN_00404450` → opens `SOLARIS.HLP` |
+| `0x101`–`0x105` | `FUN_00413790` | Allegiance selection: calls `FUN_0040d2d0(option_type_byte)` |
+
+`FUN_0040d2d0`:
+```c
+void FUN_0040d2d0(char type_byte) {
+    FUN_00403030('\x05');  // write cmd index 5 (wire 0x26)
+    FUN_00403050(type_byte); // write type_byte raw (type_byte + 0x21 on wire)
+    FUN_00429440();          // flush / finalize frame
+}
+```
+
+### Client cmd-5 Wire Format (Client → Server)
+
+```
+\x1B  [seq+0x21]  \x26  [type_byte+0x21]  \x20  [CRC×3]  \x1B
+                  ^^^   ^^^^^^^^^^^^^^^^
+                  cmd=5 allegiance type index
+```
+
+`type_byte` = the `type` field the SERVER wrote into the Cmd4 arena-option entry
+for that button:
+- `type = 0` → `ALLEGIANCES[0]` = `'Davion'`
+- `type = 1` → `ALLEGIANCES[1]` = `'Steiner'`
+- `type = 2` → `ALLEGIANCES[2]` = `'Liao'`
+- `type = 3` → `ALLEGIANCES[3]` = `'Marik'`
+- `type = 4` → `ALLEGIANCES[4]` = `'Kurita'`
+
+### Cmd4 Arena-Options — Character-Creation Allegiance Buttons — RESOLVED
+
+**Confirmed by decompiling `FUN_00414b70` (Cmd4_SceneInit handler) in MPBTWIN.EXE.**
+
+The `arena_option_count` + option entries at the end of the Cmd4 wire format
+create the allegiance-picker buttons in the character-creation UI:
+
+- Count stored in `DAT_004e6a70`.
+- Option strings (40 bytes each) stored in `DAT_004816e8`.
+- Each option creates a button with ID `option_index + 0x100`.
+- **Button 0x100 is always intercepted as a Help button** (opens `SOLARIS.HLP`).
+  The first option in the list must therefore be a dummy placeholder.
+- Effective allegiance buttons: IDs **0x101–0x105** (options 1–5).
+
+**Server sends 6 options** (dummy at index 0, five houses at indices 1–5);
+client displays six buttons but only five are selectable as allegiances.
+
+Button width: `0x78` (120 px) if ≤ 5 options; `0x4f` (79 px) if > 5 (max 6).
 
 ### Command 0x1D (Cancel/Close) — RESOLVED
 
@@ -993,7 +1075,7 @@ No seed change happens mid-session in standard gameplay.
 | 11 | `0x2c` | `0x0040C6C0` | |
 | 12 | `0x2d` | `0x0040C5C0` | |
 | 13 | `0x2e` | `0x0040C920` | |
-| 14 | `0x2f` | `0x00415700` | |
+| 14 | `0x2f` | `0x00415700` | `Cmd14_PersonnelRecord` | Reads `type4 comstar_id`, `type3 battles_to_date`, then two legacy/unused `type4` values, followed by six `Frame_ReadArg` strings. Opens a type-2 text window and formats the visible record as: current selected roster handle via `MPBT.MSG[0x98]` (`Handle  : %s`), formatted ComStar ID, `MPBT.MSG[0xa0]` (`Battles to date: %ld`), then the six server-supplied strings verbatim as additional lines. The dialog installs `FUN_00415690` as its key handler: Enter/ESC close the view, while Space emits `Cmd7(0x95, 2)` and flushes, strongly suggesting a built-in `More` / next-page request for personnel records. |
 | 15 | `0x30` | `0x004139C0` | |
 | 16 | `0x31` | `0x00411DE0` | same addr as cmd 19 |
 | 17 | `0x32` | `0x0041E2C0` | |
@@ -1015,8 +1097,8 @@ No seed change happens mid-session in standard gameplay.
 | 33 | `0x42` | `0x00419360` | `FUN_00419370` — Ok-dialog callback |
 | 34 | `0x43` | `0x00413FF0` | |
 | 35 | `0x44` | `0x00429C80` | |
-| 36 | `0x45` | `0x004161A0` | |
-| 37 | `0x46` | `0x00416D40` | |
+| 36 | `0x45` | `0x004161A0` | `Cmd36_MessageView` | Reads `type4 reply_target_id` plus a `Frame_ReadString` body. Creates a type-4 read-message window. `reply_target_id == 0` gives a plain read-only page; nonzero adds `Reply` and `Enter`, and the installed key handler reopens the local compose builder `FUN_00416db0(reply_target_id, NULL)` when the user presses `R`. This is a received-message / reply view, not the compose editor itself. |
+| 37 | `0x46` | `0x00416D40` | `Cmd37_OpenCompose` | Reads one `type4` count-or-target value; if `0 < value < 1000`, reads that many additional `type4` ids into a local array; otherwise treats the first value as the single target identifier. Then calls `FUN_00416db0(value, ids)` to open the local editable compose window. This is the server-side wrapper around the same compose builder used locally by the inquiry submenu. Passing `0` still lands in that same ComStar-specific editor; this pass did not uncover any separate generic first-login name-entry mode behind `Cmd37`. |
 | 38 | `0x47` | `0x00419250` | |
 | 39 | `0x48` | `0x0043DAE0` | |
 | 40 | `0x49` | `0x0040ECB0` | |
@@ -1024,10 +1106,10 @@ No seed change happens mid-session in standard gameplay.
 | 42 | `0x4b` | `0x00412680` | |
 | 43 | `0x4c` | `0x0040EED0` | |
 | 44 | `0x4d` | `0x00410000` | |
-| 45 | `0x4e` | `0x0040CEF0` | |
+| 45 | `0x4e` | `0x0040CEF0` | `Cmd45_ScrollListShell` | Reads a 1-byte mode and a `Frame_ReadString` title into `DAT_004e1844`, normalizing `\` to newlines. Creates/reuses a type-6 scroll-list window backed by `DAT_004e2620`, installs callbacks `FUN_0040ce70` / `FUN_0040ca70`, and copies the previously latched list-id from `DAT_00472a34` into `window[0x512]` so later Enter/ESC actions can emit `Cmd7(listId, selection)` replies. Mode `0/1` creates a plain list shell, `2/4` add Space/ESC footer controls, and `3` adds a Space-only footer. This command does **not** carry roster rows itself; it is a shell around the shared `DAT_004e2620` list state. |
 | 46 | `0x4f` | `0x00414130` | |
 | 47 | `0x50` | `0x004192F0` | |
-| 48 | `0x51` | `0x00411DF0` | |
+| 48 | `0x51` | `0x00411DF0` | `Cmd48_KeyedTripleStringList` | Wrapper to `FUN_00411e20(1)`. Reads `type1 list_id`, a `Frame_ReadArg` title string, a 1-byte count, then per row: `type4 item_id` + three `Frame_ReadArg` strings. Builds a type-4 numbered selection window where each line formats as `N. <item_id> <str1> <str2> <str3>` when `item_id != 0`. Selecting an entry later emits `Cmd7(list_id, item_id + 1)` via `FUN_00412190`. This is the strongest current candidate for the real global all-roster / KP5 response, because the payload naturally fits `ComStar ID + handle + sector + location` style rows. |
 | 49 | `0x52` | `0x0040F980` | |
 | 50 | `0x53` | `0x00410460` | |
 | 51 | `0x54` | `0x00410480` | |
@@ -1037,7 +1119,7 @@ No seed change happens mid-session in standard gameplay.
 | 55 | `0x58` | `0x00419340` | |
 | 56 | `0x59` | `0x0040FD60` | |
 | 57 | `0x5a` | `0x004168E0` | |
-| 58 | `0x5b` | `0x0040CEE0` | |
+| 58 | `0x5b` | `0x0040CEE0` | `Cmd58_SetScrollListId` | Reads one `type1` value via `FUN_0040d4c0()` and stores it in `DAT_00472a34`. `Cmd45_ScrollListShell` later copies that value into `window[0x512]`, making `Cmd58` a companion “set list-id for the scroll-list shell” packet rather than a visible UI command on its own. |
 | 59 | `0x5c` | `0x0040D4E0` | |
 | 60 | `0x5d` | `0x0040FEB0` | |
 | 61 | `0x5e` | `0x0040FA00` | |
@@ -1124,11 +1206,90 @@ Frame-reading helpers referenced below:
 | 6 | `0x27` | `FUN_0040C300` | `Cmd6_CursorBusy` | Calls `FUN_00433ef0` → loads `IDC_WAIT` cursor (`0x7f02`), sets `DAT_00474d00 = 1`. Server signals "processing; show hourglass". |
 | 7 | `0x28` | `FUN_004112B0` | `Cmd7_ParseMenuDialog` | Menu dialog renderer — documented in §11. |
 | 8 | `0x29` | `FUN_00413960` | `Cmd8_SessionData` | Reads connection object (`FUN_0040d4c0`), then `Frame_ReadArg` into `DAT_0048a070`. Passes buffer to `FUN_00413800(conn, buf, NULL)` — loads per-session binary data (mech load-out / team assignment). Updates two input-handler jump-table entries. |
-| 9 | `0x2a` | `FUN_0040C310` | `Cmd9_RoomPlayerList` | Reads sentinel byte; if `0x01`: reads 1-byte count, then for each player reads a `Frame_ReadArg` entry into `DAT_004de000` array. Calls `FUN_0042da40` to populate roster UI, sets `DAT_004ddfc0+0x44 = 8` (ready flag). Server sends the initial occupant list for the entered room. |
-| 10 | `0x2b` | `FUN_0040C370` | `Cmd10_TextFeed` | Reads records — each comprising a 4-byte session-ID, 1-byte type, and a `Frame_ReadArg` string — until a sentinel type byte `0x54` ('T'). Appends each record to the chat scroll-window with separator lines between records. Used for multi-line server announcements (welcome text, room history). |
-| 11 | `0x2c` | `FUN_0040C6C0` | `Cmd11_PlayerEvent` | Reads 4-byte session-ID + 1-byte status code + callsign string. Finds/creates roster slot via `FUN_0040c590`. Status: `0`=left arena; `1–4`=tier/game-state (formatted via message table `DAT_00472a34[status]`); `5`=moved to spectator; `0x54`=match-end score update; other=game-state N−5. Appends formatted event line to chat. |
+| 9 | `0x2a` | `FUN_0040C310` | `Cmd9_CharacterNameAllegiancePrompt` | Reads sentinel byte; if `0x01`: reads a 1-byte count, then that many `Frame_ReadArg` string entries into `DAT_004de000` (40-byte slots). Earlier notes mislabelled this as a room-player list. A tighter `FUN_00405840` xref sweep shows the handler calls `FUN_0042da40`, which opens `FUN_00413800(0x3fd, FUN_00405840(5), NULL)` using local `MPBT.MSG[5]` = `"Enter your character's name"`. When the player presses Enter, `FUN_00413a60` copies the typed text into `DAT_004ddfd0` and calls `FUN_0042daa0`, which opens a numbered type-3 selector titled with `FUN_00405840(6)` = `"Choose your allegiance:"` and formats each server-supplied entry as `"%d. %s"`. The numbered selection callback `FUN_0042dbf0` emits outbound bytes `0x09, 0x01, <DAT_004ddfd0 string>, <selected-index byte>` via `FUN_0040d400`, then flushes. This is now the strongest candidate for the original first-login callsign + allegiance flow; it is not the passive room-entry roster sync and not the KP5/global all-roster path. |
+| 10 | `0x2b` | `FUN_0040C370` | `Cmd10_RoomPresenceSync` | Clears the live room roster table at `DAT_004e1870`, then reads a batch of roster records into that same structure used by `Cmd11`/`Cmd12`/`Cmd13`: first record is `type4 session-id`, `byte status`, `Frame_ReadArg callsign`; subsequent records repeat `type4 session-id`, `byte status`, `Frame_ReadArg callsign` until a sentinel status byte `0x54` is read after a final ignored `type4`. The first record selects roster index `0` via `DAT_004e2608 = 0`. Status bytes are stored as `status - 5`, which matches `Cmd13` using zero for a normal present occupant. After seeding the table, the handler appends a natural-language occupant list to the world chat window using message ids `0x0f`..`0x12`. This is the strongest current candidate for the initial same-room presence sync that should precede later incremental `Cmd13` arrivals and `Cmd11` status/leave updates. |
+| 11 | `0x2c` | `FUN_0040C6C0` | `Cmd11_PlayerEvent` | Reads 4-byte session-ID + 1-byte status code + callsign string. Finds/creates roster slot via `FUN_0040c590`. Status: `0` removes the occupant from the live room table; `1–4` format the status through `DAT_00472a34[status]`; `0x54` is a special terminal/update case; and other values store `status - 5` into the same `DAT_004e1872` presence-state field used by the room roster UI. The social-room roster path (`FUN_00412e60`) groups that field as `0 = Standing`, `1..7 = Booth 1..7`, so wire statuses `5..12` are the concrete standing/booth states used by current world-room presence work. Appends a formatted event line to chat. |
 | 12 | `0x2d` | `FUN_0040C5C0` | `Cmd12_PlayerRename` | Reads 4-byte session-ID + new callsign string. Looks up existing roster slot, formats "{old} is now {new}" message (MSG `0x13`), overwrites stored name in player table, appends to chat. |
 | 13 | `0x2e` | `FUN_0040C920` | `Cmd13_PlayerArrival` | Reads 4-byte session-ID + callsign string. Searches player table for matching session-ID (update) or first free slot (insert). Sets active flag, stores callsign, resets timer field to 0, appends "{callsign} entered" line (MSG `0x19`) to chat. |
+| 14 | `0x2f` | `FUN_00415700` | `Cmd14_PersonnelRecord` | Reads payload: `type4 comstar_id`, `type3 battles_to_date`, two additional `type4` values currently unused by the display code, then six `Frame_ReadArg` strings. Creates a type-2 modal text page. The visible header lines are formatted locally as selected-handle (`MPBT.MSG[0x98]` / `Handle  : %s`), ComStar ID, and `MPBT.MSG[0xa0]` (`Battles to date: %ld`); the six payload strings are appended verbatim as the remaining body lines. The installed key handler closes on Enter/ESC, but pressing Space sends `Cmd7(0x95, 2)` and flushes, making `0x95` the strongest current candidate for the personnel-record `More` / next-page request. |
+
+---
+
+## 18b. Cmd36 — User Creation Wizard (`FUN_004161A0`) — RESOLVED
+
+**Confirmed by decompiling `FUN_004161A0` (Cmd36 handler) in MPBTWIN.EXE.**
+
+Cmd36 is the **original Kesmai new/returning player detection command**, sent by the real
+server early in the RPS session to present either a "Create New Pilot" wizard or a
+"Continue as Existing Pilot" dialog.
+
+### Wire Format
+
+```
+[B85_4 int: iVar3 / accountId]  [B85 string: dialog display text]
+```
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `iVar3` | B85_4 (5 bytes) | `0` = new user; non-zero = returning accountId |
+| string | B85 string | Player callsign or prompt text shown in dialog |
+
+### Client Behaviour
+
+`FUN_004161A0` reads `iVar3` from the wire and branches:
+
+**`iVar3 == 0` — New player:**
+- Creates a medium-width dialog (`FUN_004145a0(4)`) at position (0, 0xdd)–(0x280, 0x103)
+- Adds two clickable buttons:
+  - Button `0x0d` — "Proceed as new pilot" (always present)
+  - Button `0x6d` — scroll/more (only if dialog text > 10 lines: `uVar6 != 0`)
+- Sets `DAT_004ddfc0+0x44 = 0x21` (roster ready flag)
+- Keyboard handler at `LAB_00415f50` (scroll up/down, Escape → dismiss)
+- Clicking button `0x0d` → `FUN_004160c0` + `FUN_00411200` → closes dialog, shows arena
+
+**`iVar3 != 0` — Returning player:**
+- Same dialog but adds a third button:
+  - Button `0x72` — "Continue as existing pilot"
+  - Button `0x0d` — "Create new pilot instead"
+  - Button `0x6d` — scroll (if text > 10 lines)
+- Keyboard handler at `LAB_00415f50` (same scroll)
+- `DAT_00472c94[0x50d]` set to `LAB_00416170` (ESC/Space → remap to button press)
+- Clicking button `0x72` — "Continue": closes dialog, **then** calls `FUN_00416db0(iVar3, 0)`
+  which opens a second confirm dialog with the player's character data
+- Clicking button `0x0d` — "New": closes dialog, shows arena directly (same as new-user path)
+
+### Second Dialog — `FUN_00416db0` (Returning-User Confirm)
+
+Opened after clicking "Continue" with `param_1 = accountId`:
+- Creates another dialog with two buttons: `0x132` (OK/confirm) and `0x1b` (cancel)
+- Loads up to 1000 character data entries from a supplied array; if >999, stores as a single int
+- Keyboard at `LAB_00416b90`; scroll at `LAB_00417460`; Escape at `LAB_00416d10`
+- Pressing OK → confirm account → enter arena
+- Pressing Cancel → closes this dialog, returns to the wizard (account selection)
+
+### Bypass Conditions
+
+The wizard is triggered **entirely by receiving Cmd36**. There is no client-side allegiance
+or callsign state that prevents it from firing, and there is no prior-message path that
+stores callsign/allegiance into globals checked here.
+
+**The only way to bypass the wizard is to never send Cmd36.** Our emulator does not send
+Cmd36, which correctly skips both the new-user and returning-user dialog flows entirely.
+
+### Emulator Notes
+
+- We do **not** send Cmd36. Client proceeds from welcome → cmd-3 → Cmd4 arena without
+  any user-creation dialog.
+- The allegiance picker and character name our server previously showed via Cmd7 was our
+  own addition (not related to Cmd36). In the current implementation, character creation
+  happens in the lobby flow when processing the Cmd9 reply and inserting the record into
+  the database; `handleWorldLogin` only consumes `launchRegistry` state for world entry
+  and does not create character data.
+- `FUN_00415f50` (keyboard handler at `LAB_00415f50`) and `FUN_00416170` (ESC/Space remap)
+  are inline label targets inside the Cmd36 dialog; they are not independently reachable
+  from the dispatch table.
+
+---
 
 **Correction note for §8**: The lobby dispatch table entry at index 3 was previously labelled
 `Cmd3_Thunk — Calls Cmd3_SendCapabilities (FUN_0040d3c0)`.  Decompilation of `FUN_0040C190`
@@ -1136,9 +1297,196 @@ confirms it does **not** call `FUN_0040d3c0`.  `FUN_0040d3c0` is called directly
 gate handlers `FUN_00429870` and `FUN_00429a00` — it fires when the client receives the
 `"\x1b?MM[WC]..."` welcome string, not in response to a server cmd-3 frame.
 
+Additional world-client senders confirmed after the first real-client M4 pass:
+
+- `FUN_0040d280` is the outbound world `cmd-4` free-text sender. In RPS mode (`DAT_004e2cd0 == 0`) it emits `cmd 4` followed by `FUN_00403100(param_1)`, which is `type1(length) + raw text`. Caller `FUN_00405080` feeds it from a local line-edit buffer when `DAT_004f3648 == 1`.
+- The room roster menu uses `FUN_00412e60` + `FUN_004134f0`. Corrected against the local `MPBT.MSG`, message ids `0x120..0x128` are `All`, `Stand`, `New Booth`, `Join`, `Mech Warriors at the current location:`, `Hit ESC to cancel, A for roster of all Mech Warriors.`, `Standing`, `Booth %2d`, `Hit ESC to cancel, n to grab a new booth, s to stand.`.
+- In that menu, `FUN_004134f0` emits `Cmd7(listId=3, selection=1)` for `All`, `selection=2` for `Stand`, `selection=0` for `New Booth`, and `selection = booth + 2` when joining a listed booth entry. Combined with `Cmd11` storing `status - 5` into `DAT_004e1872`, this pins the live social-room presence encoding as `5 = Standing`, `6..12 = Booth 1..7`.
+- The `selection=1` (`All`) path does **not** have a direct local client continuation. The strongest current server-side candidate is still `Cmd48_KeyedTripleStringList` (`0x51`), which is self-contained and carries `item_id + three strings` per row.
+- Tracing the shared list callback further narrows the downstream behavior: the proven `Send a ComStar message` / `Access personnel data` fork is the local synthetic `list_id = 1000` submenu from `FUN_00412980()`, not hidden logic inside `Cmd48` itself. That submenu does **not** need a server round-trip to open compose: option 1 directly calls the local editor `FUN_00416db0(target_id, NULL)`, whose submit path emits client `cmd 21` (`type4(target_id) + string`). Option 2 sends `Cmd7(0x3f2, target_id + 1)` for personnel data.
+- Follow-up RE on world commands `36` / `37` corrects an earlier assumption: `Cmd36` (`FUN_004161a0`) is the received-message / reply viewer, while `Cmd37` (`FUN_00416d40`) is the server-side wrapper that opens the local compose editor. `Cmd36` with a nonzero `reply_target_id` installs `FUN_00415f50`, whose `R` key path calls `FUN_00416db0(reply_target_id, NULL)`. This strongly suggests inbound ComStar mail is not a plain `Cmd3` chat line in the original client.
+- Additional issue #26 boundary from the `Cmd36`/`Cmd37` pass: `FUN_00416db0` still has only three confirmed callers (`FUN_00412190` inquiry submenu, `FUN_00415f50` reply, and `Cmd37_OpenCompose`), and its buttons/messages remain ComStar-specific even when invoked as `FUN_00416db0(0, NULL)`. A later `FUN_00405840` xref sweep corrected the low-id picture: `Cmd9` does have live direct callers for `MPBT.MSG[5]` (`"Enter your character's name"`) and `MPBT.MSG[6]` (`"Choose your allegiance:"`), while no direct `MPBT.MSG[4]` (`"Character Generation"`) or `[7]` (`"Enter choice:"`) caller was found. Strongest current inference: `Cmd9`, not `Cmd36`/`Cmd37`, is the likely authentic online callsign + allegiance prompt; `Cmd37(0)` remains only a workable compatibility bridge discovered by probe.
+- Live GUI packet-capture follow-up on 2026-04-06 narrows that boundary further. For an instrumented first-login probe, forcing `Cmd37(0)` immediately after lobby `cmd 3` produced a real client `cmd 21` reply with `dialogId=0` and a free-text body, then cleanly advanced into the normal House `Cmd7` dialog and `REDIRECT` flow. Capture `1775516456379_e042e0b9-f205-49f1-9880-bd204826dce9.txt` shows the first proven zero-target submit shape:
+  `1b 21 36 [type4 zero] [type1 text_len] [raw text] [crc x3] 1b`
+  with no decoded inner `0x20` separator byte after the text payload. The captured sample begins `1b 21 36 21 21 21 21 21 21 67 ... 63 33 3b 1b`, so `0x67 - 0x21 = 70` bytes of submitted text.
+- Important caveat from that same probe: the resulting editor still behaved like the existing ComStar compose window, not a clearly distinct `Character Generation` / `Enter your character's name` page. So `Cmd37(0)` is now proven as a workable compatibility bridge for first-login text entry, but it is still not evidence that the original online callsign prompt reused `Cmd37` unchanged.
+- Live GUI `Cmd9` follow-up on 2026-04-06 confirms the stronger first-login hypothesis. An instrumented server sent `Cmd9` with entries `Davion`, `Steiner`, `Liao`, `Marik`, `Kurita` after the first lobby `cmd 3`; `MPBTWIN.EXE` rendered the local `MPBT.MSG[5]`/`[6]` flow and replied:
+  `1b 21 2a 22 2b 4d 6f 6f 73 69 6e 67 74 6f 6e 25 27 2c 26 1b`
+  Decoded: `seq=0`, `cmd=9`, `subcmd=1`, string length `10`, text `"Moosington"`, selected index `4`. The probe persisted `display_name="Moosington"`, `allegiance="Marik"`, then redirected to world. Lobby capture: `1775518868442_2e0cf05d-0986-4971-bd8f-df4ea8fcc43a.txt`; world follow-up capture: `1775518908694_13dc7a16-2abd-49f6-933b-01844f7473b8.txt`. Caveat: the local probe did not yet seed a launch record before REDIRECT, so the world-side init still fell back to username/mech defaults; that is a probe integration gap, not a `Cmd9` UI failure.
+- Clean implementation follow-up: the server now uses `Cmd9` for normal first-login character creation, persists the typed display name and selected House directly from the `cmd 9 / subcmd 1` reply, and carries `accountId`, `displayName`, `allegiance`, and the default mech launch context across REDIRECT via `launchRegistry`. Socket smoke confirmed first-login and returning-account world init both render the typed callsign in `Cmd4`.
+- That `Cmd7(0x3f2, target_id + 1)` personnel-data request now has a concrete reply: world `Cmd14_PersonnelRecord` (`0x2f`, `FUN_00415700`). The handler renders a modal text page using the currently selected roster handle, a payload `type4 comstar_id`, a payload `type3 battles_to_date`, and six server-supplied text lines. Inference from the local `MPBT.MSG` around lines `151..160`: those extra lines likely cover the remaining personnel fields such as rank, standing, unit, earnings, wealth, and stable.
+- `Cmd14_PersonnelRecord` is paged. Its dialog callback `FUN_00415690` closes on Enter/ESC, but Space emits `Cmd7(0x95, 2)` before flushing. This is the strongest current candidate for the follow-up `More` request that advances to a second personnel-record page.
+- Follow-up trace on `Cmd7(0x95, 2)`: no separate second-page reply handler has been identified so far. `FUN_00415690` is only installed by `Cmd14_PersonnelRecord`, and this pass did not uncover another world-command parser dedicated to a later personnel page. Strongest current inference: the server answers `Cmd7(0x95, 2)` with another `Cmd14_PersonnelRecord` page carrying a different set of six lines, rather than switching to a distinct command code.
+- The only `Cmd48`-specific hard-coded `list_id` branch found so far is `0x2e`, which installs modal close boilerplate (`FUN_00411e00`) rather than a personal-inquiry action split. Inference: if KP5/all-roster really reuses `Cmd48`, the first row pick likely goes straight back to the server as `Cmd7(list_id, item_id + 1)`, and any later `ComStar vs personnel` split is either server-driven or implemented as a separate local follow-up packet sequence.
+
 ---
 
-## 19. Methodology
+## 18c. 2D World-Entry Commands — Cmd4, Cmd9, Cmd10, Cmd11, Cmd13 (M4 RE)
+
+**Confirmed by decompiling handlers in MPBTWIN.EXE via Ghidra.**
+
+This section corrects §18's command-table semantics for Cmd10/11/13 (the entry-game
+world-room commands) and documents the confirmed wire formats used in our M4 server init.
+
+---
+
+### Dispatcher Confirmed
+
+`Lobby_RecvDispatch` (`FUN_00402cf0`) converts the incoming command wire byte with
+`iVar2 = wire_byte - 0x21` before indexing `g_lobby_DispatchTable` (`DAT_00470198`).
+The **CmdN** label always means `iVar2 = N`, i.e. `wire_byte = N + 0x21`.
+
+---
+
+### Cmd4 — SceneInit (`FUN_00414B70`) — 2D World Frame
+
+Cmd4 creates the **main game window** used for both the 2D game-world view and the
+arena ready-room.  The distinction is controlled by the `arena_option_count` field:
+
+| `arena_option_count` | Result |
+|:---:|---------|
+| 0 | 2D world mode: chat/text scroll-window (no mech buttons or scoreboard) |
+| 1+ | Arena ready-room mode: mech-slot buttons and scoreboard |
+
+`FUN_00414b70` calls `FUN_00414160` first (teardown/create the static main window struct
+at `DAT_004ddf60`), then creates sub-windows via `FUN_00431880`:
+
+| Global | Sub-window | Description |
+|--------|-----------|-------------|
+| `DAT_00472ca4` | 40-byte scroll area | Player header (callsign + mech type title) |
+| `DAT_00472c90` | 600×144 scroll area | Main chat / text broadcast area |
+| `DAT_00472c98` | Input box | Chat input field |
+
+At completion: `g_chatReady` (`DAT_00472c84`) is set to `1`.  Cmd3 text-broadcast messages
+are silently discarded if `g_chatReady == 0`.
+
+**Wire format (M4 impl):**
+```
+[B85_1 2B: match_id]           always 0
+[byte  1B: session_flags]      0x30 = has-opponents | clear-arena
+[byte  1B: player_score_slot]  0
+[B85_1 2B: player_mech_id]     from launch record
+-- if flags & 0x10 --
+[byte × 4: opp_type + 1]       0x21 = "no opponent" for all 4 slots
+[B85_1 × 4: opp_mech_id + 1]  0x2121 = "no opponent" for all 4
+[string: callsign]             player display name
+[string: scene_name]           "Solaris Arena"
+[byte: arena_option_count]     0 → 2D world mode, no arena buttons
+```
+
+---
+
+### Cmd9 — RoomRoster (`FUN_0040C310`)
+
+Sets the roster ready flag (`DAT_004ddfc0+0x44 = 8`) which gates several UI elements.
+Send immediately after Cmd4 with count = 0 for an empty lobby.
+
+**Wire format:**
+```
+[byte: gate]   must be 0x01 (wire 0x22) to activate
+[byte: count]  number of roster entries
+[count × string] callsign strings (stored in DAT_004de000, 40-byte slots)
+```
+
+---
+
+### Cmd10 — RoomPresence ("Here you see…") (`FUN_0040C370`) — CORRECTED
+
+§18's `Cmd10_TextFeed` description was incorrect.  Decompilation confirms:
+
+`FUN_0040c370` reads a list of player records and:
+1. Clears the entire player-presence table (`DAT_004e1870` region, 40-byte slots)
+2. Reads the **first record unconditionally** (slot 0 = the receiving player themselves)
+   — slot 0 is stored but **not** shown in the "Here you see…" display
+3. Reads additional records in a loop until status byte == `0x75` (sentinel `T` + 0x21)
+4. For occupied slots 1+: formats `"Here you see Alice, Bob and Charlie."` using
+   MPBT.MSG strings: `0x0f` = "Here you see ", `0x10` = " and ", `0x11` = ", ", `0x12` = "."
+
+**Wire format:**
+```
+─── Slot 0 (self — stored, not displayed) ──────────────────────────────────
+[B85_4 5B: player_id]
+[byte  1B: status + 0x21]    5 (standing) = wire 0x26
+[string: name]
+─── Loop: additional occupants (displayed), until sentinel ──────────────────
+[B85_4 5B: player_id]
+[byte  1B: status + 0x21]    0x75 = sentinel (loop ends; no name follows)
+[string: name]               only read if status byte != 0x75
+─── etc. ────────────────────────────────────────────────────────────────────
+```
+
+**Status values** (raw value before + 0x21 encoding):
+
+| Raw status | Stored (status − 5) | Meaning |
+|:---:|:---:|--------|
+| 5 | 0 | Standing (not at a booth; omitted from display loop) |
+| 6 | 1 | At booth 1 |
+| 7 | 2 | At booth 2 |
+| … | … | … |
+| 0x54 ('T') | — | Sentinel / loop terminator |
+
+For an empty room (only self): send slot 0 then the sentinel immediately.
+
+---
+
+### Cmd11 — PlayerStatus (`FUN_0040C6C0`) — CORRECTED
+
+§18's `Cmd11_PlayerEvent` semantics were partially wrong.  Actual strings used are all
+**room navigation** events, not arena-level events:
+
+| Raw status | MPBT.MSG index | String |
+|:---:|:---:|---------|
+| 0 | 0x14 | `%s leaves.` |
+| 1 | 0x15 | `%s leaves heading %s.` (direction from `DAT_00472a34[1]`) |
+| 2 | 0x15 | `%s leaves heading %s.` (direction from `DAT_00472a34[2]`) |
+| 3 | 0x15 | `%s leaves heading %s.` (direction from `DAT_00472a34[3]`) |
+| 4 | 0x15 | `%s leaves heading %s.` (direction from `DAT_00472a34[4]`) |
+| 5 | 0x16 | `%s stands.` |
+| 0x54 | 0x17 | `%s leaves for battle.` |
+| 6…N | 0x18 | `%s goes to booth %d.` (booth = status − 5) |
+
+**Wire format:**
+```
+[B85_4 5B: player_id]   must match id from prior Cmd10 or Cmd13
+[byte  1B: status + 0x21]
+[string: name]
+```
+
+---
+
+### Cmd13 — PlayerArrival (`FUN_0040C920`) — CONFIRMED
+
+Reads player_id + callsign, finds or allocates a player-table slot, and appends
+`"%s enters the room."` (MPBT.MSG index `0x19`) to the chat area if `g_chatReady`.
+
+**Wire format:**
+```
+[B85_4 5B: player_id]
+[string: callsign]
+```
+
+---
+
+### Server World-Init Sequence (M4: Cmd4 → Cmd9 → Cmd10 → Cmd3 → Cmd5)
+
+Confirmed correct order for entering the 2D game world with no arena slots:
+
+```
+Server → Client: Cmd6  CursorBusy      (hourglass)
+Server → Client: Cmd4  SceneInit       (world frame; arena_count=0 → 2D mode)
+Server → Client: Cmd9  RoomRoster      (count=0; sets ready flag)
+Server → Client: Cmd10 RoomPresence    (self slot + sentinel; empty room)
+Server → Client: Cmd3  TextBroadcast   (room description / welcome message)
+Server → Client: Cmd5  CursorNormal    (restore cursor)
+```
+
+**Why Cmd4 is correct for the 2D world:** Cmd4 with `arena_option_count = 0` creates exactly
+the main text/chat panel without any arena buttons.  The distinction between "2D world" and
+"arena ready room" is purely the arena option count — `0` gives the 2D world frame.
+
+---
+
+
 
 ### Tools Used
 
@@ -1147,6 +1495,30 @@ gate handlers `FUN_00429870` and `FUN_00429a00` — it fires when the client rec
   analysis was done purely through static RE
 - **Custom TypeScript server** (`src/server.ts`) — used to trigger client paths
   and observe what the binary did next
+
+### Third-Party Cross-Reference — RazorWing/solaris
+
+An independent MPBT RE project at [https://github.com/RazorWing/solaris](https://github.com/RazorWing/solaris)
+cross-validates several findings in this document. **Important caveat**: it analyses
+a different build of `Mpbtwin.exe` (MD5: `60c8febf6b4e0a319367e3c6557d705e`) — function
+addresses and dispatch table offsets do not match our binary's. The **protocol wire
+format** (base-85 encoding, 19-bit LFSR checksum, ESC framing) is identical.
+
+Specific confirmed findings from that repo:
+
+| Finding | Our RESEARCH.md | RazorWing source |
+|---------|----------------|-----------------|
+| Outbound CRC seeds | `0x0A5C25` / `0x0A5C45` | `calculate_checksum()` seeds 678949/678981 ✓ |
+| **Inbound CRC seeds (NEW)** | `0x0C2525` / `0x0C4545` | `INBOUND_SEED_RPS=795941`, `INBOUND_SEED_COMBAT=804165` |
+| COMMEG32 queue msg type=0 | §17 — all game packets use type 0 | `build_queue_message()` confirms |
+| Short-format flag byte non-zero | §17 — `buffer[3] != 0` for short msg | `flag = 0x01` in `build_short_message()` |
+| Cmd7 wire format | §11 | `build_cmd7_packet()` matches exactly |
+| ESC `0x1B` frame delimiter | §3 | `encode_final_packet()` suffix `b'\x1B'` |
+
+The repo also documents COMMEG32 ARIES message types 0/27/28/29 (heartbeat/ping/timing
+configuration) in detail — not covered in this file because the server does not currently
+implement COMMEG32-level timing; see `commeg32_message_types.md` in that repo for the
+full `ParseProtocolMessage` switch-table and timing histogram structures.
 
 ### RE Process
 
@@ -1462,3 +1834,92 @@ Offset  Ptr (LE32)   Resolved
 ...
 104     70 A3 43 00  0x0043A370  ← cmd 26: mech list
 ```
+
+---
+
+## 19. Client v1.23 Migration Notes
+
+> **Branch:** `feat/client-1.23` — all RE below is being re-verified against the 1.23 Ghidra project.
+> All function addresses throughout §1–§18 are from the **v1.06** binaries unless explicitly noted here.
+
+### Binary metadata
+
+| Binary | v1.06 | v1.23 | Delta |
+|--------|-------|-------|-------|
+| `MPBTWIN.EXE` | 577,536 bytes · Nov 21 1996 | 621,568 bytes · Oct 24 1997 | +44,032 (+7.6%) |
+| `COMMEG32.DLL` | 148,480 bytes · Oct 17 1996 | 144,896 bytes · Apr 9 1997 | −3,584 (−2.4%) |
+| `INITAR.DLL` | 104,960 bytes · Jul 30 1996 | 117,248 bytes · Mar 6 1997 | +12,288 (+11.7%) |
+
+Source debug paths embedded in v1.23 `MPBTWIN.EXE`: `D:\btech\Source123\Combat.c`, `D:\btech\Source123\Commwnd.c`, `D:\btech\Source123\Makemech.c`.
+
+### Protocol-relevant changes confirmed by string diff
+
+**COMMEG32.DLL — version string changed (breaks naive version checks):**
+- **Removed:** `"Kesmai Comm Engine 3.22"` (v1.06 LOGIN payload at offset `+0x070`)
+- **Added:** `"Kesmai CommEngine 3.29"` (note: no space between "Comm" and "Engine")
+- New exported symbols in v1.23 COMMEG32: `CE_VersionNumber`, `CE_VersionString`
+- Class name `"Kesmai Comm Engine"` (MFC class table, unrelated to the version string) is unchanged.
+
+**Server impact:** `parseLoginPayload()` reads `clientVer` as a raw string and logs it but does not enforce a specific value — no server code change required. Comments in `src/protocol/auth.ts` and `src/protocol/constants.ts` updated on this branch to document both strings.
+
+**MPBTWIN.EXE — new combat state machine strings:**
+
+The v1.23 binary contains new debug/state-label strings absent from v1.06:
+
+| String | Implication |
+|--------|------------|
+| `"Solaris RPS"` | Explicit state name for the 2D world (RPS = role-playing shell) |
+| `"Solaris COMBAT"` | Explicit state name for the combat engine |
+| `"Transition to combat - even"` | New combat-entry state; "even" = equal-side match |
+| `"Combat - advantage - up/down"` | In-match advantage tracking |
+| `"Combat - disadvantage - up/down"` | Symmetrical disadvantage path |
+| `"Combat - pursuit"` / `"run away"` | Explicit pursuit/retreat states |
+| `"Combat - victory"` / `"defeat"` | Match-end states |
+| `"Combat - imminent victory/defeat"` | Pre-end warning states |
+| `"Combat - winning/losing - up/down"` | Gradient win/loss states |
+| `"Unknown state attempting to enter SOLARIS COMBAT"` | Assertion / guard string |
+| `"Unknown state attempting to send the version"` | Version handshake guard |
+| `"Version not initialized"` | Login-phase guard |
+
+These point to a substantially richer state machine governing the lobby→world→combat transition in v1.23. The v1.06 binary had none of these labels (they appeared as a single hardcoded string `"BattleTech II Version BTOC 1.06"`).
+
+**MPBTWIN.EXE — new runtime behavior:**
+- `GetVersionExA` added: v1.23 performs OS version checks at startup.
+- Two registry keys for bypassing CPU checks: `Software\Kesmai\MultiPlayer Battletech Solaris\NoGameCPUCheck` and `NoSpeechCPUCheck`.
+- `Speech32.dll` in v1.23 client directory: speech synthesis support added.
+
+**INITAR.DLL — substantially rewritten (+11.7%):**
+The launcher DLL grew by 12 KB. The additional RE on this binary is the highest priority since `INITAR.DLL` controls how `play.pcgi` is parsed and how the game is launched — any new fields in the config file or changes to the launch protocol would originate here.
+
+### play.pcgi lookup strategy (both v1.06 and v1.23 INITAR.DLL)
+
+String extraction from both INITAR binaries confirms the same Win32 API import set for file location:
+
+| API | Purpose |
+|-----|---------|
+| `GetCommandLineA` | Read the pcgi path passed as a CLI argument |
+| `GetModuleFileNameA` | Locate pcgi relative to the DLL/exe directory |
+| `GetFullPathNameA` | Resolve relative paths to absolute |
+| `GetModuleHandleA` | Self-reference for the above |
+
+INITAR likely tries all three strategies in order. `MPBT.bat` is written to satisfy all of them:
+
+1. `gen-pcgi` writes `C:\MPBT\play.pcgi` (default `--out` resolved 3 levels up from `src/scripts/`)
+2. A `copy /Y` step places `play.pcgi` into `C:\MPBT\client-1.23\` (exe-relative lookup)
+3. `cd /d C:\MPBT\client-1.23` sets cwd to the client dir before `start` (current-directory lookup)
+4. The absolute path `C:\MPBT\client-1.23\play.pcgi` is passed as the CLI arg (CommandLine lookup)
+
+The v1.23 import set is identical to v1.06, so no new pcgi fields have been confirmed yet — deeper RE (task 5 below) is needed to rule out format changes.
+
+### RE tasks for this branch
+
+The v1.23 Ghidra project has been created with all three binaries analyzed. Work these in order using the per-binary RVA lists in `tools/version_diffs/`:
+
+| Priority | Task | Binary | Notes |
+|----------|------|--------|-------|
+| 1 | Re-verify `FUN_10001420` (LOGIN builder) | COMMEG32 v1.23 | Confirm payload layout unchanged; check if `CE_VersionNumber`/`CE_VersionString` exports alter the version field |
+| 2 | Re-verify `Aries_RecvHandler` / case 0 | COMMEG32 v1.23 | §17 was confirmed on v1.06; confirm it still works identically |
+| 3 | Trace new state machine in `MPBTWIN` | MPBTWIN v1.23 | Find the handler for `"Solaris RPS"` → `"Transition to combat - even"` → `"Solaris COMBAT"` — this defines the world→combat REDIRECT flow |
+| 4 | Re-verify world command dispatch table | MPBTWIN v1.23 | §18 addresses will have shifted; new entries may exist in v1.23 |
+| 5 | Trace `INITAR.DLL` launcher changes | INITAR v1.23 | Win32 API surface identical to v1.06 (confirmed by string extraction). Deeper RE needed to confirm pcgi field format is unchanged given +12 KB growth. |
+| 6 | Check `Speech32.dll` integration | MPBTWIN v1.23 | What events trigger speech? Any new server→client commands? |
