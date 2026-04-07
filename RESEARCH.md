@@ -27,8 +27,8 @@ contributors who want to extend or audit the server emulator.
 17. [COMMEG32.DLL — Secondary Connection Protocol (M2 RE)](#17-commeg32dll--secondary-connection-protocol-m2-re)
 18. [Game World Protocol — MPBTWIN.EXE RE](#18-game-world-protocol--mpbtwinexe-re)
 19. [Client v1.23 Migration Notes](#19-client-v123-migration-notes)
-20. [Methodology](#19-methodology)
-21. [MEC File Binary Format](#20-mec-file-binary-format)
+20. [MEC File Binary Format](#20-mec-file-binary-format)
+21. [MAP File Leading Room Table](#21-map-file-leading-room-table)
 
 ---
 
@@ -1775,6 +1775,49 @@ cross-referencing the weapon global table at `DAT_00477b58` (stride `0x5C`, 0-in
 mech string table at `MPBT.MSG` offset `(mech_id + 0x3AE) * 2` (§15).  The loader
 uses this name both to construct the filename `mechdata\<name>.MEC` and as the
 encryption seed source.
+
+---
+
+## 21. MAP File Leading Room Table
+
+**Source**: `IS.MAP`, `SOLARIS.MAP` (local licensed installation; not committed)
+**Parser**: `src/data/maps.ts`, runnable via `npm run map:dump -- --rooms`
+
+The earlier map-file note that treated the first bytes as a room record was off
+by one field. Both local map files start with a little-endian `u16` record count,
+followed by exactly that many leading room records. The trailing bytes after the
+leading table are still not decoded; they may contain palette, graphics, or
+topology data.
+
+Leading table layout:
+
+```
+[u16 room_record_count]
+repeat room_record_count times:
+  [u16 room_id]
+  [u16 flags]
+  [u16 x1] [u16 y1] [u16 x2] [u16 y2]
+  [u16 aux0] [u16 aux1] [u16 aux2]
+  [u16 name_len_including_nul] [name bytes]
+  [u16 desc_len_including_nul] [description bytes]
+```
+
+Local parser validation on 2026-04-07:
+
+| File | Count | Parsed room IDs | First / last | Room-table end | Trailing bytes |
+|------|------:|-----------------|--------------|---------------:|---------------:|
+| `IS.MAP` | 271 | `1-271` | `1 Luthien` / `271 New Westin` | `0x4F28` | 19771 |
+| `SOLARIS.MAP` | 32 | `146-171`, `1-6` | `146 Solaris Starport` / `6 Black Hills Sector` | `0x2123` | 180826 |
+
+Notable correction: the local `IS.MAP` is not only rooms `1-145`; its leading
+room table covers the full global namespace through `271`, including Solaris
+entries. The local `SOLARIS.MAP` leading table is a 32-row Solaris subset plus
+six sector rows, followed by a much larger undecoded section.
+
+The current parser intentionally preserves `flags` and the three auxiliary
+fields as numeric values. Their semantics are not yet confirmed. The next M5
+RE step is to identify where exits and movement topology live: either in the
+trailing map sections or in a separate client-side table.
 
 ---
 
