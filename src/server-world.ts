@@ -56,7 +56,6 @@ import { launchRegistry } from './state/launch.js';
 import { loadMechs } from './data/mechs.js';
 import { Logger } from './util/logger.js';
 import { CaptureLogger } from './util/capture.js';
-import { findCharacter } from './db/characters.js';
 
 // ── Shared mech catalog (same on-disk data as lobby) ─────────────────────────
 // Loaded once at module import time.  Provides a fallback when a player's
@@ -189,7 +188,7 @@ function buildPersonnelRecordLines(target: ClientSession, page: number): string[
       `Sector   : ${DEFAULT_SCENE_NAME}`,
       `Location : ${getPresenceLocation(target)}`,
       'Status   : Online',
-      `Account  : ${target.username || 'Unknown'}`,
+      `ComStar  : ${getComstarId(target)}`,
     ];
   }
 
@@ -571,47 +570,35 @@ async function handleWorldLogin(
 
   const { login } = result;
   session.username = login.username || '(unknown)';
-  session.phase    = 'world';
-  session.roomId   = DEFAULT_ROOM_ID;
 
-  // Retrieve the mech the player picked in the lobby.
+  // Require a lobby-issued launch record. Reject any connection that did not
+  // come through the lobby auth + REDIRECT flow (closes the direct-connect bypass).
   const launch = launchRegistry.consume(session.username);
-  if (launch) {
-    session.accountId       = launch.accountId;
-    session.displayName     = launch.displayName;
-    session.allegiance      = launch.allegiance;
-    session.selectedMechId   = launch.mechId;
-    session.selectedMechSlot = launch.mechSlot;
-    connLog.info(
-      '[world-login] launch record found: displayName="%s" allegiance=%s mech=%s (id=%d slot=%d)',
-      session.displayName ?? session.username,
-      session.allegiance ?? '(none)',
-      launch.mechTypeString,
-      launch.mechId,
-      launch.mechSlot,
-    );
-  } else {
-    session.selectedMechId   = FALLBACK_MECH_ID;
-    session.selectedMechSlot = 0;
+  if (!launch) {
     connLog.warn(
-      '[world-login] no launch record for "%s" — using fallback mech_id=%d',
-      session.username, FALLBACK_MECH_ID,
+      '[world-login] rejected: no launch record for "%s" — must connect via lobby',
+      session.username,
     );
+    session.socket.destroy();
+    return;
   }
 
-  // displayName and allegiance are set by the lobby before REDIRECT.
-  // If missing (e.g. direct connection for testing), fall back to DB lookup.
-  if (!session.displayName && session.accountId !== undefined) {
-    const character = await findCharacter(session.accountId);
-    if (character) {
-      session.displayName = character.display_name;
-      session.allegiance  = character.allegiance;
-      connLog.info(
-        '[world-login] character loaded from DB: displayName="%s" allegiance=%s',
-        character.display_name, character.allegiance,
-      );
-    }
-  }
+  session.accountId       = launch.accountId;
+  session.displayName     = launch.displayName;
+  session.allegiance      = launch.allegiance;
+  session.selectedMechId   = launch.mechId;
+  session.selectedMechSlot = launch.mechSlot;
+  connLog.info(
+    '[world-login] launch record found: displayName="%s" allegiance=%s mech=%s (id=%d slot=%d)',
+    session.displayName ?? session.username,
+    session.allegiance ?? '(none)',
+    launch.mechTypeString,
+    launch.mechId,
+    launch.mechSlot,
+  );
+
+  session.phase  = 'world';
+  session.roomId = DEFAULT_ROOM_ID;
 
   connLog.info(
     '[world-login] accepted: user="%s" displayName="%s" allegiance=%s service="%s"',

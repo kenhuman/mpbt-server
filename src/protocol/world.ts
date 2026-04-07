@@ -31,7 +31,8 @@ import {
 // Use after Cmd4 to deliver a welcome message.
 
 function buildCmd3Args(text: string): Buffer {
-  const raw = Buffer.from(text, 'latin1');
+  const MAX_CMD3_BYTES = 85 * 85 - 1; // encodeB85_1 max: 85^2−1 = 7224
+  const raw = Buffer.from(text, 'latin1').subarray(0, MAX_CMD3_BYTES);
   if (raw.includes(0x1b)) throw new RangeError('buildCmd3Args: text must not contain ESC (0x1B)');
   return Buffer.concat([encodeB85_1(raw.length), raw]);
 }
