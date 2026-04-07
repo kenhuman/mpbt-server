@@ -610,6 +610,8 @@ function recordWorldLaunch(
 }
 
 function ensureDefaultWorldLaunch(session: ClientSession, connLog: Logger): void {
+  // Skip if recordWorldLaunch() was already called at this call site (selectedMechId is set).
+  if (session.selectedMechId !== undefined) return;
   const defaultMech = MECHS.find(mech => mech.id === session.selectedMechId) ?? MECHS[0];
   if (!defaultMech) {
     connLog.warn('[game] cannot record default world launch: no mechs loaded');
