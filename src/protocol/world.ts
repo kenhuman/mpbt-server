@@ -382,6 +382,70 @@ export function buildCmd14PersonnelRecordPacket(
   return buildGamePacket(14, buildCmd14Args(opts), false, seq);
 }
 
+// ── Cmd 40 — Open Inner Sphere Map ──────────────────────────────────────────
+// CONFIRMED: MapOpenInnerSphere (FUN_0040ecb0).
+//
+// Wire args:
+//   [type1: context_id]
+//   [type1: current_room_id]
+//   [type4: value/cost]
+
+export interface Cmd40InnerSphereMapOptions {
+  contextId: number;
+  currentRoomId: number;
+  value?: number;
+}
+
+/** Build a Cmd40 packet to open the Inner Sphere map UI. */
+export function buildCmd40InnerSphereMapPacket(
+  opts: Cmd40InnerSphereMapOptions,
+  seq = 0,
+): Buffer {
+  return buildGamePacket(
+    40,
+    Buffer.concat([
+      encodeB85_1(opts.contextId),
+      encodeB85_1(opts.currentRoomId),
+      encodeB85_4(opts.value ?? 0),
+    ]),
+    false,
+    seq,
+  );
+}
+
+// ── Cmd 43 — Open Solaris Map ───────────────────────────────────────────────
+// CONFIRMED: MapOpenSolaris (FUN_0040eed0).
+//
+// Wire args:
+//   [type1: context_id]
+//   [type1: current_room_id + 1]
+//   [type1 × 26: Solaris room/sector counters]
+
+export interface Cmd43SolarisMapOptions {
+  contextId: number;
+  currentRoomId: number;
+  counters?: number[];
+}
+
+function buildCmd43Args(opts: Cmd43SolarisMapOptions): Buffer {
+  const counters = opts.counters?.slice(0, 26) ?? [];
+  while (counters.length < 26) counters.push(0);
+
+  return Buffer.concat([
+    encodeB85_1(opts.contextId),
+    encodeB85_1(opts.currentRoomId + 1),
+    ...counters.map(counter => encodeB85_1(counter)),
+  ]);
+}
+
+/** Build a Cmd43 packet to open the Solaris map UI. */
+export function buildCmd43SolarisMapPacket(
+  opts: Cmd43SolarisMapOptions,
+  seq = 0,
+): Buffer {
+  return buildGamePacket(43, buildCmd43Args(opts), false, seq);
+}
+
 // ── Cmd 48 — Keyed Triple-String List ────────────────────────────────────────
 // CONFIRMED: FUN_00411DF0 -> FUN_00411E20(1).
 //

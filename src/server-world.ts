@@ -46,6 +46,7 @@ import {
   buildCmd11PlayerEventPacket,
   buildCmd13PlayerArrivalPacket,
   buildCmd14PersonnelRecordPacket,
+  buildCmd43SolarisMapPacket,
   buildCmd48KeyedTripleStringListPacket,
   buildCmd4SceneInitPacket,
   buildCmd5CursorNormalPacket,
@@ -77,11 +78,12 @@ const FALLBACK_MECH_ID = WORLD_MECHS.length > 0 ? WORLD_MECHS[0].id : 0;
 // Default arena name shown in the window title.
 const DEFAULT_SCENE_NAME = 'Solaris Arena';
 const WELCOME_TEXT       = 'Welcome to the game world.';
-const DEFAULT_ROOM_ID    = 'world_default_room';
+const DEFAULT_MAP_ROOM_ID = 146; // Solaris Starport
 const ALL_ROSTER_LIST_ID = 0x3F4;
 const INQUIRY_MENU_ID    = 1000;
 const PERSONNEL_LIST_ID  = 0x3F2;
 const PERSONNEL_MORE_ID  = 0x95;
+const SOLARIS_TRAVEL_CONTEXT_ID = 0xC6;
 let nextWorldRosterId    = 1;
 const worldCaptures      = new Map<string, CaptureLogger>();
 
@@ -115,6 +117,10 @@ function getDisplayName(session: ClientSession): string {
   return latin1 || 'Pilot';
 }
 
+function mapRoomKey(roomId: number): string {
+  return `map_room_${roomId}`;
+}
+
 function getPresenceStatus(session: ClientSession): number {
   return session.worldPresenceStatus ?? 5;
 }
@@ -127,9 +133,11 @@ function getComstarId(session: ClientSession): number {
 }
 
 function getPresenceLocation(session: ClientSession): string {
+  const roomId = session.worldMapRoomId;
   const status = getPresenceStatus(session);
-  if (status <= 5) return 'Standing';
-  if (status <= 12) return `Booth ${status - 5}`;
+  const room = roomId === undefined ? 'world' : `room ${roomId}`;
+  if (status <= 5) return `Standing in ${room}`;
+  if (status <= 12) return `Booth ${status - 5} in ${room}`;
   return `Status ${status}`;
 }
 
@@ -217,6 +225,27 @@ function buildComstarDeliveryText(senderName: string, text: string): string {
     trimmed = trimmed.slice(0, -1);
   }
   return trimmed;
+}
+
+function sendSolarisTravelMap(
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const currentRoomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
+  connLog.info('[world] sending Cmd43 Solaris travel map: currentRoomId=%d', currentRoomId);
+  send(
+    session.socket,
+    buildCmd43SolarisMapPacket(
+      {
+        contextId: SOLARIS_TRAVEL_CONTEXT_ID,
+        currentRoomId,
+      },
+      nextSeq(session),
+    ),
+    capture,
+    'CMD43_SOLARIS_MAP',
+  );
 }
 
 function sendAllRosterList(
@@ -482,10 +511,16 @@ function handleWorldTextCommand(
   session: ClientSession,
   text: string,
   connLog: Logger,
+  capture: CaptureLogger,
 ): void {
   const clean = text.replace(/\x1b/g, '?').trim();
   if (clean.length === 0) {
     connLog.debug('[world] cmd-4 text ignored (empty)');
+    return;
+  }
+
+  if (clean.toLowerCase() === '/map' || clean.toLowerCase() === '/travel') {
+    sendSolarisTravelMap(session, connLog, capture);
     return;
   }
 
@@ -507,22 +542,61 @@ function handleWorldTextCommand(
 }
 
 function handleMapTravelReply(
+  players: PlayerRegistry,
+  session: ClientSession,
   contextId: number,
   selection: number,
   selectedRoomId: number | undefined,
   connLog: Logger,
+  capture: CaptureLogger,
 ): void {
   if (selection === 0) {
     connLog.info('[world] cmd-10 map reply: context=%d cancel', contextId);
     return;
   }
 
+  if (selectedRoomId === undefined) {
+    connLog.warn('[world] cmd-10 map reply missing selected room: context=%d selection=%d', contextId, selection);
+    return;
+  }
+
+  const oldRoomId = session.roomId;
+  const newRoomId = mapRoomKey(selectedRoomId);
   connLog.info(
-    '[world] cmd-10 map reply: context=%d selection=%d selectedRoomId=%d (movement not implemented)',
+    '[world] cmd-10 map reply: context=%d selection=%d selectedRoomId=%d',
     contextId,
     selection,
-    selectedRoomId ?? -1,
+    selectedRoomId,
   );
+
+  if (oldRoomId === newRoomId) {
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket(`Already at room ${selectedRoomId}.`, nextSeq(session)),
+      capture,
+      'CMD3_TRAVEL_ALREADY_THERE',
+    );
+    return;
+  }
+
+  notifyRoomDeparture(players, session, connLog);
+  session.roomId = newRoomId;
+  session.worldMapRoomId = selectedRoomId;
+  session.worldPresenceStatus = 5;
+
+  send(
+    session.socket,
+    buildCmd10RoomPresenceSyncPacket(currentRoomPresenceEntries(players, session), nextSeq(session)),
+    capture,
+    'CMD10_TRAVEL_ROOM_SYNC',
+  );
+  send(
+    session.socket,
+    buildCmd3BroadcastPacket(`Travel complete: room ${selectedRoomId}.`, nextSeq(session)),
+    capture,
+    'CMD3_TRAVEL_COMPLETE',
+  );
+  notifyRoomArrival(players, session, connLog);
 }
 
 function notifyRoomArrival(
@@ -628,8 +702,9 @@ async function handleWorldLogin(
     launch.mechSlot,
   );
 
-  session.phase  = 'world';
-  session.roomId = DEFAULT_ROOM_ID;
+  session.phase          = 'world';
+  session.worldMapRoomId = DEFAULT_MAP_ROOM_ID;
+  session.roomId         = mapRoomKey(DEFAULT_MAP_ROOM_ID);
 
   connLog.info(
     '[world-login] accepted: user="%s" displayName="%s" allegiance=%s service="%s"',
@@ -728,7 +803,7 @@ function handleWorldGameData(
       connLog.warn('[world] cmd-4 parse failed');
       return;
     }
-    handleWorldTextCommand(players, session, parsed.text, connLog);
+    handleWorldTextCommand(players, session, parsed.text, connLog, capture);
 
   } else if (cmdIdx === 10) {
     const parsed = parseClientCmd10MapReply(payload);
@@ -736,7 +811,7 @@ function handleWorldGameData(
       connLog.warn('[world] cmd-10 map reply parse failed');
       return;
     }
-    handleMapTravelReply(parsed.contextId, parsed.selection, parsed.selectedRoomId, connLog);
+    handleMapTravelReply(players, session, parsed.contextId, parsed.selection, parsed.selectedRoomId, connLog, capture);
 
   } else if (cmdIdx === 21) {
     const parsed = parseClientCmd21TextReply(payload);
