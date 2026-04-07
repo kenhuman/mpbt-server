@@ -351,15 +351,14 @@ function handleComstarTextReply(
   );
 
   if (!target.socket.destroyed) {
-    send(
-      target.socket,
+    // Cross-session write: use target's socket directly rather than the sender's
+    // CaptureLogger, which belongs to a different session.
+    target.socket.write(
       buildCmd36MessageViewPacket(
         getComstarId(session),
         buildComstarDeliveryText(senderName, clean),
         nextSeq(target),
       ),
-      capture,
-      'CMD36_COMSTAR_DELIVERY',
     );
   }
   send(

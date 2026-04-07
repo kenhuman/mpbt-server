@@ -430,14 +430,8 @@ function handleGameData(
           '[game] character found: displayName="%s" allegiance=%s → REDIRECT to world',
           character.display_name, character.allegiance,
         );
-        launchRegistry.record(session.username, {
-          mechId:         MECHS[0]?.id ?? 0,
-          mechSlot:       0,
-          mechTypeString: MECHS[0]?.typeString ?? '',
-          accountId:      accountId,
-          displayName:    character.display_name,
-          allegiance: character.allegiance,
-        });
+        session.selectedMechId   = MECHS[0]?.id ?? 0;
+        session.selectedMechSlot = 0;
         issueWorldRedirect(session, connLog, capture);
       } else {
         // First login: no character → prompt for callsign + House allegiance.
