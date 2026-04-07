@@ -691,7 +691,6 @@ function handleWorldGameData(
     connLog.info('[world] cmd-3 (client-ready) → sending world init sequence');
     sendWorldInitSequence(players, session, connLog, capture);
     session.worldInitialized = true;
-    session.arenaInitialized = true;
     notifyRoomArrival(players, session, connLog);
 
   } else if (cmdIdx === 1) {
@@ -887,7 +886,6 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     awaitingMechConfirm: false,
     serverSeq:         0,
     worldInitialized:  false,
-    arenaInitialized:  false,
     worldRosterId:     nextWorldRosterId++,
     worldPresenceStatus: 5,
   };

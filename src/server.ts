@@ -169,7 +169,6 @@ function handleConnection(socket: net.Socket): void {
     mechListSent: false,
     awaitingMechConfirm: false,
     serverSeq: 0,
-    arenaInitialized: false,
   };
   players.add(session);
 

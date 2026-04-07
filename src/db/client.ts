@@ -4,9 +4,10 @@
  * Reads DATABASE_URL from the environment.  All DB modules import from here
  * so there is exactly one pool per process.
  *
- * Pool is not initialised eagerly — the first query creates the underlying
- * connection.  Call `ensureSchema()` from `src/db/migrate.ts` (or at
- * server startup) to guarantee the schema exists before accepting clients.
+ * This module performs a startup connectivity check with `pool.connect()` so
+ * configuration or database availability problems surface immediately rather
+ * than on the first query. Schema creation and migrations are handled
+ * separately; run the external `db:migrate` step before accepting clients.
  */
 
 import pg from 'pg';

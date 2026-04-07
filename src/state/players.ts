@@ -89,12 +89,6 @@ export interface ClientSession {
    * the first-login allegiance-picker wizard (wire format confirmed via RE).
    */
   allegiance?: string;
-  /**
-   * True once the Cmd4 SceneInit / world init sequence has been sent.
-   * Used to distinguish the first cmd-3 (needs full init) from subsequent
-   * re-triggers (e.g. post-allegiance-pick) that only need an ack.
-   */
-  arenaInitialized: boolean;
 }
 
 export class PlayerRegistry {
