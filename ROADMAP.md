@@ -167,7 +167,7 @@ The world uses two distinct room types: **bar** (social spaces, Tier Ranking ter
 
 | Task | Status | Notes |
 |---|---|---|
-| `SOLARIS.MAP` / `IS.MAP` binary format RE | 🔬 | Leading room-record table now has a checked parser (`npm run map:dump -- --rooms`): room ID, type flags, coordinate bounds, three aux fields, name, and description. Remaining work is decoding the trailing sections that likely contain palette/graphics/topology data and confirming where exit connections live. |
+| `SOLARIS.MAP` / `IS.MAP` binary format RE | 🔬 | Leading room-record table now has a checked parser (`npm run map:dump -- --rooms`): room ID, type flags, coordinate bounds, three aux fields, name, and description. Ghidra confirms `Map_LoadFile` passes trailing bytes to the picture/resource loader, so exits are not obviously stored in the large trailing blob. Remaining work is finding the real movement/topology source. |
 | RE movement protocol | 🔬 | Client → server movement commands; server → client position/environment updates. RazorWing's Type P/D/S notes were revalidated against our binary as combat-mode leads, not this M5 world-navigation path. |
 | Tram / monorail RE | 🔬 | Cross-sector navigation shortcut — client command format unknown |
 | Room model from map files | ❌ | Replace stub `World` with real rooms (bar / arena types), exits, and coordinates decoded from `IS.MAP` / `SOLARIS.MAP` |
@@ -289,7 +289,7 @@ These are gaps we know exist. They are not bugs — they are the RE frontier.
 - **Cmd `0x1D` server handling** — whether the server needs to acknowledge a cancel, or silently ignore it.
 - **ACK reply format for seq > 42** — the trigger is documented (RESEARCH.md §9) but the reply packet format is not.
 - **Combat CRC crossover point** — the server currently always uses lobby CRC init; the transition rule is unknown.
-- **`SOLARIS.MAP` / `IS.MAP` exit graph** — room topology source files identified and partially decoded. Leading room tables are now parser-backed: local `IS.MAP` has 271 records (IDs 1–271), and local `SOLARIS.MAP` has 32 leading records (Solaris 146–171 plus sector rows 1–6). Full exit connections, trailing sections, and room-type classification still need RE.
+- **`SOLARIS.MAP` / `IS.MAP` exit graph** — room topology source files identified and partially decoded. Leading room tables are now parser-backed: local `IS.MAP` has 271 records (IDs 1–271), and local `SOLARIS.MAP` has 32 leading records (Solaris 146–171 plus sector rows 1–6). Ghidra confirms the trailing section is read through the generic picture/resource path, so full exit connections and room-type classification still need a separate movement/topology trace.
 - **F7 / F8 chat channel differentiation** — two distinct broadcast channels exist (team/lance and all-comm); both are arena-phase constructs gated on `Cmd8` team assignment; wire-format difference is unknown. Tracked in M7.
 - **Bar booth terminal commands** — what packets does the client send when activating Tier Ranking / ComStar terminals at a bar?
 - **Tram / monorail command** — protocol for the cross-sector navigation shortcut is unknown.
