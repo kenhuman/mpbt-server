@@ -573,3 +573,47 @@ const ENTRIES: MechStats[] = [
 /** Lookup table keyed by uppercase designation (matches .MEC filename). */
 export const MECH_STATS: ReadonlyMap<string, MechStats> =
   new Map(ENTRIES.map(e => [e.designation, e]));
+
+/**
+ * Build the compact mech-stats text shown in the examine dialog (Cmd20).
+ *
+ * Line separator is `\x5c` (backslash) — lobby dialog line-break character
+ * per FUN_00433310 RE.  0x1B is stripped to prevent CRC encoding failure.
+ *
+ * @param typeString  Uppercase variant designation, e.g. "ANH-1A".
+ */
+export function buildMechExamineText(typeString: string): string {
+  const SEP      = '\x5c';
+  const sanitize = (s: string) => s.replace(/\x1b/g, '');
+  const stats    = MECH_STATS.get(typeString);
+
+  if (!stats || stats.disabled) {
+    const safeType = sanitize(typeString);
+    const cls = stats
+      ? sanitize(stats.weightClass.charAt(0).toUpperCase() + stats.weightClass.slice(1))
+      : '';
+    return cls ? `${safeType}${SEP}${cls} Class` : safeType;
+  }
+
+  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+  const safeType = sanitize(typeString);
+  const safeName = stats.name ? sanitize(stats.name) : '';
+  const title = safeName ? `${safeType}  ${safeName}` : safeType;
+  const specParts: string[] = [sanitize(cap(stats.weightClass))];
+  if (stats.tonnage     != null) specParts.push(`${stats.tonnage}T`);
+  if (stats.maxSpeedKph != null) specParts.push(`${stats.maxSpeedKph}kph`);
+  if (stats.jumpMeters  != null) specParts.push(`Jump:${stats.jumpMeters}m`);
+  const specs = specParts.join('  ');
+  const arms  = Array.isArray(stats.armament) && stats.armament.length > 0
+    ? sanitize(stats.armament.join(' '))
+    : '';
+
+  const lines = [title];
+  if (specs) lines.push(specs);
+  if (arms)  lines.push(arms);
+  const full = lines.join(SEP);
+  // Safety: cap at 84 bytes (display buffer limit observed in FUN_00431f10).
+  return Buffer.byteLength(full, 'latin1') <= 84
+    ? full
+    : Buffer.from(full, 'latin1').subarray(0, 84).toString('latin1');
+}
