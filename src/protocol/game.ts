@@ -420,6 +420,36 @@ export function parseClientCmd5SceneAction(
 }
 
 /**
+ * Parse a client-sent world cmd-23 scene-location action.
+ *
+ * CONFIRMED from MPBTWIN.EXE FUN_00419390:
+ *   the four main scene location icons send FUN_00403030(0x17) plus one
+ *   encoded byte. Values 0..3 select an already-loaded target slot; values
+ *   4..7 select the same slot but tell the server the target scene was not
+ *   cached locally yet.
+ */
+export function parseClientCmd23LocationAction(
+  payload: Buffer,
+): { seq: number; action: number; slot: number; targetCached: boolean } | null {
+  if (payload.length < 8 || payload[0] !== 0x1B || payload[payload.length - 1] !== 0x1B) {
+    return null;
+  }
+  const seq = payload[1] - 0x21;
+  const cmd = payload[2] - 0x21;
+  if (cmd !== 23) return null;
+
+  const action = payload[3] - 0x21;
+  if (action < 0 || action > 7) return null;
+
+  return {
+    seq,
+    action,
+    slot: action & 3,
+    targetCached: action < 4,
+  };
+}
+
+/**
  * Parse a client-sent cmd-9 character creation reply.
  *
  * CONFIRMED from MPBTWIN.EXE FUN_0042dbf0 -> FUN_0040d400:
