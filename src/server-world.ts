@@ -296,7 +296,11 @@ function buildAllRosterEntries(players: PlayerRegistry) {
 function buildPersonnelRecordLines(target: ClientSession, page: number): string[] {
   if (page <= 1) {
     return [
-      'Rank     : Warrior',
+      // The client's Cmd14 header always shows the querying user's own callsign
+      // as "Handle" (it reads from the room-roster selection cursor, which
+      // defaults to self).  We have no wire field that overrides it, so we
+      // repeat the correct handle as the first body line.
+      `Handle   : ${getDisplayName(target)}`,
       `House    : ${target.allegiance ?? 'Unaffiliated'}`,
       `Sector   : ${getSolarisRoomName(target.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID)}`,
       `Location : ${getPresenceLocation(target)}`,
@@ -824,12 +828,22 @@ function handleWorldTextCommand(
   const line = `${getDisplayName(session)}: ${clean}`;
   connLog.info('[world] cmd-4 text: %s', line);
 
+  const senderStatus = getPresenceStatus(session);
+  const senderInBooth = senderStatus > 5;
+
   for (const other of players.inRoom(session.roomId)) {
     if (
       other.phase !== 'world' ||
       !other.worldInitialized ||
       other.socket.destroyed
     ) {
+      continue;
+    }
+
+    // Booth privacy: booth chat is only heard by occupants of the same booth;
+    // standing chat is only heard by other standing players.
+    const otherStatus = getPresenceStatus(other);
+    if (senderInBooth ? otherStatus !== senderStatus : otherStatus > 5) {
       continue;
     }
 
