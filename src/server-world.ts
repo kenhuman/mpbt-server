@@ -55,8 +55,7 @@ import { launchRegistry } from './state/launch.js';
 import { loadMechs } from './data/mechs.js';
 import {
   storeMessage,
-  fetchUndeliveredMessages,
-  markDelivered,
+  claimUndeliveredMessages,
 } from './db/messages.js';
 import { Logger } from './util/logger.js';
 import { CaptureLogger } from './util/capture.js';
@@ -371,17 +370,23 @@ function handleComstarTextReply(
     storeMessage(senderAccountId, recipientAccountId, senderComstarId, formattedBody)
       .then(() => {
         connLog.info('[world] ComStar message stored for offline delivery (account=%d)', recipientAccountId);
+        send(
+          session.socket,
+          buildCmd3BroadcastPacket('ComStar message queued for offline delivery.', nextSeq(session)),
+          capture,
+          'CMD3_COMSTAR_QUEUED',
+        );
       })
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         connLog.error('[world] failed to store offline ComStar: %s', msg);
+        send(
+          session.socket,
+          buildCmd3BroadcastPacket('ComStar delivery failed \u2014 please try again.', nextSeq(session)),
+          capture,
+          'CMD3_COMSTAR_FAIL',
+        );
       });
-    send(
-      session.socket,
-      buildCmd3BroadcastPacket('ComStar message queued for offline delivery.', nextSeq(session)),
-      capture,
-      'CMD3_COMSTAR_QUEUED',
-    );
   } else {
     connLog.warn(
       '[world] cmd-21 ComStar target unavailable and cannot persist: dialogId=%d senderAccId=%s',
@@ -713,24 +718,21 @@ function handleWorldGameData(
     // Deliver any ComStar messages that arrived while this player was offline.
     const recipientAccountId = session.accountId;
     if (recipientAccountId !== undefined) {
-      fetchUndeliveredMessages(recipientAccountId)
-        .then(async (pending) => {
+      claimUndeliveredMessages(recipientAccountId)
+        .then((pending) => {
           if (pending.length === 0) return;
           connLog.info('[world] delivering %d pending ComStar message(s)', pending.length);
-          const ids: number[] = [];
           for (const msg of pending) {
             if (session.socket.destroyed) break;
             session.socket.write(
               buildCmd36MessageViewPacket(msg.sender_comstar_id, msg.body, nextSeq(session)),
             );
-            ids.push(msg.id);
           }
-          await markDelivered(ids);
-          connLog.info('[world] marked %d ComStar message(s) delivered', ids.length);
+          connLog.info('[world] delivered %d ComStar message(s)', pending.length);
         })
         .catch((err: unknown) => {
           const msg = err instanceof Error ? err.message : String(err);
-          connLog.error('[world] failed to fetch/deliver pending ComStar messages: %s', msg);
+          connLog.error('[world] failed to claim/deliver pending ComStar messages: %s', msg);
         });
     }
 

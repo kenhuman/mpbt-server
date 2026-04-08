@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS articles (
     title        VARCHAR(255) NOT NULL,
     summary      TEXT         NOT NULL,
     body         TEXT         NOT NULL,
-    author_id    INTEGER      NOT NULL REFERENCES accounts(id) ON DELETE SET NULL,
+    author_id    INTEGER               REFERENCES accounts(id) ON DELETE SET NULL,
     published_at TIMESTAMPTZ  NOT NULL DEFAULT now(),
     created_at   TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
@@ -74,5 +74,5 @@ CREATE INDEX         IF NOT EXISTS articles_published_at_idx ON articles (publis
 
 -- Fast lookup: pending messages for a given recipient (most common query).
 CREATE INDEX IF NOT EXISTS messages_recipient_undelivered_idx
-    ON messages (recipient_account_id)
+    ON messages (recipient_account_id, sent_at, id)
     WHERE delivered_at IS NULL;

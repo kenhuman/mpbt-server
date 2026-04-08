@@ -56,7 +56,7 @@ export async function fetchUndeliveredMessages(
             sender_comstar_id, body, sent_at, delivered_at
      FROM messages
      WHERE recipient_account_id = $1 AND delivered_at IS NULL
-     ORDER BY sent_at ASC`,
+     ORDER BY sent_at ASC, id ASC`,
     [recipientAccountId],
   );
   return res.rows;
@@ -72,4 +72,27 @@ export async function markDelivered(ids: number[]): Promise<void> {
     `UPDATE messages SET delivered_at = now() WHERE id = ANY($1::int[])`,
     [ids],
   );
+}
+
+/**
+ * Atomically claim all pending messages for a recipient: marks them
+ * delivered and returns them in a single round-trip, eliminating the
+ * duplicate-delivery race that exists with separate fetch + markDelivered
+ * calls when the same account connects from two sessions simultaneously.
+ */
+export async function claimUndeliveredMessages(
+  recipientAccountId: number,
+): Promise<MessageRow[]> {
+  const res = await pool.query<MessageRow>(
+    `WITH claimed AS (
+       UPDATE messages
+       SET delivered_at = now()
+       WHERE recipient_account_id = $1 AND delivered_at IS NULL
+       RETURNING id, sender_account_id, recipient_account_id,
+                 sender_comstar_id, body, sent_at, delivered_at
+     )
+     SELECT * FROM claimed ORDER BY sent_at ASC, id ASC`,
+    [recipientAccountId],
+  );
+  return res.rows;
 }
