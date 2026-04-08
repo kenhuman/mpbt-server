@@ -266,17 +266,17 @@ The world uses two distinct room types: **bar** (social spaces, Tier Ranking ter
 
 Work these in order when sitting down with Ghidra:
 
-1. **`FUN_100014e0` case 0** (`COMMEG32.DLL`) — secondary connection handler. Highest value; unlocks everything in M3+.
-2. **World command dispatch table** (`MPBTWIN.EXE`) — analogous to `g_lobby_DispatchTable`; gives the full command index map for the game world.
-3. **Initial world handshake** — the first bytes the client expects from the world server before entering the render loop.
-4. **Cmd 20 server response** (`FUN_00401c90`) — needed for M1; can be worked in parallel with items 1–3.
-5. **Combat CRC crossover** — when/how the client switches to the combat CRC seed.
-6. **`SOLARIS.MAP` / `IS.MAP` exit graph** — decode room-to-room connections from the map files (unlocks M5 world map without full world-server RE).
+1. ~~**`FUN_100014e0` case 0** (`COMMEG32.DLL`) — secondary connection handler.~~ ✅ Resolved (RESEARCH.md §17)
+2. ~~**World command dispatch table** (`MPBTWIN.EXE`).~~ ✅ Resolved (RESEARCH.md §18)
+3. ~~**Initial world handshake**.~~ ✅ Resolved (RESEARCH.md §18)
+4. ~~**Cmd 20 server response** (`FUN_00401c90`).~~ ✅ Resolved (M1 complete)
+5. ~~**Combat CRC crossover**.~~ ✅ Resolved — `g_combatMode` flag selects seed; RPS=`0x0a5c25`, Combat=`0x0a5c45` (RESEARCH.md §18)
+6. ~~**`SOLARIS.MAP` / `IS.MAP` exit graph** — decode room-to-room connections.~~ ✅ Leading room tables fully decoded (RESEARCH.md §19.7); provisional exit tree implemented in server-world.ts; authentic exit graph from trailing section still needs RE.
 7. **F7 / F8 chat channel wire format** — are team and all-comm differentiated by command code or a flag in the packet? (M7 prerequisite; both channels require `Cmd8` team assignment and are arena-phase only).
-8. **Movement packets** (M5 prerequisite).
-9. **Weapon fire / damage packets** (M6 prerequisite).
+8. ~~**Movement packets** (M5 prerequisite).~~ ✅ Resolved (RESEARCH.md §19.2)
+9. **Weapon fire / damage packets** (M6 prerequisite) — partially decoded (RESEARCH.md §19.3 / §19.6.1); live capture still needed.
 10. **TIC circuit wire format** (M6 prerequisite).
-11. **Jump jet / altitude state packets** (M6 prerequisite).
+11. **Jump jet / altitude state packets** (M6 prerequisite) — fire command decoded; fuel/regen/Z-altitude still 🔬.
 12. **Turn timer / match lifecycle** (M6 prerequisite).
 13. **SCentEx result reporting** (M9 prerequisite).
 
@@ -286,17 +286,15 @@ Work these in order when sitting down with Ghidra:
 
 These are gaps we know exist. They are not bugs — they are the RE frontier.
 
-- **Post-REDIRECT protocol** — everything the game world server sends and receives. No analysis has been done yet.
-- **Cmd 20 server response format** — client sends "examine mech"; server reply format is unknown.
-- **Cmd `0x1D` server handling** — whether the server needs to acknowledge a cancel, or silently ignore it.
-- **ACK reply format for seq > 42** — the trigger is documented (RESEARCH.md §9) but the reply packet format is not.
-- **Combat CRC crossover point** — the server currently always uses lobby CRC init; the transition rule is unknown.
-- **`SOLARIS.MAP` / `IS.MAP` exit graph** — room topology source files identified and partially decoded. Leading room tables are now parser-backed: local `IS.MAP` has 271 records (IDs 1–271), and local `SOLARIS.MAP` has 32 leading records (Solaris 146–171 plus sector rows 1–6). Ghidra confirms the trailing section is read through the generic picture/resource path, so full exit connections and room-type classification still need a separate movement/topology trace.
+- **`SOLARIS.MAP` / `IS.MAP` exit graph** — leading room tables are fully decoded (RESEARCH.md §19.7); the trailing binary section (picture/resource data) still needs a separate movement/topology RE pass to extract authentic room-to-room exit connections and room-type classifications.
 - **F7 / F8 chat channel differentiation** — two distinct broadcast channels exist (team/lance and all-comm); both are arena-phase constructs gated on `Cmd8` team assignment; wire-format difference is unknown. Tracked in M7.
-- **Bar booth terminal commands** — what packets does the client send when activating Tier Ranking / ComStar terminals at a bar?
+- **Bar booth terminal commands** — `KP5` → `Cmd48` all-roster query and `Cmd7(0x3f2)` personnel record are implemented; Tier Ranking terminal activation format is still unknown.
 - **Tram / monorail command** — protocol for the cross-sector navigation shortcut is unknown.
 - **SCentEx result-reporting protocol** — how does the server communicate sanctioned match results?
-- **`.MEC` file format** — the binary format of mech definition files has not been analyzed.
+- **Server→client combat position sync (`Cmd65`)** — partially decoded (RESEARCH.md §19.6.1); signed direction conventions and exact payload layout need live capture confirmation.
+- **TIC group fire** — whether `cmd 12/action 0` means selected weapon, selected TIC group, or all queued fire needs dynamic capture to confirm.
+- **Jump jet fuel / Z-altitude state** — fire (`cmd 12/action 4`) and landing (`cmd 12/action 6`) decoded; fuel depletion, regeneration rate, and server→client altitude feedback still unknown.
+- **Turn timer / match lifecycle** — 15-minute timer, mech-kill notification, and match-end signals are unconfirmed.
 
 ---
 

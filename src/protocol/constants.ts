@@ -88,4 +88,3 @@ export enum Msg {
 // Password:  play.pcgi [identification] password=, via WM 0x856 → SetUserPassword
 // Service:   play.pcgi [launch] ServiceIdent=, via WM 0x859 → SetInternet
 // AuthServ:  play.pcgi [launch] AuthServ= (optional), via WM 0x85b → SetServerIdent.
-export const AUTH_ENCODING = 'UNKNOWN' as const;
