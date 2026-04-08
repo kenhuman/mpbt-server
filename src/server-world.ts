@@ -136,7 +136,11 @@ const SOLARIS_ROOM_BY_ID = new Map<number, { roomId: number; name: string; scene
   SOLARIS_SCENE_ROOMS.map((room, index) => [room.roomId, { ...room, sceneIndex: index }]),
 );
 const ALL_ROSTER_LIST_ID = 0x3F4;
-const INQUIRY_MENU_ID    = 1000;
+// 0x3E8 (1000) is reserved by the client for its own local "Personal inquiry on:"
+// submenu (FUN_00412980).  Sending Cmd7 with that listId triggers special client
+// handling that ignores our payload and uses a garbage internal target_id.  Use
+// any non-reserved positive integer instead (see RESEARCH.md §11 avoid-list).
+const INQUIRY_MENU_ID    = 0x3F3;  // 1011 — safe, not in client avoid-list
 const PERSONNEL_LIST_ID  = 0x3F2;
 const PERSONNEL_MORE_ID  = 0x95;
 const SOLARIS_TRAVEL_CONTEXT_ID = 0xC6;
