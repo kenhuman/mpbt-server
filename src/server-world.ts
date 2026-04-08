@@ -61,6 +61,7 @@ import { loadMechs } from './data/mechs.js';
 import {
   storeMessage,
   claimUndeliveredMessages,
+  markDelivered,
 } from './db/messages.js';
 import { Logger } from './util/logger.js';
 import { CaptureLogger } from './util/capture.js';
@@ -549,22 +550,26 @@ function handleComstarTextReply(
     storeMessage(senderAccountId, recipientAccountId, senderComstarId, formattedBody)
       .then(() => {
         connLog.info('[world] ComStar message stored for offline delivery (account=%d)', recipientAccountId);
-        send(
-          session.socket,
-          buildCmd3BroadcastPacket('ComStar message queued for offline delivery.', nextSeq(session)),
-          capture,
-          'CMD3_COMSTAR_QUEUED',
-        );
+        if (!session.socket.destroyed && session.socket.writable) {
+          send(
+            session.socket,
+            buildCmd3BroadcastPacket('ComStar message queued for offline delivery.', nextSeq(session)),
+            capture,
+            'CMD3_COMSTAR_QUEUED',
+          );
+        }
       })
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         connLog.error('[world] failed to store offline ComStar: %s', msg);
-        send(
-          session.socket,
-          buildCmd3BroadcastPacket('ComStar delivery failed \u2014 please try again.', nextSeq(session)),
-          capture,
-          'CMD3_COMSTAR_FAIL',
-        );
+        if (!session.socket.destroyed && session.socket.writable) {
+          send(
+            session.socket,
+            buildCmd3BroadcastPacket('ComStar delivery failed \u2014 please try again.', nextSeq(session)),
+            capture,
+            'CMD3_COMSTAR_FAIL',
+          );
+        }
       });
   } else {
     connLog.warn(
@@ -833,8 +838,13 @@ function handleMapTravelReply(
     return;
   }
 
+  if (contextId !== SOLARIS_TRAVEL_CONTEXT_ID) {
+    connLog.warn('[world] cmd-10 map reply unexpected context=%d (expected %d)', contextId, SOLARIS_TRAVEL_CONTEXT_ID);
+    return;
+  }
+
   if (!SOLARIS_ROOM_BY_ID.has(selectedRoomId)) {
-    connLog.warn('[world] cmd-10 map reply: unknown selectedRoomId=%d, ignoring', selectedRoomId);
+    connLog.warn('[world] cmd-10 map reply unknown selectedRoomId=%d', selectedRoomId);
     return;
   }
 
@@ -1112,13 +1122,21 @@ function handleWorldGameData(
         .then((pending) => {
           if (pending.length === 0) return;
           connLog.info('[world] delivering %d pending ComStar message(s)', pending.length);
+          const deliveredIds: number[] = [];
           for (const msg of pending) {
             if (session.socket.destroyed) break;
             session.socket.write(
               buildCmd36MessageViewPacket(msg.sender_comstar_id, msg.body, nextSeq(session)),
             );
+            deliveredIds.push(msg.id);
           }
-          connLog.info('[world] delivered %d ComStar message(s)', pending.length);
+          if (deliveredIds.length > 0) {
+            markDelivered(deliveredIds).catch((err: unknown) => {
+              const e = err instanceof Error ? err.message : String(err);
+              connLog.error('[world] failed to mark ComStar messages delivered: %s', e);
+            });
+          }
+          connLog.info('[world] delivered %d ComStar message(s)', deliveredIds.length);
         })
         .catch((err: unknown) => {
           const msg = err instanceof Error ? err.message : String(err);

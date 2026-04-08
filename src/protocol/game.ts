@@ -413,8 +413,9 @@ export function parseClientCmd4(
 export function parseClientCmd5SceneAction(
   payload: Buffer,
 ): { seq: number; actionType: number } | null {
-  // Trailing ESC is optional — accept both CRC-only and CRC+ESC endings.
-  if (payload.length < 8 || payload[0] !== 0x1B) {
+  // Client frames end with 3 CRC bytes; trailing ESC is optional
+  // (verifyInboundGameCRC §3), so accept both CRC-only and CRC+ESC forms.
+  if (payload.length < 7 || payload[0] !== 0x1B) {
     return null;
   }
   const seq = payload[1] - 0x21;
@@ -439,8 +440,7 @@ export function parseClientCmd5SceneAction(
 export function parseClientCmd23LocationAction(
   payload: Buffer,
 ): { seq: number; action: number; slot: number; targetCached: boolean } | null {
-  // Trailing ESC is optional — accept both CRC-only and CRC+ESC endings.
-  if (payload.length < 8 || payload[0] !== 0x1B) {
+  if (payload.length < 7 || payload[0] !== 0x1B || !verifyInboundGameCRC(payload)) {
     return null;
   }
   const seq = payload[1] - 0x21;
@@ -504,7 +504,7 @@ export function parseClientCmd10MapReply(
   payload: Buffer,
 ): { seq: number; contextId: number; selection: number; selectedRoomId?: number } | null {
   // Trailing ESC is optional — accept both CRC-only and CRC+ESC endings.
-  if (payload.length < 14 || payload[0] !== 0x1B) {
+  if (payload.length < 13 || payload[0] !== 0x1B) {
     return null;
   }
   const seq = payload[1] - 0x21;

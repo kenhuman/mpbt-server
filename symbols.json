@@ -123,9 +123,9 @@
       "g_modeRpsActive_v123":          { "binary": "DAT_0047a7f0", "role": "Set after the MMW/RPS welcome path starts" },
       "g_musicStateCurrent_v123":      { "binary": "DAT_00479b00", "role": "Current internal music state id" },
       "g_musicStateRequested_v123":    { "binary": "DAT_004da2ec", "role": "Pending internal music state id requested by Audio_RequestMusicState_v123" },
-      "g_musicStateNames_v123":        { "binary": "00479b10", "role": "Pointer table of 21 music-state labels; index 6 is \"Transition to combat - even\"" },
-      "g_welcomeStrMMC_v123":          { "binary": "0047d240", "role": "Literal ESC?MMC Copyright Kesmai Corp. 1991" },
-      "g_welcomeStrMMW_v123":          { "binary": "0047d264", "role": "Literal ESC?MMW Copyright Kesmai Corp. 1991" }
+      "g_musicStateNames_v123":        { "binary": "DAT_00479b10", "role": "Pointer table of 21 music-state labels; index 6 is \"Transition to combat - even\"" },
+      "g_welcomeStrMMC_v123":          { "binary": "DAT_0047d240", "role": "Literal ESC?MMC Copyright Kesmai Corp. 1991" },
+      "g_welcomeStrMMW_v123":          { "binary": "DAT_0047d264", "role": "Literal ESC?MMW Copyright Kesmai Corp. 1991" }
     }
   }
 }

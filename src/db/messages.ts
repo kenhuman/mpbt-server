@@ -75,23 +75,23 @@ export async function markDelivered(ids: number[]): Promise<void> {
 }
 
 /**
- * Atomically claim all pending messages for a recipient: marks them
- * delivered and returns them in a single round-trip, eliminating the
- * duplicate-delivery race that exists with separate fetch + markDelivered
- * calls when the same account connects from two sessions simultaneously.
+ * Fetch pending messages for a recipient in delivery order without marking
+ * them delivered. Callers must invoke `markDelivered()` only after the
+ * messages have been successfully written to the recipient socket.
+ *
+ * Note: eliminating duplicate delivery across concurrent sessions requires
+ * a separate claim/lock mechanism; this function intentionally preserves
+ * correct `delivered_at` semantics and avoids message loss on failed sends.
  */
 export async function claimUndeliveredMessages(
   recipientAccountId: number,
 ): Promise<MessageRow[]> {
   const res = await pool.query<MessageRow>(
-    `WITH claimed AS (
-       UPDATE messages
-       SET delivered_at = now()
-       WHERE recipient_account_id = $1 AND delivered_at IS NULL
-       RETURNING id, sender_account_id, recipient_account_id,
-                 sender_comstar_id, body, sent_at, delivered_at
-     )
-     SELECT * FROM claimed ORDER BY sent_at ASC, id ASC`,
+    `SELECT id, sender_account_id, recipient_account_id,
+            sender_comstar_id, body, sent_at, delivered_at
+     FROM messages
+     WHERE recipient_account_id = $1 AND delivered_at IS NULL
+     ORDER BY sent_at ASC, id ASC`,
     [recipientAccountId],
   );
   return res.rows;

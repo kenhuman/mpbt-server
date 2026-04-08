@@ -2613,10 +2613,10 @@ Offset  Size  Field
 10      2     field_a        uint16 LE
 12      2     field_c        uint16 LE
 14      2     field_e        uint16 LE
-16      1     name_len       uint8      (length of following name string)
-17      name_len  name       char[]     (room name, no NUL terminator)
-17+name_len  1  desc_len    uint8
-18+name_len  desc_len  desc char[]     (room description)
+16      2     name_len       uint16 LE  (byte count including NUL terminator)
+18      name_len  name       char[]     (room name; name_len-1 printable chars + NUL)
+18+name_len  2  desc_len    uint16 LE  (byte count including NUL terminator)
+20+name_len  desc_len  desc char[]     (room description)
 ```
 Total fixed bytes per record before strings: 18.
 
