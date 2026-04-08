@@ -2114,6 +2114,27 @@ The v1.23 binary contains new debug/state-label strings absent from v1.06:
 
 These point to a substantially richer state machine governing the lobby→world→combat transition in v1.23. The v1.06 binary had none of these labels (they appeared as a single hardcoded string `"BattleTech II Version BTOC 1.06"`).
 
+#### MPBTWIN v1.23 state-machine trace
+
+Ghidra revalidation against `C:\MPBT\Mpbtwin.exe` v1.23:
+
+| Function | Role |
+|----------|------|
+| `FUN_00435b20` | Main network/game tick: drains queued COMMEG payloads via `FUN_00401310`, calls `FUN_00435ed0`, then dispatches by `DAT_0047d05c` (`3` = RPS tick, `4` = combat tick). |
+| `FUN_00435ed0` | Mode-packet dispatcher after RPS has started; classifies incoming handshake payloads and routes RPS vs combat transitions. |
+| `FUN_00435ff0` | Initial mode/welcome gate; accepts the first `MMW` welcome, sets RPS state, sends the client version frame, and only permits `MMC` combat entry after the client is already in RPS state. |
+| `FUN_00436340` | Classifies raw welcome strings: `ESC ? MMW Copyright Kesmai Corp. 1991` returns `2`; `ESC ? MMC Copyright Kesmai Corp. 1991` returns `3`; non-handshake data returns `0`. |
+| `FUN_00401d70` | Copies the visible mode name into the global mode descriptor: argument `0` = `"Solaris RPS"`; argument `1` = `"Solaris COMBAT"`. |
+| `FUN_00435db0` | Combat-mode initializer after the `MMC` welcome: tears down RPS UI pieces, loads `scenes.dat`, resets combat globals, and enables the combat simulation state. |
+| `FUN_00435eb0` | Combat tick; runs combat update work and, when music is enabled, calls `FUN_00428370`. |
+| `FUN_00428370` | Combat music/proximity selector. It chooses a requested combat music state from opponent distance/visibility/advantage data and calls `FUN_0042a5f0`. |
+| `FUN_0042a5f0` | Music state request mapper. External request `10` maps to internal state `6`. |
+| `FUN_0042aa10` | KSND/Miles music-state tick. It applies pending state changes and invokes the selected state callback. |
+
+Important correction: `"Transition to combat - even"` is not the COMMEG/server handshake string and does not by itself define a world→combat wire command. It is entry `6` in the music-state label table at `00479b10`, reached by `FUN_00428370 -> FUN_0042a5f0(10) -> internal state 6`, then applied by `FUN_0042aa10`. The protocol-relevant transition remains the `MMW`/`MMC` welcome-string classifier: `MMW` enters `"Solaris RPS"` and `MMC` enters `"Solaris COMBAT"` only after the RPS state has already been established.
+
+Server impact: keep treating combat as a separate connection/session boundary. A future combat prototype should first reproduce the RPS-to-combat handoff by issuing a second `MMC`-style welcome on the combat-side connection after the client is already in RPS, then trace the combat command dispatch that follows. Do not attempt to send `"Transition to combat - even"` as a server payload; it is an internal audio label.
+
 **MPBTWIN.EXE — new runtime behavior:**
 - `GetVersionExA` added: v1.23 performs OS version checks at startup.
 - Two registry keys for bypassing CPU checks: `Software\Kesmai\MultiPlayer Battletech Solaris\NoGameCPUCheck` and `NoSpeechCPUCheck`.
@@ -2150,7 +2171,7 @@ The v1.23 Ghidra project has been created with all three binaries analyzed. Work
 |----------|------|--------|-------|
 | 1 | Re-verify `FUN_10001420` (LOGIN builder) | COMMEG32 v1.23 | Confirm payload layout unchanged; check if `CE_VersionNumber`/`CE_VersionString` exports alter the version field |
 | 2 | Re-verify `Aries_RecvHandler` / case 0 | COMMEG32 v1.23 | §17 was confirmed on v1.06; confirm it still works identically |
-| 3 | Trace new state machine in `MPBTWIN` | MPBTWIN v1.23 | Find the handler for `"Solaris RPS"` → `"Transition to combat - even"` → `"Solaris COMBAT"` — this defines the world→combat REDIRECT flow |
+| 3 | Trace new state machine in `MPBTWIN` | MPBTWIN v1.23 | Partially revalidated above: `Solaris RPS`/`Solaris COMBAT` are protocol mode names selected by the `MMW`/`MMC` welcome classifier; `"Transition to combat - even"` is an internal music state, not a server payload. |
 | 4 | Re-verify world command dispatch table | MPBTWIN v1.23 | §18 addresses will have shifted; new entries may exist in v1.23 |
 | 5 | Trace `INITAR.DLL` launcher changes | INITAR v1.23 | Win32 API surface identical to v1.06 (confirmed by string extraction). Deeper RE needed to confirm pcgi field format is unchanged given +12 KB growth. |
 | 6 | Check `Speech32.dll` integration | MPBTWIN v1.23 | What events trigger speech? Any new server→client commands? |
