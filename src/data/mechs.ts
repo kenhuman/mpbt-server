@@ -31,6 +31,71 @@ function projectPath(...parts: string[]): string {
   return path.resolve(__dirname, '../../', ...parts);
 }
 
+// ── .MEC decryption ───────────────────────────────────────────────────────────
+// MPBTWIN.EXE obfuscates .MEC files with a sliding XOR cipher seeded from the
+// mech-name's last 4 characters.
+//
+// Key facts confirmed by RE:
+//   FUN_004427f0  — computes seed from last 4 chars of lowercase mech name
+//   FUN_004428a0  — LCG step: temp = state*0xF0F1+1; ROL16(temp)+temp
+//   FUN_00442870  — for i in [0..size-4): *(u32*)(buf+i) ^= lcg()
+//   extraCritCount — *(int16*)(mechData+0x3c) after decryption
+//   Used by  Combat_ReadLocalActorMechState_v123 @ 0x004456c0:
+//     reads (extraCritCount + 21) crit bytes when extraCritCount != -21 && >= -20
+
+/** LCG step for the .MEC file cipher. Returns the new 32-bit state. */
+function mecLcgStep(state: number): number {
+  const temp = ((state * 0xf0f1 + 1) >>> 0);
+  const rotated = (((temp << 16) | (temp >>> 16)) >>> 0);
+  return ((temp + rotated) >>> 0);
+}
+
+/** Derive the 32-bit XOR seed from the last 4 chars of the lowercase mech name. */
+function mecSeed(nameLower: string): number {
+  const n = nameLower.length;
+  if (n < 4) throw new Error(`mech name too short to derive seed: "${nameLower}"`);
+  const b = new Uint8Array(4);
+  for (let i = 0; i < 4; i++) b[i] = nameLower.charCodeAt(n - 1 - i);
+  return b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24);
+}
+
+/**
+ * Decrypt a raw .MEC file buffer in place.
+ * Applies the sliding 4-byte XOR cipher used by FUN_00442870 in MPBTWIN.EXE.
+ *
+ * @param buf       Mutable copy of the raw .MEC file bytes (must be ≥ 4 bytes).
+ * @param nameLower Lowercase mech name WITHOUT extension (e.g. "anh-1a").
+ */
+function decryptMec(buf: Buffer, nameLower: string): void {
+  let state = mecSeed(nameLower) >>> 0;
+  const limit = buf.length - 3;
+  for (let i = 0; i < limit; i++) {
+    state = mecLcgStep(state);
+    const word = buf.readUInt32LE(i);
+    buf.writeUInt32LE((word ^ state) >>> 0, i);
+  }
+}
+
+/**
+ * Read and decrypt a .MEC file, returning the signed 16-bit extraCritCount
+ * at offset 0x3c.
+ *
+ * @param mecPath   Absolute path to the .MEC file.
+ * @param nameLower Lowercase mech name WITHOUT extension (e.g. "anh-1a").
+ * @returns Signed 16-bit extraCritCount (can be negative).
+ */
+function readMecExtraCritCount(mecPath: string, nameLower: string): number {
+  const raw = fs.readFileSync(mecPath);
+  if (raw.length < 0x3e) {
+    throw new Error(`${mecPath}: too short for extraCritCount (${raw.length} < 0x3e)`);
+  }
+  const buf = Buffer.from(raw); // mutable copy
+  decryptMec(buf, nameLower);
+  return buf.readInt16LE(0x3c);
+}
+
+// ── MPBT.MSG variant table ────────────────────────────────────────────────────
+
 /**
  * Parse MPBT.MSG to build a typeString → mech_id map.
  *
@@ -108,6 +173,10 @@ export function loadMechs(): MechEntry[] {
         typeString,
         variant: '', // empty → client uses its own display logic
         name:    '', // empty → client calls MechWin_LookupMechName(id)
+        extraCritCount: readMecExtraCritCount(
+          path.join(mechDir, filename),
+          typeString.toLowerCase(),
+        ),
       };
     });
 

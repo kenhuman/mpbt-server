@@ -5,7 +5,8 @@
  *
  *   1. Client connects (MPBTWIN.EXE configures address via play.pcgi server=host:port).
  *   2. Server sends LOGIN_REQUEST (type 0x16, empty payload) immediately.
- *   3. COMMEG32.DLL responds by calling FUN_10001420 → sends LOGIN packet (type 0x15).
+ *   3. COMMEG32.DLL responds by sending LOGIN (type 0x15).
+ *      v1.06 calls FUN_10001420; v1.23 calls FUN_10001de0.
  *   4. Server parses the LOGIN packet, extracts username/password.
  *   5. Server sends SYNC (type 0x00) as acknowledgment.
  *   6. Further game packets TBD (capture-driven).
@@ -36,7 +37,7 @@ import {
 } from './protocol/game.js';
 import { buildCmd9CharacterCreationPromptPacket } from './protocol/world.js';
 import { loadMechs } from './data/mechs.js';
-import { MECH_STATS } from './data/mech-stats.js';
+import { buildMechExamineText } from './data/mech-stats.js';
 import { PlayerRegistry, ClientSession } from './state/players.js';
 import { launchRegistry } from './state/launch.js';
 import { startWorldServer } from './server-world.js';
@@ -105,48 +106,6 @@ function send(socket: net.Socket, pkt: Buffer, capture: CaptureLogger, label: st
  * expected line (252) rather than actual mech stats.  Sending the formatted text
  * from the server bypasses the broken lookup entirely.
  */
-function buildMechExamineText(mech: MechEntry): string {
-  const SEP = '\x5c'; // 0x5C ('\') — lobby dialog line-break in FUN_00433310.
-                      // FUN_00433310 NULs the '\' in the line buffer before calling
-                      // FUN_00431f10, so it forces a new line without being rendered.
-                      // 0x8D was wrong: FUN_00431e00 indexes the font-width table with
-                      // signed-char arithmetic → 0x8D = -115 → offset -460 → bad memory.
-  // Strip 0x1B (ESC) from any field that feeds into the packet.  buildCmd20Args
-  // (and encodeString) now check the encoded Buffer for 0x1B and throw, which
-  // would propagate as an uncaught exception and crash the server process.
-  const sanitize = (s: string) => s.replace(/\x1b/g, '');
-
-  const stats = MECH_STATS.get(mech.typeString);
-
-  if (!stats || stats.disabled) {
-    // No documented stats: show designation and weight class if known.
-    const safeType = sanitize(mech.typeString);
-    const cls = stats ? sanitize(stats.weightClass.charAt(0).toUpperCase() + stats.weightClass.slice(1)) : '';
-    return cls ? `${safeType}${SEP}${cls} Class` : safeType;
-  }
-
-  // Known mech: build a compact but informative summary.
-  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-  const safeType = sanitize(mech.typeString);
-  const safeName = stats.name ? sanitize(stats.name) : '';
-  const title = safeName ? `${safeType}  ${safeName}` : safeType;
-  const specParts: string[] = [sanitize(cap(stats.weightClass))];
-  if (stats.tonnage != null) specParts.push(`${stats.tonnage}T`);
-  if (stats.maxSpeedKph != null) specParts.push(`${stats.maxSpeedKph}kph`);
-  if (stats.jumpMeters != null) specParts.push(`Jump:${stats.jumpMeters}m`);
-  const specs = specParts.join('  ');
-  const arms  = Array.isArray(stats.armament) && stats.armament.length > 0
-    ? sanitize(stats.armament.join(' '))
-    : '';
-
-  const lines = [title];
-  if (specs) lines.push(specs);
-  if (arms) lines.push(arms);
-  const full  = lines.join(SEP);
-  // Truncate to 84 bytes if the armament list is very long (safety guard).
-  return Buffer.byteLength(full, 'latin1') <= 84 ? full : Buffer.from(full, 'latin1').subarray(0, 84).toString('latin1');
-}
-
 // ── Connection handler ────────────────────────────────────────────────────────
 
 function handleConnection(socket: net.Socket): void {
@@ -265,8 +224,8 @@ function handleConnection(socket: net.Socket): void {
   keepaliveTimer?.unref();
 
   // ── SERVER SPEAKS FIRST ─────────────────────────────────────────────────────
-  // COMMEG32.DLL FUN_100014e0 case 0x16: when LOGIN_REQUEST arrives, it calls
-  // FUN_10001420() which builds and sends the type-0x15 LOGIN packet.
+  // COMMEG32.DLL receive-dispatch case 0x16: when LOGIN_REQUEST arrives, it
+  // calls the client LOGIN sender (v1.06 FUN_10001420; v1.23 FUN_10001de0).
   session.phase = 'auth';
   const loginReq = buildLoginRequest();
   connLog.info('Sending LOGIN_REQUEST (0x16) — %d bytes', loginReq.length);
@@ -355,6 +314,9 @@ function handleLogin(
 
 // ARIES list-id used for our mech-confirm dialog (any value ≠ client special IDs).
 const CONFIRM_DIALOG_ID = 2;
+
+// List-id used for the House-allegiance selection dialog during char creation.
+const ALLEGIANCE_DIALOG_ID = 3;
 
 // Sample mech roster — one Shadowhawk entry so the UI has something to show.
 // Mech roster loaded from mechdata/*.MEC at startup.
@@ -579,7 +541,7 @@ function handleGameData(
       }
     }
     const mech = MECHS[slot];
-    const examineText = buildMechExamineText(mech);
+    const examineText = buildMechExamineText(mech.typeString);
     connLog.info('[game] cmd 20 (examine): slot=%d mech_id=%d (%s) → %j',
       slot, mech.id, mech.typeString, examineText);
     send(session.socket, buildCmd20Packet(CMD20_DIALOG_ID, 2, examineText, nextSeq(session)), capture, 'CMD20_STATS');

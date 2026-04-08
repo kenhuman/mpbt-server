@@ -27,10 +27,9 @@ contributors who want to extend or audit the server emulator.
 17. [COMMEG32.DLL — Secondary Connection Protocol (M2 RE)](#17-commeg32dll--secondary-connection-protocol-m2-re)
 18. [Game World Protocol — MPBTWIN.EXE RE](#18-game-world-protocol--mpbtwinexe-re)
 19. [Client v1.23 Migration Notes](#19-client-v123-migration-notes)
-20. [Methodology](#20-methodology)
-21. [MEC File Binary Format](#21-mec-file-binary-format)
-22. [MAP File Leading Room Table](#22-map-file-leading-room-table)
-23. [Windowed Mode — DirectDraw Rendering Architecture](#23-windowed-mode--directdraw-rendering-architecture)
+20. [MEC File Binary Format](#20-mec-file-binary-format)
+21. [MAP File Leading Room Table](#21-map-file-leading-room-table)
+22. [Windowed Mode — DirectDraw Rendering Architecture](#22-windowed-mode--directdraw-rendering-architecture)
 
 ---
 
@@ -1647,8 +1646,8 @@ Useful follow-up leads from the fresh audit:
 ## 20. MEC File Binary Format
 
 **Source**: `mechdata/*.MEC` (161 files, 552 bytes each)  
-**Loader**: `FUN_004387f0` (`MecFile_Load`) @ `0x004387f0`, MPBTWIN.EXE  
-**Confirmed against**: AS7-D (Atlas 100t), BJ-1 (Blackjack 45t), SDR-5V (Spider 30t)
+**Loader**: v1.23 `FUN_00433d10` (`MecFile_Load`) @ `0x00433d10`, MPBTWIN.EXE
+**Confirmed against**: AS7-D (Atlas 100t), BJ-1 (Blackjack 45t), SDR-5V (Spider 30t), plus a full local v1.23 `mechdata/*.MEC` offset spot-check
 
 ### 20.1 Encryption
 
@@ -1724,7 +1723,8 @@ All fields are little-endian.  Offsets are from the start of the decrypted buffe
 | `0x36` | u16  | *(zero)*              | — |
 | `0x38` | u16  | `jump_mp`             | Jump hexes-per-turn (0 if no jump jets) |
 | `0x3A` | u16  | `weapon_count`        | Number of weapon slots |
-| `0x3C` | u16[] | `weapon_ids[weapon_count]` | Array of weapon type IDs (see §20.3) |
+| `0x3C` | i16  | `crit_state_extra_count` | v1.23 correction: used by `Combat_ClassifyDamageCode_v123` as the signed bound for a post-weapon class-0 damage-code range; this is **not** `weapon_ids[0]` |
+| `0x3E` | u16[] | `weapon_ids[weapon_count]` | Array of weapon type IDs (see §20.3) |
 | *var*  | …    | *(unknown fields)*    | Critical-hit slot data, ammo tracking; see §20.4 |
 | `0xDE` | u16[45] | `crit_slot_table` | Critical-hit slot assignments; 0xFFFF = empty |
 | `0x1EC` | u16 | `ammo_bin_count`      | Number of ammo bin records that follow |
@@ -1742,12 +1742,15 @@ All fields are little-endian.  Offsets are from the start of the decrypted buffe
 |----|--------|---------|
 | `3`  | Medium Laser | Present in Atlas ×4, Blackjack ×3, Spider ×1; most ubiquitous energy weapon in 3025 |
 | `6`  | AC/2 (Autocannon/2) | Appears in BJ-1 weapon list and matched ammo bin type |
-| `8`  | Unconfirmed (missile?) | Atlas position 0, BJ-1 position 0; presumed SRM variant |
-| `9`  | Unconfirmed (missile/beam?) | Atlas position 1, Spider position 0 |
-| `16` | AC/20 (Autocannon/20) | Atlas position 2; 2 ammo bins of 5 rounds each = 10 total ✓ |
+| `8`  | Unconfirmed | Present in ANH-1A ×4 after the v1.23 offset correction; no longer from AS7-D/BJ-1 shifted reads |
+| `9`  | Unconfirmed missile | AS7-D weapon slot and matching ammo-bin type |
+| `12` | Unconfirmed missile | AS7-D weapon slot and matching ammo-bin type; likely the old shifted read hid this slot |
+| `16` | AC/20 (Autocannon/20) | AS7-D weapon index 1; 2 ammo bins of 5 rounds each = 10 total ✓ |
 
-IDs `1`, `2`, `4`, `12` appear in other mechs and remain unresolved without
+IDs `1`, `2`, `4`, `5`, `7`, `8`, `10`, `11`, `12`, `13`, `14`, and `15` appear in local v1.23 mechdata and remain unresolved without
 cross-referencing the weapon global table at `DAT_00477b58` (stride `0x5C`, 0-indexed).
+Prior notes treated `0x3C+` as the weapon-id array. v1.23 `FUN_00433910` reads weapon ids from `0x3E + slot*2`, and `Combat_ClassifyDamageCode_v123` reads `0x3C` separately as a signed count/bound for damage-state codes. Local decode examples:
+AS7-D `field_0x3c=8`, weapons `[9,16,3,3,3,3,12]`; BJ-1 `field_0x3c=8`, weapons `[6,6,3,3,3,3]`; SDR-5V `field_0x3c=9`, weapons `[3,3]`.
 
 ### 20.4 Cross-Validation Table
 
@@ -1758,6 +1761,7 @@ cross-referencing the weapon global table at `DAT_00477b58` (stride `0x5C`, 0-in
 | `walk_mp` (0x16) | **3** | **4** | **8** |
 | `jump_mp` (0x38) | **0** | **4** | **8** |
 | `heat_sinks` (0x34) | **20** | **11** | **10** |
+| `crit_state_extra_count` (0x3C) | 8 | 8 | 9 |
 | `speed_raw` (0x2E) | 27 → 18 | 27 → 18 | 18 → 12 |
 | `armor_la` (0x1A) | **34** | **12** | **5** |
 | `armor_ra` (0x1C) | **34** | **12** | **5** |
@@ -1770,7 +1774,7 @@ cross-referencing the weapon global table at `DAT_00477b58` (stride `0x5C`, 0-in
 | `armor_lt_rear` (0x2A) | **10** | **6** | **2** |
 | `armor_rt_rear` (0x2C) | **10** | **6** | **2** |
 | `weapon_count` (0x3A) | 7 | 6 | 2 |
-| `weapon_ids` (0x3C+) | `[8,9,16,3,3,3,3]` | `[8,6,6,3,3,3]` | `[9,3]` |
+| `weapon_ids` (0x3E+) | `[9,16,3,3,3,3,12]` | `[6,6,3,3,3,3]` | `[3,3]` |
 | `ammo_bin_count` (0x1EC) | 5 | 1 | 0 |
 
 **Variant name**: sourced from `MechWin_LookupMechName` (§Appendix A) which reads the
@@ -2093,6 +2097,20 @@ Source debug paths embedded in v1.23 `MPBTWIN.EXE`: `D:\btech\Source123\Combat.c
 
 **Server impact:** `parseLoginPayload()` reads `clientVer` as a raw string and logs it but does not enforce a specific value — no server code change required. Comments in `src/protocol/auth.ts` and `src/protocol/constants.ts` updated on this branch to document both strings.
 
+### COMMEG32 v1.23 Ghidra revalidation
+
+2026-04-07 follow-up in the v1.23 Ghidra project confirms the login wire layout is unchanged, but the key functions moved:
+
+- `CE_VersionString` at `10005300` returns `s_Kesmai_CommEngine_3_29_1001a220`.
+- `CE_VersionNumber` at `10005310` writes major `3`, minor `0x1d` (`29`).
+- `MakeTCPConnection` export `10004920` calls `FUN_10001b20`, which copies the version literal into the login block at `DAT_10021848` (`DAT_100217d8 + 0x70`), sets the `0x39` marker at `DAT_10021916`, clears `DAT_10021918`, and opens the socket.
+- v1.23 LOGIN sender is `FUN_10001de0`, not `FUN_10001420`. It initializes ARIES packet type `0x15`, copies `strlen(password) + 0x145` bytes from `DAT_100217d8`, writes `htons(strlen(password))` at `DAT_1002191a`, finalizes the ARIES header, and sends via `writebinary`.
+- v1.23 login payload field setters line up with the existing parser: `SetUserName` -> `DAT_100217d8`, version -> `DAT_10021848`, `SetUserEmailHandle` -> `DAT_10021898`, `SetInternet` -> `DAT_100218c0`, `SetProductCode` -> `DAT_10021914`, `SetServerIdent` -> `DAT_10021917`, `SetUserPassword` -> `DAT_1002191a`/`DAT_1002191c`.
+- v1.23 receive dispatcher is `FUN_10001eb0`; case `0` still forwards the raw SYNC payload to `MPBTWIN.EXE` via `WM_0x7f0`, and case `0x16` still sends LOGIN by calling `FUN_10001de0`.
+- `FUN_10001420` in v1.23 is now timing/failure telemetry, not LOGIN; it builds ARIES packet type `0x1b`.
+
+Server impact: no runtime change is required. The existing parser accepts both version strings and the payload offsets are unchanged. The docs/comments should avoid using `FUN_10001420` as a v1.23 login-builder address.
+
 **MPBTWIN.EXE — new combat state machine strings:**
 
 The v1.23 binary contains new debug/state-label strings absent from v1.06:
@@ -2169,9 +2187,9 @@ The v1.23 Ghidra project has been created with all three binaries analyzed. Work
 
 | Priority | Task | Binary | Notes |
 |----------|------|--------|-------|
-| 1 | Re-verify `FUN_10001420` (LOGIN builder) | COMMEG32 v1.23 | Confirm payload layout unchanged; check if `CE_VersionNumber`/`CE_VersionString` exports alter the version field |
-| 2 | Re-verify `Aries_RecvHandler` / case 0 | COMMEG32 v1.23 | §17 was confirmed on v1.06; confirm it still works identically |
-| 3 | Trace new state machine in `MPBTWIN` | MPBTWIN v1.23 | Partially revalidated above: `Solaris RPS`/`Solaris COMBAT` are protocol mode names selected by the `MMW`/`MMC` welcome classifier; `"Transition to combat - even"` is an internal music state, not a server payload. |
+| 1 | Re-verify LOGIN builder | COMMEG32 v1.23 | Done 2026-04-07: v1.23 sender is `FUN_10001de0`; payload layout unchanged; `CE_VersionString`/`CE_VersionNumber` are exports only and do not require server-side version enforcement |
+| 2 | Re-verify `Aries_RecvHandler` / case 0 | COMMEG32 v1.23 | Done 2026-04-07: dispatcher is `FUN_10001eb0`; case `0` still forwards raw SYNC payload via `WM_0x7f0`; case `0x16` calls `FUN_10001de0` |
+| 3 | Trace new state machine in `MPBTWIN` | MPBTWIN v1.23 | Find the handler for `"Solaris RPS"` → `"Transition to combat - even"` → `"Solaris COMBAT"` — this defines the world→combat REDIRECT flow |
 | 4 | Re-verify world command dispatch table | MPBTWIN v1.23 | §18 addresses will have shifted; new entries may exist in v1.23 |
 | 5 | Trace `INITAR.DLL` launcher changes | INITAR v1.23 | Win32 API surface identical to v1.06 (confirmed by string extraction). Deeper RE needed to confirm pcgi field format is unchanged given +12 KB growth. |
 | 6 | Check `Speech32.dll` integration | MPBTWIN v1.23 | What events trigger speech? Any new server→client commands? |
@@ -2275,14 +2293,57 @@ Wire:  ESC '!'
 
 ---
 
-### §19.3 — v1.23 Jump Jet and Supplementary Commands (CONFIRMED)
 
-**Jump jet fire — `FUN_0040eb20('\x04')` (called from `FUN_00422c50`):**
+### §19.3 — v1.23 Fire, Jump Jet, and Supplementary Commands (PARTIAL)
+
+**Generic combat action sender — `Combat_SendCmd12Action_v123(action)` (`0x0040eb20`):**
+```c
+Frame_WriteByte(0x0c);   // client cmd 12
+Frame_WriteByte(action);
+Frame_Flush();
+```
+
+Confirmed call sites:
+
+| Action | Caller | Current read |
+|--------|--------|--------------|
+| `0` | `Combat_InputActionDispatch_v123` (`0x004231c0`), case `0x15` | Primary client-to-server weapon-fire request. It is gated by combat-ready state, selected target/weapon state (`DAT_004f1f42`/`DAT_004f1f44`), and heat/animation guards, then emits only `cmd 12, action 0`. Dynamic capture is still needed to prove whether this means selected weapon, selected TIC group, or all queued fire. |
+| `4` | `Combat_JumpJetInputTick_v123` (`0x00422c50`) | Jump jet fire request. Requires jump input bit, remaining jump fuel/energy (`DAT_004f21a2 > 0x32`), no active jump flags, and not in a blocked animation state. |
+| `6` | `FUN_00448d80` | Jump/landing transition request. Sent when an airborne actor reaches ground contact and the local jump-state flags are cleared. |
+
+**Jump jet fire — `Combat_SendCmd12Action_v123('\x04')`:**
 ```
 Wire:  ESC '!'  [0x0C+0x21=0x2D]  [0x04+0x21=0x25]  [CRC]
                  cmd = 12 (0x0C)    action = 4
 ```
-`FUN_0040eb20` is a generic 2-byte command sender: writes cmd byte then data byte, then flushes. `FUN_00422c50` (jump jet handler) reads `DAT_004ef174` bit flags, calls this when jets fire, and plays the associated sound effect.
+
+
+**Weapon/TIC local-selection paths — `Combat_InputActionDispatch_v123`:**
+
+| Input action | Current read |
+|--------------|--------------|
+| `0x16`..`0x1f` | Select weapon slot `0`..`9` via `Combat_SelectWeaponSlot_v123`. |
+| `0x20` / `0x21` | Previous / next weapon slot. |
+| `0x23` / `0x24` / `0x25` | Toggle the currently selected weapon into TIC A/B/C (`DAT_004f2128`, `DAT_004f2150`, `DAT_004f2178`) and refresh the HUD via `FUN_00422860`. |
+| `0x3c` / `0x3d` / `0x3e` | Call `Combat_FireSelectedTicGroup_v123(..., group 0/1/2)`. This path computes local projectile/effect previews through `FUN_00427300`/`FUN_00427400` or `FUN_00424120`, but no separate network sender was found on this path. |
+| `0xb1`..`0xce` | Mouse/HUD grid toggles weapon membership for TIC columns; computes `weapon = (action - 0xb1) / 3`, `tic = (action - 0xb1) % 3`, updates the same TIC arrays, then reselects the weapon slot. |
+
+Current implication: the TIC/weapon UI is mostly local state, and the confirmed wire request is the compact `cmd 12, action 0` fire command. The likely server response chain now starts with `Cmd68` projectile/effect spawn, then `Cmd66`/`Cmd67` damage code/value updates and optional `Cmd70` actor animation/status. Dynamic capture is still needed to prove exact fire sequencing and selected-weapon/TIC semantics.
+
+**Client shot-geometry writer — `Combat_WriteCmd10ShotGeometry_v123` (`0x0040e230`):**
+```c
+Frame_WriteByte(0x0a);                 // client cmd 10
+Frame_WriteByte(sourceWeaponOrSlot);
+Frame_WriteByte(targetServerSlot + 1);  // 0 if no target
+Frame_WriteByte(targetAttach + 1);
+Frame_WriteType(1, angleA / 0xb6 + 0x0e1c);
+Frame_WriteType(1, angleB / 0xb6 + 0x0e1c);
+Frame_WriteType(3, x + 0x18e4258);
+Frame_WriteType(3, y + 0x18e4258);
+Frame_WriteType(2, z);
+```
+
+This helper is only called through `Combat_FireSelectedTicGroup_v123` / `FUN_00449480` in the local fire-preview path, and it does **not** flush by itself. Treat it as a shot-geometry write helper until live capture proves when the frame is flushed relative to the compact `cmd 12/action 0` fire request.
 
 **Channel / mode command — `FUN_0043d920()`:**
 ```
@@ -2359,6 +2420,174 @@ The ROADMAP "ACK reply for seq > 42" item applies historically. In v1.23 the cli
 | TCP outbuf start | `DAT_004f7274` | Buffer base address |
 | TCP outbuf write ptr | `DAT_004f7278` | Current write position |
 
+
+#### §19.6.1 — v1.23 Combat Server→Client Position Path (PARTIAL)
+
+Follow-up Ghidra pass against `C:\MPBT\Mpbtwin.exe` v1.23, starting from the combat dispatch table at `DAT_004782d8`.
+
+Combat dispatch entries are 8-byte records (`arity/kind`, `handler`). The allocated combat table spans commands 0–81, but most entries are null; the non-null combat-only cluster is 59–81.
+
+Key handlers for combat bootstrap and position sync:
+
+| Cmd | Wire byte | Handler | Current read |
+|-----|-----------|---------|--------------|
+| 64 | `0x65` | `FUN_0040d390` | Remote actor/mech add. Reads a server slot byte, maps it through `DAT_00478d98`, copies multiple identity strings into the per-mech struct at `DAT_004f1d30 + index*0x49c`, reads a mech id via `FUN_004013a0(2)`, loads the local `.MEC`/mech data, and marks the actor active. |
+| 65 | `0x66` | `FUN_0040d830` | Primary server→client combat position/velocity sync. Reads one server slot byte, then `type3 x`, `type3 y`, `type2 z/altitude`, and four `type1` motion fields now mapped to facing/heading accumulator, throttle velocity, leg velocity, and a forward/speed magnitude term. It writes `DAT_004f1d4c/50/54`, `DAT_004f1d5c`, `DAT_004f1f7c`, `DAT_004f1f7a`, `DAT_004f20a2`, `DAT_004f1d9e`, and the corresponding delta/absolute-delta fields under the same per-mech struct. |
+| 66 | `0x67` | `FUN_0040de50` | Actor damage-state update. Reads an actor slot byte, maps it through `DAT_00478d98`, then reads a `damageCode` byte and `damageValue` byte through the shared damage helper. If a current projectile/effect is active for that actor, the pair can be queued onto the effect; otherwise it applies directly to the actor mech state. |
+| 67 | `0x68` | `FUN_0040de80` | Local actor damage-state update. No actor slot is present; it applies the next `damageCode` and `damageValue` byte pair to local actor index 0 through the same shared helper as cmd 66. |
+| 68 | `0x69` | `FUN_0040e390` | Projectile/effect spawn. Reads source actor, source weapon slot, optional target actor/attachment, two angle/offset seed fields, and fallback `type3/type3/type2` impact coordinates. It resolves source muzzle geometry, target attachment or fallback impact coordinates, allocates a transient projectile/effect object, and records the new effect id in `DAT_00478df8` for later follow-up. This is visual/effect sync, not yet a decoded damage result. |
+| 69 | `0x6a` | `FUN_0040e570` | Impact/effect at coordinate. Reads an actor slot, skips one byte, reads target/attachment-like bytes and fallback `type3/type3/type2` coordinates, then triggers impact audio/visual helpers. It does not apply mech damage state directly. |
+| 70 | `0x6b` | `FUN_0040e700` | Actor animation/status transition. Reads actor slot + subcommand and fans into animation helpers (`FUN_0043b400`/`470`/`4a0`/`4e0`/`500`/`520`/`540`) for stand/fall/jump/destruction-style transitions. |
+| 71 | `0x6c` | `FUN_0040eae0` | Resets the current projectile/effect globals by setting `DAT_00478df8` and `DAT_00478dfc` to `-1`. This likely brackets or clears the effect context used by cmd 66/67 follow-up damage pairs. |
+| 72 | `0x6d` | `FUN_00445110` | Local combat bootstrap. Reads the scenario/title, local actor slot, terrain/resource point lists, actor identity strings, initial coordinates, and local mech/damage-state block via `Combat_ReadLocalActorMechState_v123`; then sets `DAT_0047ef60 |= 1` and initializes local actor state at `DAT_004f1d30`. This is now traced enough for a conservative prototype builder, but several identity/status fields still need live capture labels. |
+| 73 | `0x6e` | `FUN_0040e2f0` | Actor rate/bias-field update. Reads actor slot plus two bytes, stores each as `(value - 0x2a) * 0x38e` into per-actor fields near `DAT_004f202a`/`DAT_004f202e`, and marks `_DAT_00478df4 = 1`. Exact combat meaning still needs dynamic capture. |
+
+`Combat_Cmd72_InitLocalActor_v123` field flow:
+
+```c
+scenarioTitle = Frame_ReadString();      // copied to DAT_004ee830, max 159 bytes
+localSlot     = Frame_ReadByte();        // DAT_00478d98[localSlot] = 0
+unknownByte0  = Frame_ReadByte();        // consumed, currently unused
+terrainId     = Frame_ReadByte();        // later passed to Combat_SelectTerrainFileSet_v123
+
+// Combat_ReadTerrainPointList_v123
+terrainResourceId = Frame_ReadType(2);
+terrainPointCount = Frame_ReadByte();
+repeat terrainPointCount {
+  pointX = Frame_ReadType(3) - 0x18e4258;
+  pointY = Frame_ReadType(3) - 0x18e4258;
+  pointZ = Frame_ReadType(2);
+}
+
+// Combat_ReadArenaPointList_v123
+arenaPointCount = Frame_ReadByte();
+repeat min(arenaPointCount, 10) {
+  arenaPointX = Frame_ReadType(3) - 0x18e4258;
+  arenaPointY = Frame_ReadType(3) - 0x18e4258;
+}
+repeat remaining arena points { Frame_ReadType(3); Frame_ReadType(3); } // consumed/discarded
+
+globalA       = Frame_ReadType(2);
+globalB       = Frame_ReadType(2);
+globalC       = Frame_ReadType(2);
+headingBias   = Frame_ReadType(1) - 0x0e1c;
+identity0     = Frame_ReadString();      // max 11 bytes; trailing digits parsed into DAT_004f1ff6
+identity1     = Frame_ReadString();      // max 31 bytes
+identity2     = Frame_ReadString();      // max 39 bytes
+identity3     = Frame_ReadString();      // max 15 bytes
+identity4     = Frame_ReadString();      // max 31 bytes
+statusByte    = Frame_ReadByte();
+initialX      = Frame_ReadType(3) - 0x18e4258;
+initialY      = Frame_ReadType(3) - 0x18e4258;
+boundsFlag    = Frame_ReadByte();
+if (boundsFlag != 0) {
+  boundsX = Frame_ReadType(3) - 0x18e4258;
+  boundsY = Frame_ReadType(3) - 0x18e4258;
+}
+extraType2Count = Frame_ReadByte();
+repeat extraType2Count { Frame_ReadType(2); } // consumed, currently unlabeled
+remainingActorCount = Frame_ReadByte();       // if zero, DAT_0047ef60 |= 4
+unknownType1        = Frame_ReadType(1);
+Combat_ReadLocalActorMechState_v123(localActor);
+```
+
+`Combat_ReadLocalActorMechState_v123` then appends the local player's mech-specific state:
+
+```c
+mechId = Frame_ReadType(2);              // loads mechdata\<variant>.MEC
+if (crit_state_extra_count >= -20 && crit_state_extra_count != -21) {
+  repeat 0x15 + crit_state_extra_count { criticalStateByte = Frame_ReadByte(); }
+}
+extraStateCount = Frame_ReadByte();
+repeat extraStateCount { extraStateByte = Frame_ReadByte(); }
+repeat 11 { armorLikeStateByte = Frame_ReadByte(); }
+repeat 8  { internalStateByte = Frame_ReadByte(); }
+ammoStateCount = Frame_ReadByte();
+repeat ammoStateCount { ammoStateValue = Frame_ReadType(1); }
+actorDisplayName = Frame_ReadString();   // max 31 bytes
+```
+
+The static initializer `Combat_InitDamageStateFromMec_v123` copies the `.MEC` maxima into the actor state before those server-supplied bytes arrive: 11 values from `.MEC` offsets `0x1a..0x2e`, one zeroed weapon damage state per weapon, critical-slot defaults from the `.MEC` table at `0xde`, ammo-bin caps from `.MEC` ammo types, and 8 internal-structure maxima from `Combat_GetInternalStructureForSection_v123`. This means a minimal `Cmd72` builder should not omit the variable-length local damage block; it seeds the same state that later `Cmd66`/`Cmd67` mutate.
+
+`FUN_0040d830` field transforms:
+
+```c
+slot     = Frame_ReadByte();       // FUN_00401a60(), maps via DAT_00478d98[slot]
+x        = Frame_ReadType(3) - 0x18e4258;
+y        = Frame_ReadType(3) - 0x18e4258;
+z        = Frame_ReadType(2);
+facing   = (Frame_ReadType(1) - 0x0dc2) * 0xb6; // target DAT_004f1d5c; client sends (facing - 0x3ffc) / 0xb6 + 0x0e1c
+throttle = (0x0e1c - Frame_ReadType(1)) * 0xb6; // target DAT_004f1f7c; sign-inverted relative to cmd9 client send
+legVel   = (Frame_ReadType(1) - 0x0e1c) * 0xb6; // target DAT_004f1f7a
+speedMag = Frame_ReadType(1) - 0x0e1c;          // DAT_004f20a2 and DAT_004f1d9e
+```
+
+Dynamic capture is still needed for signed direction conventions, but the four trailing `type1` fields are no longer generic: the client derives interpolation deltas toward the decoded facing/throttle/leg targets and `FUN_004488e0` applies them into `DAT_004f1d5c`, `DAT_004f1f7c`, and `DAT_004f1f7a`, while `FUN_0042c830` consumes the `DAT_004f20a2`/`DAT_004f1d9e` forward/speed magnitude term. This is no longer an unknown server→client packet family: cmd 65 is the combat position/motion update that complements the client→server cmd 8/9 movement packets in §19.2.
+
+Implementation impact: a minimal combat prototype likely needs the `MMC` welcome/state handoff, then `Cmd72` to seed the local player, `Cmd64` for remote actors/bots, and periodic `Cmd65` actor position updates. `Cmd68`, `Cmd66`/`Cmd67`, and `Cmd70` are the current strongest server-response chain for firing, projectile effects, damage-state updates, and destruction/animation states.
+
+`Combat_Cmd68_SpawnWeaponEffect_v123` field flow:
+
+```c
+sourceActor = DAT_00478d98[Frame_ReadByte()];
+weaponSlot  = Frame_ReadByte();
+
+targetRaw   = Frame_ReadByte();
+targetActor = targetRaw - 1;
+if (targetActor == 9) {
+  targetActor = 0;                       // special local-actor encoding
+} else if (targetActor != -1) {
+  targetActor = DAT_00478d98[targetActor];
+}
+
+targetAttach = Frame_ReadByte() - 1;
+angleSeedA   = Frame_ReadType(1);        // transformed before helper call; helper recomputes angles from source/target geometry
+angleSeedB   = Frame_ReadType(1);
+impactX      = Frame_ReadType(3) - 0x18e4258;
+impactY      = Frame_ReadType(3) - 0x18e4258;
+impactZ      = Frame_ReadType(2);
+```
+
+Helper chain:
+
+| Helper | Current read |
+|--------|--------------|
+| `Combat_CalcProjectilePath_v123` (`0x00427300`) | Resolves the source weapon's muzzle position from the actor mech model, resolves a target attachment if present, otherwise preserves the server-provided impact coordinates, then calls the angle calculator. |
+| `Combat_CalcProjectileAngles_v123` (`0x004271d0`) | Calculates pitch and bearing from source position to target/impact position. |
+| `Combat_CalcProjectileDistance_v123` (`0x004272c0`) | Computes source-to-impact distance when the projectile flags indicate a ranged path. |
+| `Combat_AllocateProjectileEffect_v123` (`0x00427400`) | Allocates a projectile/effect object from `DAT_0047eb10`, stamps source/target actors, weapon slot, angles, coordinates, timing, effect class, and target impact metadata. |
+| `Combat_GetLastProjectileEffectId_v123` (`0x004276e0`) | Returns `DAT_004da2dc`, the projectile/effect slot selected by the allocator. |
+
+`Cmd66` / `Cmd67` damage-state update flow:
+
+```c
+// Cmd66 / wire 0x67
+actorSlot   = Frame_ReadByte();
+actorIndex  = DAT_00478d98[actorSlot];
+damageCode  = Frame_ReadByte();
+damageValue = Frame_ReadByte();
+Combat_ApplyDamagePairOrQueueEffect_v123(actorIndex, actorStruct);
+
+// Cmd67 / wire 0x68
+damageCode  = Frame_ReadByte();
+damageValue = Frame_ReadByte();
+Combat_ApplyDamagePairOrQueueEffect_v123(0, localActorStruct);
+```
+
+The shared helper first checks whether the current projectile/effect id in `DAT_00478df8` is active, owned by the target actor, and has fewer than `0x14` queued pairs. If so, `Combat_QueueProjectileDamagePair_v123` (`0x004276a0`) appends the `(damageCode, damageValue)` pair to the effect object's small pair arrays. Otherwise it applies the pair directly through `Combat_ApplyDamageCodeValue_v123` (`0x0040e100`). Local-actor damage also triggers HUD/audio feedback through `FUN_004461c0(7)` and `FUN_00422260(DAT_00478dfc, 100)`.
+
+`Combat_ClassifyDamageCode_v123` (`0x00407bc0`) partitions the `damageCode` byte relative to the loaded `.MEC` struct:
+
+| Class | Code range / basis | Current read |
+|-------|--------------------|--------------|
+| `0` | `0x00..0x14`, plus `0x28 + weaponCount .. 0x27 + weaponCount + crit_state_extra_count` | Critical/system/mech state update through `Combat_UpdateCriticalDamageState_v123` (`0x0042bd90`). The early range indexes the `.MEC` critical-slot table at `0xde + index*2`; the post-weapon range is bounded by the signed field at `.MEC` offset `0x3c`. |
+| `1` | `0x15..0x1f` | `.MEC` offset-backed section state under the actor struct near offset `0x28`. Indexes map to `.MEC` offsets `0x1a..0x2e`; the first ten match the documented armor fields, while index 10 uses the v1.23 speed parameter at `0x2e`, so it should not be called head armor. The client keeps the lower value when a new value is smaller. |
+| `2` | `0x20..0x27` | Internal-structure state under the actor struct near offset `0xe8`; indexes 0/1 use the arm internal table value, 2/3 legs, 4 center torso, 5/6 side torso, and 7 hardcoded `9`. It can trigger local critical/death flags and visual hit feedback. |
+| `3` | `0x28..0x28 + weaponCount - 1` | Weapon damage/state update through `Combat_UpdateWeaponDamageState_v123` (`0x0042bd10`) and local weapon/TIC HUD refresh. v1.23 weapon ids start at `.MEC` offset `0x3e`, not `0x3c`. |
+| `4` | `0x28 + weaponCount + crit_state_extra_count .. total-1` | Ammo-bin update through `Combat_UpdateAmmoBinState_v123` (`0x0042c020`); local refresh also updates weapons using the same ammo type. The total upper bound is `weaponCount + crit_state_extra_count + 0x28 + ammo_bin_count`. |
+
+The exact labels for the early code ranges still need correlation against `.MEC` fields and live hit capture, but cmd 66/67 are now the first strong server→client damage-result packet path. `Cmd68` makes clients see the shot/effect, `Cmd66`/`Cmd67` carry the damage code/value pairs, and `Cmd70` covers actor animation/status transitions such as stand/fall/jump/destruction-style state changes without itself carrying damage numbers.
+
 ---
 
 ### §19.7 — v1.23 IS.MAP / SOLARIS.MAP Binary Format (CONFIRMED)
@@ -2412,23 +2641,54 @@ Key `MPBTWIN.EXE` v1.23 function addresses discovered this RE session:
 | `0x00401b90` | Outbuf init — writes `ESC '!'` at buffer start |
 | `0x00401bc0` | Combat text write — `len+0x21` byte + raw ASCII (max 84 chars) |
 | `0x00401c20` | `Frame_WriteString` — length-prefixed base-85 string writer |
+
+| `0x00407ba0` | `Combat_GetDamageCodeUpperBound_v123`: total upper bound for classifying weapon/critical/ammo damage-code ranges |
+| `0x00407bc0` | `Combat_ClassifyDamageCode_v123`: partitions cmd-66/67 `damageCode` bytes into critical/system, armor-like, internal-like, weapon, and ammo-bin classes |
 | `0x0040b700` | Scancode → action-index lookup |
 | `0x0040d050` | Third velocity accumulator → `DAT_004f1d5c` |
 | `0x0040d270` | Leg velocity accumulator → `DAT_004f1f7a` (±8190) |
 | `0x0040d2d0` | Throttle velocity accumulator → `DAT_004f1f7c` (±8190) |
 | `0x0040dca0` | **Movement packet builder** (100 ms timer, cmd 8/9) |
-| `0x0040de90` | Sequence + ACK handler — calls ACK stub |
-| `0x0040eb20` | Generic 2-byte command sender: cmd + data |
+
+| `0x0040de50` | `Combat_Cmd66_ActorDamageUpdate_v123`: server cmd-66 actor damage code/value update |
+| `0x0040de80` | `Combat_Cmd67_LocalDamageUpdate_v123`: server cmd-67 local-actor damage code/value update |
+| `0x0040de90` | `Combat_ApplyDamagePairOrQueueEffect_v123`: shared cmd-66/67 damage helper; queues onto current projectile/effect or applies immediately |
+| `0x0040e100` | `Combat_ApplyDamageCodeValue_v123`: applies classified damage code/value to actor mech state |
+| `0x0040e2f0` | `Combat_Cmd73_UpdateActorRateFields_v123`: actor rate/bias-field update; exact meaning pending |
+| `0x0040e230` | `Combat_WriteCmd10ShotGeometry_v123`: client cmd-10 shot geometry write helper; no local flush |
+| `0x0040e570` | `Combat_Cmd69_ImpactEffectAtCoord_v123`: impact/effect-at-coordinate feedback |
+| `0x0040eae0` | `Combat_Cmd71_ResetEffectState_v123`: clears current projectile/effect globals |
+| `0x0040eb20` | `Combat_SendCmd12Action_v123`: generic client cmd-12 action sender |
 | `0x0040eb40` | **ACK stub** — returns 0, no-op |
 | `0x00401a70` | Append CRC to outbuf |
 | `0x00422aa0` | Momentum / jump-jet input processor |
-| `0x00422c50` | Jump jet firing handler; calls `FUN_0040eb20('\x04')` |
+| `0x00422c50` | `Combat_JumpJetInputTick_v123`: jump jet firing handler; calls `Combat_SendCmd12Action_v123('\x04')` |
+| `0x004231c0` | `Combat_InputActionDispatch_v123`: combat UI/input action dispatcher; sends cmd-12 action `0` for weapon fire |
+| `0x00423f10` | `Combat_FireSelectedTicGroup_v123`: local TIC group fire/effect path |
+| `0x00424c70` | `Combat_SelectWeaponSlot_v123`: selected weapon slot/HUD highlighter |
+| `0x004271d0` | `Combat_CalcProjectileAngles_v123`: pitch/bearing from source to target/impact |
+| `0x004272c0` | `Combat_CalcProjectileDistance_v123`: source-to-impact distance |
+| `0x00427300` | `Combat_CalcProjectilePath_v123`: source muzzle + target attachment/fallback impact resolver |
+| `0x00427400` | `Combat_AllocateProjectileEffect_v123`: projectile/effect object allocator |
+| `0x00427650` | `Combat_CanQueueProjectileDamagePair_v123`: validates whether a cmd-66/67 damage pair can attach to the current projectile/effect |
+| `0x004276a0` | `Combat_QueueProjectileDamagePair_v123`: appends a damage code/value pair to the current projectile/effect object |
+| `0x004276e0` | `Combat_GetLastProjectileEffectId_v123`: returns last projectile/effect slot id |
+| `0x0042bd10` | `Combat_UpdateWeaponDamageState_v123`: applies weapon-slot damage state and refreshes local weapon/TIC HUD |
+| `0x0042bd90` | `Combat_UpdateCriticalDamageState_v123`: applies critical/system/mech damage state and side effects |
+| `0x0042c020` | `Combat_UpdateAmmoBinState_v123`: applies ammo-bin damage state and refreshes local weapons using that ammo type |
+| `0x00433910` | `Combat_InitActorRuntimeFromMec_v123`: initializes actor runtime fields from the loaded `.MEC` |
+| `0x00433b50` | `Combat_InitDamageStateFromMec_v123`: initializes armor-like, weapon, critical, ammo, and internal-state maxima from `.MEC` |
+| `0x00433c70` | `Combat_GetInternalStructureForSection_v123`: tonnage-table lookup for internal structure by section; head returns 9 |
 | `0x00433d10` | `.MEC` file loader (`mechdata\*.MEC`) |
 | `0x00434350` | WndProc / main window message handler |
 | `0x00435c10` | TCP flush thunk — CRC + `SendTCPData` + buffer reset |
+| `0x00440270` | `Combat_SelectTerrainFileSet_v123`: selects `terrain\ter_%03d.{bin,dat,pal}` from the cmd-72 terrain id |
+| `0x00440ff0` | `Combat_ReadTerrainPointList_v123`: reads cmd-72 terrain resource id plus x/y/z point list |
 | `0x00442870` | XOR decrypt loop (549 iterations) for `.MEC` |
 | `0x004427f0` | Extract 4-char seed from `.MEC` filename stem |
 | `0x004428a0` | LCG PRNG for `.MEC` XOR key: `s = s*0xf0f1+1; s += rotate16(s)` |
+| `0x00445080` | `Combat_ReadArenaPointList_v123`: reads cmd-72 arena x/y point list, storing at most 10 entries |
+| `0x004456c0` | `Combat_ReadLocalActorMechState_v123`: reads cmd-72 local mech id, initial damage-state blocks, ammo state, and actor display name |
 | `0x00447e10` | HUD direction-indicator updater (NOT a network sender) |
 | `0x00447f70` | Arrow-key throttle/turn dispatcher |
 | `0x0042c7a0` | Rotation / heading calculator (fixed-point) |

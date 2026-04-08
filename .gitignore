@@ -9,13 +9,25 @@ captures
 logs
 play.pcgi
 
+# manual pdf to text
+BT-MAN.txt
+
 # Game data — must be copied from an original MPBT installation.
 # These files are proprietary to Kesmai/EA and must NOT be distributed.
+music/
+terrain/
+sound/
 mechdata/
 MPBT.MSG
 music/
 sound/
 terrain/
+
+# Ken doesn't need these
+docs/
+screenshots/
+AI_HANDOFF.md
+AGENTS.md
 
 # Research / reference materials — proprietary Kesmai/EA source materials and
 # private correspondence.  Place these in research/ for local use; they must

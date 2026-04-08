@@ -49,6 +49,15 @@ MPBT ran on Kesmai's proprietary **ARIES** engine — the same engine that power
 
 No original server binary, source code, or protocol documentation is known to exist.
 
+For an AI-assisted Ghidra workflow aimed at the current post-redirect/world
+targets, see [`docs/ghidra-ai-workflow.md`](docs/ghidra-ai-workflow.md) and
+[`docs/ghidra-ai-prompts.md`](docs/ghidra-ai-prompts.md).
+
+If you are using the `bethington/ghidra-mcp` bridge/plugin stack, the
+tool-specific workflow is in [`docs/ghidra-mcp-workflow.md`](docs/ghidra-mcp-workflow.md),
+[`docs/ghidra-mcp-prompts.md`](docs/ghidra-mcp-prompts.md), and
+[`docs/ghidra-mcp-session-01-world-handshake.md`](docs/ghidra-mcp-session-01-world-handshake.md).
+
 ## Protocol
 
 ### ARIES Transport

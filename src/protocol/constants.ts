@@ -50,8 +50,8 @@ export const RECV_BUFFER_SIZE = 4096;
 // The parser also handles a legacy 4-byte format (type[3] != 0) returning 0x1e.
 
 // ── Message types (bidirectional) ─────────────────────────────────────────────
-// All values CONFIRMED by COMMEG32.DLL FUN_100014e0 switch() dispatch table
-// and FUN_10001420 (login packet sender).
+// All values CONFIRMED by COMMEG32.DLL receive dispatch + login sender
+// (v1.06: FUN_100014e0 / FUN_10001420; v1.23: FUN_10001eb0 / FUN_10001de0).
 export enum Msg {
   // Server → Client
   SYNC          = 0x00, // CONFIRMED — timing sync; triggers WM 0x7f0 in game
@@ -64,8 +64,9 @@ export enum Msg {
   CHAR_LIST     = 0x1e, // CONFIRMED — 12-byte char/world list header; WM 0x7f1
 
   // Client → Server
-  LOGIN         = 0x15, // CONFIRMED — login packet, sent by FUN_10001420 in COMMEG32.DLL
-                        //             12-byte header + payload starting at DAT_1001f888
+  LOGIN         = 0x15, // CONFIRMED — login packet, sent by COMMEG32.DLL
+                        //             v1.06: FUN_10001420, payload DAT_1001f888
+                        //             v1.23: FUN_10001de0, payload DAT_100217d8
                         //             Payload layout (offsets from payload start):
                         //               +0x000 (wire+12): username    (null-padded, field ~112 bytes)
                         //               +0x070 (wire+124): client version string, 80 bytes

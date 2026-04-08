@@ -26,13 +26,13 @@
     "start": "node --env-file=.env dist/server.js",
     "dev": "node --env-file=.env --loader ts-node/esm src/server.ts",
     "watch": "tsc --watch",
-    "gen-pcgi":           "node --loader ts-node/esm src/scripts/gen-pcgi.ts",
+    "gen-pcgi":           "node --loader ts-node/esm tools/gen-pcgi.ts",
     "db:start":           "docker compose up -d db",
     "db:migrate":         "node --env-file=.env --loader ts-node/esm src/db/migrate.ts",
     "db:add-account":     "node --env-file=.env --loader ts-node/esm src/db/add-account.ts",
     "db:edit-account":    "node --env-file=.env --loader ts-node/esm src/db/edit-account.ts",
     "db:delete-account":  "node --env-file=.env --loader ts-node/esm src/db/delete-account.ts",
-    "map:dump":           "node --loader ts-node/esm src/scripts/dump-map.ts"
+    "map:dump":           "node --loader ts-node/esm tools/dump-map.ts"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

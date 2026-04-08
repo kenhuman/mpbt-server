@@ -30,6 +30,7 @@ import {
   buildLoginRequest,
   buildSyncAck,
   buildWelcomePacket,
+  buildCombatWelcomePacket,
 } from './protocol/auth.js';
 import {
   buildCmd36MessageViewPacket,
@@ -65,6 +66,12 @@ import { Logger } from './util/logger.js';
 import { CaptureLogger } from './util/capture.js';
 import { ARIES_KEEPALIVE_INTERVAL_MS, SOCKET_IDLE_TIMEOUT_MS } from './config.js';
 
+import {
+  buildCmd72LocalBootstrapPacket,
+  buildCmd65PositionSyncPacket,
+  MOTION_NEUTRAL,
+} from './protocol/combat.js';
+
 // ── Shared mech catalog (same on-disk data as lobby) ─────────────────────────
 // Loaded once at module import time.  Provides a fallback when a player's
 // launch record is absent (e.g. direct connection to world port in tests).
@@ -81,6 +88,12 @@ try {
 /** Mech ID used when the player's launch record is missing. */
 const FALLBACK_MECH_ID = WORLD_MECHS.length > 0 ? WORLD_MECHS[0].id : 0;
 
+
+/** Fast lookup from mech ID to MechEntry (for extraCritCount etc.). */
+const WORLD_MECH_BY_ID = new Map(WORLD_MECHS.map(m => [m.id, m]));
+
+// Default arena name shown in the window title.
+const DEFAULT_SCENE_NAME = 'Solaris Arena';
 const WELCOME_TEXT       = 'Welcome to the game world.';
 const DEFAULT_MAP_ROOM_ID = 146; // Solaris Starport
 const SOLARIS_SCENE_ROOMS = [
@@ -499,19 +512,18 @@ function handleComstarTextReply(
   const senderComstarId = getComstarId(session);
   const formattedBody   = buildComstarDeliveryText(senderName, clean);
 
-  // Try to find the target in the live player registry first.
   const target = findWorldTargetBySelectionId(players, dialogId);
-
-  if (target && !target.socket.destroyed) {
+  if (target) {
     // Recipient is online — deliver immediately.
     const targetName = getDisplayName(target);
     connLog.info(
       '[world] cmd-21 ComStar (online): from="%s" to="%s" target=%d text=%j',
       senderName, targetName, dialogId, clean,
     );
-    // Cross-session write: use target's socket directly — see players.ts note.
-    target.socket.write(
+    sendToWorldSession(
+      target,
       buildCmd36MessageViewPacket(senderComstarId, formattedBody, nextSeq(target)),
+      'CMD36_COMSTAR_DELIVERY',
     );
     send(
       session.socket,
@@ -671,6 +683,102 @@ function handleRoomMenuSelection(
   updateRoomPresenceStatus(players, session, 5 + booth, connLog);
 }
 
+/**
+ * Send the combat entry bootstrap sequence after the player types "/fight".
+ *
+ * Protocol order (CONFIRMED by Ghidra RE of Main_ModePacketDispatch_v123):
+ *   1. MMC SYNC — raw ARIES packet; triggers client RPS→combat dispatch-table
+ *      switch.  Client calls Main_SetModeName_v123(1) + Combat_InitMode_v123()
+ *      (loads scenes.dat locally — no server data required for that step).
+ *   2. Cmd72   — local-bootstrap game frame using combat CRC seed (0x0A5C45).
+ *      Seeds scenario title, terrain, identity strings, spawn coords, and the
+ *      local mech damage state.  remainingActorCount=0 → solo arena (no bots).
+ *
+ * Unresolved assumptions (safe defaults used):
+ *   • terrainId / terrainResourceId — 1/0 chosen; live capture needed.
+ *   • identity2..4 — empty; purpose in client UI unconfirmed.
+ *   • headingBias  — 0 (MOTION_NEUTRAL added by encoder); live capture needed.
+ *   • globalA/B/C  — 0; purpose unlabelled in Ghidra.
+ */
+function sendCombatBootstrapSequence(
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const { socket } = session;
+  const mechId   = session.selectedMechId ?? FALLBACK_MECH_ID;
+  const callsign = getDisplayName(session);
+
+  // Look up the mech's extra crit count (confirmed by RE of
+  // Combat_ReadLocalActorMechState_v123 @ 0x004456c0 — the client reads
+  // extraCritCount + 21 bytes from the packet, where extraCritCount comes from
+  // the mech's .MEC file at offset 0x3c after decryption).
+  const mechEntry       = WORLD_MECH_BY_ID.get(mechId);
+  const extraCritCount  = mechEntry?.extraCritCount ?? 0;
+  const critBytes       = Math.max(0, extraCritCount + 21);
+
+  // 1. MMC SYNC — plain ARIES packet; no game-frame CRC.
+  send(socket, buildCombatWelcomePacket(), capture, 'COMBAT_WELCOME_MMC');
+
+  // Switch phase *before* sending combat game frames so that any inbound
+  // frames that arrive immediately use the correct CRC seed.
+  session.phase = 'combat';
+
+  // 2. Cmd72 — local bootstrap (combat CRC seed applied by buildGamePacket).
+  const cmd72 = buildCmd72LocalBootstrapPacket(
+    {
+      scenarioTitle:      DEFAULT_SCENE_NAME,
+      localSlot:          0,
+      unknownByte0:       0,
+      terrainId:          1,      // ASSUMPTION: default terrain set
+      terrainResourceId:  0,      // ASSUMPTION: no additional resource
+      terrainPoints:      [],
+      arenaPoints:        [],
+      globalA:            0,
+      globalB:            0,
+      globalC:            0,
+      headingBias:        0,      // ASSUMPTION: 0 → MOTION_NEUTRAL after encode
+      identity0:          callsign.substring(0, 11),
+      identity1:          callsign.substring(0, 31),
+      identity2:          '',     // ASSUMPTION: mech type or empty
+      identity3:          '',     // ASSUMPTION: house or empty
+      identity4:          '',     // ASSUMPTION: unknown; empty safe
+      statusByte:         0,
+      initialX:           0,
+      initialY:           0,
+      extraType2Values:   [],
+      remainingActorCount: 0,     // solo arena — no remote actors
+      unknownType1Raw:    MOTION_NEUTRAL,
+      mech: {
+        mechId,
+        critStateExtraCount:  extraCritCount,
+        criticalStateBytes:   Array<number>(critBytes).fill(0),
+        extraStateBytes:      [],
+        armorLikeStateBytes:  Array<number>(11).fill(0),  // full armor
+        internalStateBytes:   Array<number>(8).fill(0),   // full internals
+        ammoStateValues:      [],
+        actorDisplayName:     callsign.substring(0, 31),
+      },
+    },
+    nextSeq(session),
+  );
+
+  connLog.info('[world] sending Cmd72 combat bootstrap (mech_id=%d callsign="%s")', mechId, callsign);
+  send(socket, cmd72, capture, 'CMD72_COMBAT_BOOTSTRAP');
+
+  // 3. Cmd65 — initial position for the local actor at the origin.
+  //    Gives the client something to render immediately after bootstrap.
+  //    facing/throttle/legVel/speedMag = 0 (stationary, no heading).
+  const cmd65 = buildCmd65PositionSyncPacket(
+    { slot: 0, x: 0, y: 0, z: 0, facing: 0, throttle: 0, legVel: 0, speedMag: 0 },
+    nextSeq(session),
+  );
+  send(socket, cmd65, capture, 'CMD65_INITIAL_POSITION');
+
+  session.combatInitialized = true;
+  connLog.info('[world] combat entry complete for "%s"', callsign);
+}
+
 function handleWorldTextCommand(
   players: PlayerRegistry,
   session: ClientSession,
@@ -722,6 +830,11 @@ function handleMapTravelReply(
 
   if (selectedRoomId === undefined) {
     connLog.warn('[world] cmd-10 map reply missing selected room: context=%d selection=%d', contextId, selection);
+    return;
+  }
+
+  if (!SOLARIS_ROOM_BY_ID.has(selectedRoomId)) {
+    connLog.warn('[world] cmd-10 map reply: unknown selectedRoomId=%d, ignoring', selectedRoomId);
     return;
   }
 
@@ -948,7 +1061,7 @@ function handleWorldGameData(
   connLog: Logger,
   capture: CaptureLogger,
 ): void {
-  if (session.phase !== 'world') {
+  if (session.phase !== 'world' && session.phase !== 'combat') {
     connLog.debug('[world] SYNC in phase=%s (len=%d) — ignoring', session.phase, payload.length);
     return;
   }
@@ -961,7 +1074,7 @@ function handleWorldGameData(
     return;
   }
 
-  if (!verifyInboundGameCRC(payload)) {
+  if (!verifyInboundGameCRC(payload, session.phase === 'combat')) {
     connLog.warn('[world] inbound CRC mismatch (seq=0x%s) — processing anyway', payload[1].toString(16));
   }
 
@@ -1023,9 +1136,23 @@ function handleWorldGameData(
     connLog.debug('[world] cmd-2 (ping-request) — client handles reply via COMMEG32');
 
   } else if (cmdIdx === 4) {
+    if (session.phase === 'combat') {
+      connLog.debug('[world] cmd-4 in combat phase — different encoding, ignoring');
+      return;
+    }
     const parsed = parseClientCmd4(payload);
     if (!parsed) {
       connLog.warn('[world] cmd-4 parse failed');
+      return;
+    }
+    // "/fight" command: trigger combat bootstrap if not already in combat.
+    if (parsed.text.trim().toLowerCase() === '/fight') {
+      if (!session.combatInitialized && session.phase === 'world') {
+        sendCombatBootstrapSequence(session, connLog, capture);
+      } else {
+        connLog.debug('[world] /fight ignored: combatInitialized=%s phase=%s',
+          session.combatInitialized, session.phase);
+      }
       return;
     }
     handleWorldTextCommand(players, session, parsed.text, connLog, capture);
@@ -1038,15 +1165,27 @@ function handleWorldGameData(
     }
     connLog.info('[world] cmd-5 scene action: type=%d', parsed.actionType);
     if (parsed.actionType === 4) {
+      if (session.phase !== 'world') {
+        connLog.warn('[world] cmd-5 travel-map request ignored outside world phase: phase=%s', session.phase);
+        return;
+      }
       sendSolarisTravelMap(session, connLog, capture);
       return;
     }
     connLog.warn('[world] cmd-5 unsupported scene action type=%d', parsed.actionType);
 
   } else if (cmdIdx === 10) {
+    if (session.phase !== 'world') {
+      connLog.debug('[world] cmd-10 ignored outside world phase: phase=%s', session.phase);
+      return;
+    }
     const parsed = parseClientCmd10MapReply(payload);
     if (!parsed) {
       connLog.warn('[world] cmd-10 map reply parse failed');
+      return;
+    }
+    if (parsed.contextId !== SOLARIS_TRAVEL_CONTEXT_ID) {
+      connLog.warn('[world] cmd-10 ignored: unexpected map contextId=%d', parsed.contextId);
       return;
     }
     handleMapTravelReply(players, session, parsed.contextId, parsed.selection, parsed.selectedRoomId, connLog, capture);
@@ -1136,6 +1275,19 @@ function handleWorldGameData(
     }
 
     connLog.debug('[world] cmd-7 ignored: unsupported listId=%d', parsed.listId);
+  } else if (session.phase === 'combat') {
+    // Combat-mode inbound frame (client sends Cmd8/Cmd9 for movement/fire).
+    if (cmdIdx === 20) {
+      // Cmd20 — "examine self": correct combat-mode response is unconfirmed.
+      // Sending the lobby-phase buildCmd20Packet here (world CRC seed) caused
+      // the client to dispatch a garbage byte as "command 13 not handled".
+      // Drop silently until the combat-specific response format is captured.
+      connLog.debug('[world/combat] cmd-20 examine-self — no response (combat response unconfirmed)');
+    } else {
+      // Exact encoding of combat client→server cmd indices is unconfirmed
+      // (live capture needed for Cmd8/9 movement); log and drop.
+      connLog.debug('[world/combat] inbound combat cmd=%d len=%d — not yet handled', cmdIdx, payload.length);
+    }
   } else {
     connLog.debug('[world] cmd=%d — not yet handled (M3 stub)', cmdIdx);
   }
@@ -1285,7 +1437,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
       '[world] client disconnected (phase=%s, bytes=%d)',
       session.phase, session.bytesReceived,
     );
-    if (session.phase === 'world' && session.worldInitialized) {
+    if (session.worldInitialized) {
       notifyRoomDeparture(players, session, connLog);
     }
     players.remove(session.id);

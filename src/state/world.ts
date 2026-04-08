@@ -1,11 +1,13 @@
 /**
  * World state — rooms and connections between them.
  *
- * This is a minimal stub world representing the Solaris Starport arrival area
- * (mentioned in the readme as the "New Player Walkthrough" starting point).
+ * This is still a stub, but it now uses locations and concepts grounded in the
+ * BT-MAN manual instead of a fictional starport.
  *
- * Room layout is entirely fictional until the server protocol is understood
- * well enough to reconstruct the actual Solaris map.
+ * The real game starts players in the International Sector tutorial area and
+ * routes them toward tram travel, bars, ComStar facilities, arena entrances,
+ * and ready rooms. The actual room graph and protocol are still unknown, so
+ * this is a semantic placeholder for future RE work.
  */
 
 export interface Exit {
@@ -14,8 +16,19 @@ export interface Exit {
   targetRoomId: string;
 }
 
+export type RoomKind =
+  | 'street'
+  | 'bar'
+  | 'comstar'
+  | 'tram'
+  | 'arena_foyer'
+  | 'ready_room';
+
 export interface Room {
   id: string;
+  kind: RoomKind;
+  sector: string;
+  district: string;
   name: string;
   description: string;
   exits: Exit[];
@@ -31,52 +44,132 @@ export class World {
   }
 
   private buildStarterWorld(): void {
-    // Solaris Starport — arrival lobby
+    // International Sector tutorial plaza — the manual's starting concept.
     this.addRoom({
-      id: 'starport_arrival',
-      name: 'Solaris Starport Arrival',
-      description: 'The busy arrival hall of the Solaris starport. MechWarriors mill about.',
-      exits: [
-        {
-          direction: 'north',
-          description: 'the main concourse',
-          targetRoomId: 'starport_concourse',
-        },
-      ],
-      players: [],
-    });
-
-    // Main concourse — connecting hub
-    this.addRoom({
-      id: 'starport_concourse',
-      name: 'Solaris Starport Concourse',
+      id: 'international_sector_plaza',
+      kind: 'street',
+      sector: 'International Sector',
+      district: 'Tutorial District',
+      name: 'International Sector Plaza',
       description:
-        'The wide concourse of Solaris City starport. Shops and stables line the walls.',
+        'A broad plaza where new MechWarriors get their bearings before heading to the tram, the bar, or the nearby arenas.',
       exits: [
         {
-          direction: 'south',
-          description: 'the arrival hall',
-          targetRoomId: 'starport_arrival',
+          direction: 'north',
+          description: 'the arena concourse',
+          targetRoomId: 'arena_concourse',
         },
         {
-          direction: 'north',
-          description: 'the mech bay entrance',
-          targetRoomId: 'mech_bay',
+          direction: 'south',
+          description: 'the tram platform',
+          targetRoomId: 'tram_platform',
+        },
+        {
+          direction: 'east',
+          description: 'a public bar',
+          targetRoomId: 'public_bar',
+        },
+        {
+          direction: 'west',
+          description: 'a ComStar facility',
+          targetRoomId: 'comstar_facility',
         },
       ],
       players: [],
     });
 
-    // Mech bay — placeholder
+    // A nearby arena entrance and foyer.
     this.addRoom({
-      id: 'mech_bay',
-      name: 'Mech Bay Entrance',
-      description: 'The entrance to the public mech bays. Technicians work on various mechs.',
+      id: 'arena_concourse',
+      kind: 'arena_foyer',
+      sector: 'International Sector',
+      district: 'Tutorial District',
+      name: 'Arena Concourse',
+      description:
+        'Arena signage and district emblems line the walls. This is where duelists head before entering a ready room.',
       exits: [
         {
           direction: 'south',
-          description: 'the concourse',
-          targetRoomId: 'starport_concourse',
+          description: 'the plaza',
+          targetRoomId: 'international_sector_plaza',
+        },
+        {
+          direction: 'north',
+          description: 'the arena ready room',
+          targetRoomId: 'arena_ready_room',
+        },
+      ],
+      players: [],
+    });
+
+    // Ready room semantics come directly from the manual.
+    this.addRoom({
+      id: 'arena_ready_room',
+      kind: 'ready_room',
+      sector: 'International Sector',
+      district: 'Tutorial District',
+      name: 'Arena Ready Room',
+      description:
+        'A preparation room where duelists choose a mech, pick a side, check status, and declare readiness before battle.',
+      exits: [
+        {
+          direction: 'south',
+          description: 'the arena concourse',
+          targetRoomId: 'arena_concourse',
+        },
+      ],
+      players: [],
+    });
+
+    this.addRoom({
+      id: 'public_bar',
+      kind: 'bar',
+      sector: 'International Sector',
+      district: 'Tutorial District',
+      name: 'Public Bar',
+      description:
+        'A crowded Solaris bar with booths, chatter, and a terminal for rankings and ComStar traffic.',
+      exits: [
+        {
+          direction: 'west',
+          description: 'the plaza',
+          targetRoomId: 'international_sector_plaza',
+        },
+      ],
+      players: [],
+    });
+
+    this.addRoom({
+      id: 'comstar_facility',
+      kind: 'comstar',
+      sector: 'International Sector',
+      district: 'Tutorial District',
+      name: 'ComStar Facility',
+      description:
+        'A quiet office where MechWarriors can handle private messages and other terminal-style services.',
+      exits: [
+        {
+          direction: 'east',
+          description: 'the plaza',
+          targetRoomId: 'international_sector_plaza',
+        },
+      ],
+      players: [],
+    });
+
+    this.addRoom({
+      id: 'tram_platform',
+      kind: 'tram',
+      sector: 'International Sector',
+      district: 'Tutorial District',
+      name: 'Tram Platform',
+      description:
+        'A monorail platform connecting the districts of Solaris City. The manual describes this as the only way to reach arena districts.',
+      exits: [
+        {
+          direction: 'north',
+          description: 'the plaza',
+          targetRoomId: 'international_sector_plaza',
         },
       ],
       players: [],
@@ -92,7 +185,7 @@ export class World {
   }
 
   get startRoomId(): string {
-    return 'starport_arrival';
+    return 'international_sector_plaza';
   }
 
   movePlayer(sessionId: string, fromRoomId: string, toRoomId: string): boolean {

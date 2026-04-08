@@ -10,6 +10,7 @@ export type SessionPhase =
   | 'lobby'         // authenticated; about to look up or create character
   | 'char-creation' // first-login character creation in progress (callsign + allegiance)
   | 'world'         // in the game world (RPS/arena) after REDIRECT
+  | 'combat'        // in a combat arena; client uses combat dispatch table
   | 'closing';      // disconnect in progress
 
 /**
@@ -53,6 +54,8 @@ export interface ClientSession {
   serverSeq: number;
   /** True once the world init sequence has been sent in response to the first world cmd-3. */
   worldInitialized?: boolean;
+  /** True once the combat bootstrap sequence (MMC welcome + Cmd72) has been sent. */
+  combatInitialized?: boolean;
   /**
    * Stable per-connection roster identifier used by world presence packets
    * (Cmd10/Cmd11/Cmd12/Cmd13). This is distinct from accountId and only needs to be

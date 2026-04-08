@@ -6,8 +6,9 @@
  *   1. Server sends LOGIN_REQUEST (type 0x16) immediately on connect.
  *      Payload: empty (0 bytes).
  *
- *   2. Client calls FUN_10001420 which builds and sends a LOGIN packet
- *      (type 0x15) with a 12-byte ARIES header + payload from DAT_1001f888.
+ *   2. Client builds and sends a LOGIN packet (type 0x15) with a 12-byte
+ *      ARIES header. v1.06 uses FUN_10001420 + DAT_1001f888; v1.23 uses
+ *      FUN_10001de0 + DAT_100217d8. The payload layout is unchanged.
  *
  *   3. Server parses the payload:
  *        +0x000  username      null-terminated, field width ~112 bytes
@@ -24,8 +25,9 @@
  *      Total payload = strlen(password) + 325 bytes.
  *
  *   4. After verifying credentials the server sends a SYNC packet (type 0x00)
- *      with a 4-byte timestamp tag.  The client's FUN_100014e0 case-0 handler
- *      forwards raw recv-buffer contents to the game window via WM 0x7f0.
+ *      with a 4-byte timestamp tag. The client's receive-dispatch case 0
+ *      forwards raw recv-buffer contents to the game window via WM 0x7f0
+ *      (v1.06 FUN_100014e0; v1.23 FUN_10001eb0).
  */
 
 import type { ClientSession } from '../state/players.js';
@@ -34,7 +36,8 @@ import { Msg } from './constants.js';
 import type { Logger } from '../util/logger.js';
 
 // ── Layout constants (payload offsets) ────────────────────────────────────────
-// All CONFIRMED by RE of COMMEG32.DLL Set*() export functions and FUN_10001420.
+// All CONFIRMED by RE of COMMEG32.DLL Set*() exports and LOGIN senders
+// (v1.06 FUN_10001420, v1.23 FUN_10001de0).
 const OFF_USERNAME   = 0x000; // null-terminated, up to 64 chars, field ~112 bytes wide
 const OFF_CLIENT_VER = 0x070; // 80-byte client version string field
                               // v1.06: "Kesmai Comm Engine 3.22"
@@ -113,7 +116,8 @@ export function parseLoginPayload(
 /**
  * Build the LOGIN_REQUEST packet (type 0x16).
  * Server sends this immediately on connect; COMMEG32 responds by calling
- * FUN_10001420 which builds and sends the type-0x15 LOGIN packet.
+ * the client LOGIN sender (v1.06 FUN_10001420; v1.23 FUN_10001de0), which
+ * builds and sends the type-0x15 LOGIN packet.
  */
 export function buildLoginRequest(): Buffer {
   return buildPacket(Msg.LOGIN_REQUEST, Buffer.alloc(0));
@@ -151,4 +155,25 @@ export const WELCOME_ESCAPE = '\x1b?MMW Copyright Kesmai Corp. 1991';
  */
 export function buildWelcomePacket(): Buffer {
   return buildPacket(Msg.SYNC, Buffer.from(WELCOME_ESCAPE, 'ascii'));
+}
+
+/**
+ * ARIES escape sequence sent by the server to switch the client from RPS
+ * (world/lobby) dispatch mode to combat dispatch mode.
+ *
+ * CONFIRMED by Ghidra RE of Main_ModePacketDispatch_v123 (v1.23 client):
+ * the client compares the first 0x21 bytes of the received SYNC payload
+ * against DAT_0047d240; on match it calls Main_SetModeName_v123(1) and
+ * Combat_InitMode_v123() which loads scenes.dat locally — no server data
+ * is needed for that step.
+ */
+export const COMBAT_WELCOME_ESCAPE = '\x1b?MMC Copyright Kesmai Corp. 1991';
+
+/**
+ * Build the combat-mode welcome packet (type 0x00, payload = COMBAT_WELCOME_ESCAPE).
+ * Sent by the server to trigger the client RPS→combat dispatch-table switch.
+ * Must be followed immediately by a Cmd72 local-bootstrap game frame.
+ */
+export function buildCombatWelcomePacket(): Buffer {
+  return buildPacket(Msg.SYNC, Buffer.from(COMBAT_WELCOME_ESCAPE, 'ascii'));
 }
