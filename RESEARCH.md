@@ -29,6 +29,7 @@ contributors who want to extend or audit the server emulator.
 19. [Client v1.23 Migration Notes](#19-client-v123-migration-notes)
 20. [Methodology](#19-methodology)
 21. [MEC File Binary Format](#20-mec-file-binary-format)
+22. [Windowed Mode — DirectDraw Rendering Architecture](#22-windowed-mode--directdraw-rendering-architecture)
 
 ---
 
@@ -2188,3 +2189,285 @@ Key `MPBTWIN.EXE` v1.23 function addresses discovered this RE session:
 | `0x0043d500` | VK → scancode resolver |
 | `0x0043d920` | Channel / mode command sender (RPS=0x42, Combat=0x35) |
 | `0x0043eb10` | Text send (cmd 4): RPS vs combat encoding branch |
+
+---
+
+## 22. Windowed Mode — DirectDraw Rendering Architecture
+
+This section documents the game's DirectDraw rendering pipeline as discovered through
+static analysis of `MPBTWIN.EXE` v1.23, performed in the context of diagnosing and
+fixing the black-screen bug in the windowed-mode DirectDraw shim (`ddraw.dll`).
+
+---
+
+### §22.1 — Overview
+
+The game uses a **software rendering architecture**: all pixel data is written by the
+CPU to raw memory buffers, and DirectDraw is used only to allocate those buffers (via
+`CreateSurface` + `Lock`) and to present the final frame to the primary surface
+(via `BltFast` or `Blt`).
+
+DirectDraw is never used for hardware-accelerated blitting between offscreen surfaces
+— all sprite composition is done via `memcpy`-style loops directly on raw pixel bytes.
+This means a windowed-mode shim that replaces DirectDraw surfaces with GDI DIBs will
+work correctly only if it does NOT involve GDI for surface-to-surface copies.
+
+---
+
+### §22.2 — Game Internal Surface Struct
+
+The game wraps each DirectDraw surface in its own internal struct. The pixel descriptor
+sub-struct (allocated at `piVar4[0x13]` inside the main surface struct) has this layout:
+
+```
+Offset  Size  Field
+──────  ────  ──────────────────────────────────────────────────────────────────
++0x00   4     void* pixels      ← raw pixel pointer from Lock lpSurface
++0x04   4     int   pitch       ← lPitch from Lock (game stores pitch-1 at +4,
+                                  and width-1 at +4; exact interpretation depends
+                                  on caller — treat as stride in bytes)
++0x08   4     int   height-1    ← surface height minus 1
++0x0C   4     (reserved zero)
++0x10   4     (reserved zero)
++0x14   4     IDirectDrawSurface*  ← surface pointer from CreateSurface
+```
+
+The outer game surface struct (0x1484 bytes, allocated by `FUN_0042f7c0`) stores a
+pointer to the pixel descriptor at offset `[0x13]` (i.e. `piVar4[0x4c]` in 32-bit
+pointer arithmetic since indices scale by 4).
+
+---
+
+### §22.3 — Key Functions
+
+#### `FUN_0042f420` — Main render context initializer
+
+```c
+DAT_0047a378 = FUN_0042f7c0(0, 0, 0x280, 0x1e0, 0);  // 640×480 game surface struct
+DAT_0047a37c = DAT_0047a378;
+DAT_004f66c4 = *(int*)DAT_0047a378[0x13] + 0x2b2dc;    // HUD overlay pointer
+```
+Called once at startup to create the main 640×480 render surface.
+
+---
+
+#### `FUN_0042f7c0` — Game surface struct allocator
+
+- Allocates `0x1484` bytes via `FUN_0046c620(0x1484)`, zeroed
+- Records pointer in global table at `(&DAT_004f5bf0)[iVar8]`;
+  increments counter `DAT_004f5c34`
+- Stores `height` at `piVar4[4]`, `width` at `piVar4[5]`
+- Allocates pixel descriptor sub-struct (`0x18` bytes) at `piVar4[0x13]`:
+  - `*(+0x8)` = height−1
+  - `*(+0x4)` = width−1
+- Calls `FUN_00443e60(piVar4[0x13], piVar4[0x13]+4, width, height)` to create the
+  actual DirectDraw surface and populate the pixel descriptor
+- Returns `piVar4` — the game surface struct pointer
+
+---
+
+#### `FUN_00443e60` — DD surface creator + pixel-bits extractor
+
+```
+param_1 = output: pixel pointer (void*)
+param_2 = output: pitch (int)
+param_3 = width
+param_4 = height
+```
+
+Sequence:
+1. Builds `DDSURFACEDESC` with `dwSize=0x6c`, `dwFlags=0x1007`, 8bpp
+   (`dwRGBBitCount=8`)
+2. `(*DAT_004e0a40)->CreateSurface(desc, &surf_out, 0)` — IDirectDraw vtable +0x18
+3. `surf_out->Lock(0, desc, 1, 0)` — IDirectDrawSurface vtable +0x64
+4. Copies `lpSurface` → `*param_1`, `lPitch` → `*param_2`
+5. `surf_out->Unlock(0)` — IDirectDrawSurface vtable +0x80
+6. Returns `surf_out` (stored by caller at pixel descriptor `+0x14`)
+
+**Key insight:** This function calls our shim's `Lock` to get `dib().bits` and stores
+it as the game's raw pixel pointer. The game then writes all rendering directly to
+that address. The DIB bits pointer IS the game's render target.
+
+---
+
+#### `FUN_00437f70` — Battle render buffer init
+
+```c
+DAT_004f0628 = &DAT_004ef6d0;   // battle render buffer = static pixel descriptor
+```
+`DAT_004ef6d0` is a separate pixel descriptor struct used for the battle/HUD
+compositing pass.
+
+---
+
+#### `FUN_004439d0` — Full-screen colour fill
+
+Called once per frame before rendering begins:
+```c
+// calls primary surface Blt with DDBLT_COLORFILL, src = NULL
+(*DAT_0047a7ec)->Blt(&full_rect, NULL, NULL, 0x1000400, &fx_with_fill_color);
+// rect = (0, 0, 0x27f, 0x1df) = 640×480
+```
+`DDBLT_COLORFILL = 0x400`. The `fx.dwFillColor` is the background fill index (8bpp
+palette index). A shim that does not implement the `src=NULL` / `DDBLT_COLORFILL`
+path will leave the primary surface filled with garbage from the previous frame.
+
+---
+
+#### `FUN_00430590` — Lobby render loop
+
+1. Creates back-buffer via
+   `FUN_00443e60(&DAT_004da2f0, &DAT_004da2f4, 0x280, 0x1e0)` →
+   stored at `DAT_004da2f8`
+2. Iterates all game surface structs in `DAT_004f5bf0[0..DAT_004f5c34]`
+3. Calls `FUN_00453d07` to software-blit each sprite into the back-buffer
+4. Calls `FUN_00443b30` → `primary->BltFast(DAT_0047a7ec, back_surf, &rect, …)` to
+   present
+
+---
+
+#### `FUN_00453d07` — Software sprite blit
+
+Pure CPU copy between two game pixel descriptor structs. No DirectDraw is involved.
+Reads `pixels` pointer directly from the struct and uses `memcpy`/loop to copy rows.
+
+---
+
+#### `FUN_0040b040` — Terrain tile renderer
+
+Raw pixel copy loop:
+```c
+src = *(param_2 + 0x18);            // tile data pointer from tile struct
+dst = param_1[0] + computed_offset; // game pixel buffer base + offset
+// inner loop: memcpy rows of tile pixels
+```
+All writes go directly to the raw pixel buffer; no DirectDraw calls.
+
+---
+
+### §22.4 — Key Globals (Rendering)
+
+| Address | Suggested Name | Description |
+|---------|---------------|-------------|
+| `0x0047a378` | `g_renderMainCtx` | Main game surface struct ptr (640×480) |
+| `0x0047a37c` | `g_renderMainCtxCopy` | Mirror of `g_renderMainCtx` |
+| `0x004f0628` | `g_renderBattleBuf` | Battle render buffer ptr (= `&DAT_004ef6d0`) |
+| `0x004ef6d0` | `g_battlePixDesc` | Battle pixel descriptor `{bits*, pitch, h-1, …, IDD*}` |
+| `0x004da2f0` | `g_renderBackBits` | Back-buffer pixel pointer (from Lock in FUN_00443e60) |
+| `0x004da2f4` | `g_renderBackPitch` | Back-buffer pitch (from Lock) |
+| `0x004da2f8` | `g_renderBackSurf` | Back-buffer `IDirectDrawSurface*` |
+| `0x0047a7ec` | `g_renderPrimary` | Primary display `IDirectDrawSurface*` |
+| `0x0047a7e4` | `g_renderBltMode` | 0 = `BltFast`, non-zero = `Blt` with explicit rects |
+| `0x004e0a40` | `g_ddObject` | `IDirectDraw*` main DirectDraw object |
+| `0x004f5c34` | `g_surfaceCount` | Count of game surface structs allocated |
+| `0x004f5bf0` | `g_surfaceTable` | Array of game surface struct ptrs |
+| `0x004f66c4` | `g_hudOverlayPtr` | HUD/overlay pixel region (main ctx + 0x2b2dc) |
+| `0x0047a7c8` | `g_renderFlags` | bit0=render enabled, bit1=quit |
+| `0x0047d05c` | `g_gameState` | 0-2=no render, 3=lobby, 4=battle |
+| `0x0047ef60` | `g_state4Guard` | bit0 must be set to enter combat render path |
+
+---
+
+### §22.5 — IDirectDrawSurface Vtable Offsets (observed)
+
+These vtable byte-offsets were confirmed from the game's assembly and match a standard
+`IDirectDrawSurface` COM vtable (IUnknown at 0/4/8, then DD methods):
+
+| Byte offset | Method |
+|------------|--------|
+| `+0x18` | `IDirectDraw::CreateSurface` |
+| `+0x64` | `IDirectDrawSurface::Lock` |
+| `+0x80` | `IDirectDrawSurface::Unlock` |
+| `+0x68` | `IDirectDrawSurface::BltFast` (inferred from §22.3 render loop) |
+| `+0x14` | `IDirectDrawSurface::Blt` (inferred; `DDBLT_COLORFILL` path) |
+
+---
+
+### §22.6 — Black Screen Root Cause and Fix
+
+**Root cause:**  
+The game creates all offscreen surfaces at startup after the DirectDraw palette has
+been created. In the windowed-mode shim (`ddraw.dll`), each `FakeSurface` is backed
+by a GDI DIB section. When the shim's `Blt` / `BltFast` implementation used GDI's
+`BitBlt(dst.hdc, …, src.hdc, …, SRCCOPY)` to copy between two 8bpp DIBs, GDI
+performed **palette-indexed colour translation**: it read the source DIB's colour
+table and matched each source palette index to the closest colour in the destination
+palette.
+
+The offscreen surface DIBs were created (via `CreateDIBSection`) after
+`IDirectDrawPalette::SetEntries` had been called a second time with an all-zeros
+palette (a "wipe" call that precedes the real palette load). Because `CreateDIBSection`
+copies the current colour table into the DIB at creation time, the offscreen DIBs had
+all-zero colour tables. GDI's 8bpp→8bpp `BitBlt` therefore mapped every source index
+to `RGB(0,0,0)` — black — regardless of the actual pixel byte values.
+
+The primary-surface DIB received the final correct palette (after the wipe), so its
+colour table was valid. But by then all intermediate blits had already been colour-matched
+against the zero table.
+
+**Why the cursor was visible:**  
+The cursor surface (address `0x04328368`, 1×12 pixels) was tiny and written via a
+direct `Lock` call *after* the real palette was loaded, so its underlying DIB happened
+to get created with a non-zero colour table — or its single non-zero pixel value
+happened to survive the mapping.
+
+**Fix — `FakeSurface::Blt` / `BltFast`:**  
+Replace `BitBlt` with raw `memcpy` over the DIB bits arrays. For 8bpp surfaces the
+pixel bytes are palette indices, not colours; no colour translation is desired. The
+row-by-row `memcpy` copies raw index bytes without any GDI involvement:
+
+```cpp
+// 8bpp raw-copy path (replaces BitBlt)
+if (g_bpp == 8 && fs->dib().bits && dib().bits) {
+    BYTE* dstP = (BYTE*)dib().bits + dy * dib().pitch + dx;
+    BYTE* srcP = (BYTE*)fs->dib().bits + sy * fs->dib().pitch + sx;
+    int rowW = min(sw, dib().w - dx);
+    for (int r = 0; r < sh && (dy+r) < dib().h; ++r) {
+        memcpy(dstP, srcP, rowW);
+        dstP += dib().pitch;
+        srcP += fs->dib().pitch;
+    }
+}
+```
+
+**Fix — `DDBLT_COLORFILL` support:**  
+`FUN_004439d0` calls `primary->Blt(…, NULL, NULL, DDBLT_COLORFILL, &fx)` once per
+frame to clear the background. The original shim returned `S_OK` as a no-op when
+`src == NULL`. The fix fills the destination rectangle with `fx.dwFillColor` using
+`memset`:
+
+```cpp
+if (!src && fx && (flags & DDBLT_COLORFILL)) {
+    BYTE col = (BYTE)fx->dwFillColor;
+    for (int row = dy; row < dy + dh && row < dib().h; ++row)
+        memset(b + row * dib().pitch + dx, col, dw);
+    if (m_isPrimary) BlitToWindow();
+    return S_OK;
+}
+```
+
+Both fixes are implemented in `mpbt-launcher/native/ddraw.cpp` and deployed to
+`client-1.23/ddraw.dll`.
+
+---
+
+### §22.7 — New Appendix A Entries (MPBTWIN.EXE v1.23)
+
+The following functions and data labels were identified during the windowed-mode
+rendering investigation and should be considered canonical names:
+
+**Functions:**
+
+| Suggested name | Address | Purpose |
+|---------------|---------|---------|
+| `Render_InitMainCtx` | `0x0042f420` | Creates 640×480 main render context at `g_renderMainCtx` |
+| `Render_AllocSurfaceStruct` | `0x0042f7c0` | Allocates 0x1484-byte game surface struct; calls `Render_CreateSurface` |
+| `Render_CreateSurface` | `0x00443e60` | Creates DD offscreen surface; stores `bits` at `*param_1`, `pitch` at `*param_2` |
+| `Render_InitBattleBuffers` | `0x00437f70` | Sets `g_renderBattleBuf = &g_battlePixDesc` |
+| `Render_LobbyFrame` | `0x00430590` | Lobby render loop: create back-buffer, blit sprites, present |
+| `Render_SceneInit` | `0x00446060` | Full scene initializer: colour-fill, sprite init, lobby frame |
+| `Render_ColorFill` | `0x004439d0` | Full-screen `DDBLT_COLORFILL` on `g_renderPrimary` |
+| `Render_SpriteBlit` | `0x00453d07` | Software sprite blit between raw game pixel descriptors (no DD) |
+| `Render_SurfFill` | `0x00453c28` | Fills a game pixel buffer with a constant byte value |
+| `Render_TileDraw` | `0x0040b040` | Terrain tile renderer: raw pixel copy to game pixel buffer |
+| `Render_MapDraw` | `0x00430730` | Terrain map: calls `Render_TileDraw` for each tile |

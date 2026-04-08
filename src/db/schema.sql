@@ -8,8 +8,17 @@ CREATE TABLE IF NOT EXISTS accounts (
     id            SERIAL PRIMARY KEY,
     username      VARCHAR(64)  NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
+    email         VARCHAR(255),
+    is_admin      BOOLEAN      NOT NULL DEFAULT FALSE,
+    suspended     BOOLEAN      NOT NULL DEFAULT FALSE,
+    banned        BOOLEAN      NOT NULL DEFAULT FALSE,
     created_at    TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
+
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS email     VARCHAR(255);
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS is_admin  BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS suspended BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS banned    BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Case-insensitive unique username (lower(username) matches lookup in accounts.ts).
 CREATE UNIQUE INDEX IF NOT EXISTS accounts_username_lower_uq
@@ -47,6 +56,21 @@ CREATE TABLE IF NOT EXISTS messages (
     sent_at              TIMESTAMPTZ  NOT NULL DEFAULT now(),
     delivered_at         TIMESTAMPTZ           -- NULL until written to recipient's socket
 );
+
+-- articles: news and announcements published on the website.
+CREATE TABLE IF NOT EXISTS articles (
+    id           SERIAL PRIMARY KEY,
+    slug         VARCHAR(128) NOT NULL,
+    title        VARCHAR(255) NOT NULL,
+    summary      TEXT         NOT NULL,
+    body         TEXT         NOT NULL,
+    author_id    INTEGER      NOT NULL REFERENCES accounts(id) ON DELETE SET NULL,
+    published_at TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    created_at   TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS articles_slug_uq ON articles (slug);
+CREATE INDEX         IF NOT EXISTS articles_published_at_idx ON articles (published_at DESC);
 
 -- Fast lookup: pending messages for a given recipient (most common query).
 CREATE INDEX IF NOT EXISTS messages_recipient_undelivered_idx
