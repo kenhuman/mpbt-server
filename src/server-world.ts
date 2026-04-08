@@ -480,9 +480,16 @@ function sendPersonnelRecord(
   session.worldInquiryTargetId = resolvedTargetId;
   session.worldInquiryPage = page;
 
+  // The client's Cmd14 handler looks up the handle for the record in the room
+  // presence table (seeded by Cmd10/Cmd13), which is keyed by worldRosterId.
+  // Sending getComstarId (100000+accountId) as comstarId results in a lookup
+  // miss → "Handle = null" and the client falls back to its own callsign.
+  // The real ComStar ID is already shown in the body lines ('ComStar  : N').
+  const presenceId = target.worldRosterId ?? 0;
+
   connLog.info(
-    '[world] sending Cmd14 personnel record: target=%d handle="%s" page=%d',
-    resolvedTargetId,
+    '[world] sending Cmd14 personnel record: presenceId=%d handle="%s" page=%d',
+    presenceId,
     getDisplayName(target),
     page,
   );
@@ -490,7 +497,7 @@ function sendPersonnelRecord(
     session.socket,
     buildCmd14PersonnelRecordPacket(
       {
-        comstarId:     resolvedTargetId,
+        comstarId:     presenceId,
         battlesToDate: 0,
         lines:         buildPersonnelRecordLines(target, page),
       },
@@ -819,7 +826,6 @@ function handleWorldTextCommand(
 
   for (const other of players.inRoom(session.roomId)) {
     if (
-      other.id === session.id ||
       other.phase !== 'world' ||
       !other.worldInitialized ||
       other.socket.destroyed
