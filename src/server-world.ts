@@ -34,6 +34,7 @@ import {
 } from './protocol/auth.js';
 import {
   buildCmd36MessageViewPacket,
+  buildCmd37OpenComposePacket,
   buildMenuDialogPacket,
   parseClientCmd4,
   parseClientCmd5SceneAction,
@@ -457,9 +458,16 @@ function sendPersonnelRecord(
     connLog.warn('[world] personnel record target not found: id=%d page=%d', targetId, page);
     send(
       session.socket,
-      buildCmd3BroadcastPacket('Personnel record unavailable.', nextSeq(session)),
+      buildCmd14PersonnelRecordPacket(
+        {
+          comstarId: targetId,
+          battlesToDate: 0,
+          lines: ['Status   : Offline', 'Record   : Unavailable', '', '', '', ''],
+        },
+        nextSeq(session),
+      ),
       capture,
-      'CMD3_PERSONNEL_MISSING',
+      'CMD14_PERSONNEL_OFFLINE',
     );
     return;
   }
@@ -1262,8 +1270,14 @@ function handleWorldGameData(
 
       if (parsed.selection === 1) {
         connLog.info(
-          '[world] inquiry submenu: local ComStar compose expected for target=%d',
+          '[world] inquiry submenu: sending Cmd37 open-compose for target=%d',
           targetId,
+        );
+        send(
+          session.socket,
+          buildCmd37OpenComposePacket(targetId, nextSeq(session)),
+          capture,
+          'CMD37_OPEN_COMPOSE',
         );
         return;
       }
