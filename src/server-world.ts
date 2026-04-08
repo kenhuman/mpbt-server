@@ -69,6 +69,8 @@ import { ARIES_KEEPALIVE_INTERVAL_MS, SOCKET_IDLE_TIMEOUT_MS } from './config.js
 
 import {
   buildCmd72LocalBootstrapPacket,
+  buildCmd62CombatStartPacket,
+  buildCmd64RemoteActorPacket,
   buildCmd65PositionSyncPacket,
   MOTION_NEUTRAL,
 } from './protocol/combat.js';
@@ -739,7 +741,7 @@ function sendCombatBootstrapSequence(
       terrainResourceId:  0,      // ASSUMPTION: no additional resource
       terrainPoints:      [],
       arenaPoints:        [],
-      globalA:            0,
+      globalA:            3612,  // avoids div-by-zero in Cmd65 handler (RE: checkpoint 019-021)
       globalB:            0,
       globalC:            0,
       headingBias:        0,      // ASSUMPTION: 0 → MOTION_NEUTRAL after encode
@@ -752,7 +754,7 @@ function sendCombatBootstrapSequence(
       initialX:           0,
       initialY:           0,
       extraType2Values:   [],
-      remainingActorCount: 0,     // solo arena — no remote actors
+      remainingActorCount: 1,     // 1 remote bot actor follows (Cmd64 below)
       unknownType1Raw:    MOTION_NEUTRAL,
       mech: {
         mechId,
@@ -760,8 +762,14 @@ function sendCombatBootstrapSequence(
         criticalStateBytes:   Array<number>(critBytes).fill(0),
         extraStateBytes:      [],
         armorLikeStateBytes:  Array<number>(11).fill(0),  // full armor
-        internalStateBytes:   Array<number>(8).fill(0),   // full internals
-        ammoStateValues:      [],
+        // internalStateBytes[i] must be non-zero for each weapon slot that uses
+        // mec[0x8e+slot*2] == i as the ammo-type/IS index (RE: FUN_0042c200).
+        // Indices 4 and 7 are also required non-zero by the IS gate (FUN_0042bb00).
+        // ANH-1A mec[0x8e] values = [1,0,6,5,1,0,4,4] → indices 0,1,4,5,6 active.
+        internalStateBytes:   [100, 100, 100, 100, 12, 100, 100, 9],
+        // ANH-1A has 4 ammo bins, all serving weapon type 8 (mec[0x202+j*2]=8).
+        // FUN_0042c200 checks actor[0x1e6+bin_index*2] > 0 before allowing fire.
+        ammoStateValues:      [],  // let client use mec defaults; avoids display showing 400/slot
         actorDisplayName:     callsign.substring(0, 31),
       },
     },
@@ -771,7 +779,24 @@ function sendCombatBootstrapSequence(
   connLog.info('[world] sending Cmd72 combat bootstrap (mech_id=%d callsign="%s")', mechId, callsign);
   send(socket, cmd72, capture, 'CMD72_COMBAT_BOOTSTRAP');
 
-  // 3. Cmd65 — initial position for the local actor at the origin.
+  // 3. Cmd64 — add remote bot actor at slot 1.
+  const cmd64 = buildCmd64RemoteActorPacket(
+    {
+      slot:          1,
+      actorTypeByte: 0,
+      identity0:     'Opponent',
+      identity1:     'Opponent',
+      identity2:     '',
+      identity3:     '',
+      identity4:     '',
+      statusByte:    0,
+      mechId:        mechId,  // same mech type as player
+    },
+    nextSeq(session),
+  );
+  send(socket, cmd64, capture, 'CMD64_BOT_ACTOR');
+
+  // 4. Cmd65 — initial position for the local actor (slot 0) at the origin.
   //    Gives the client something to render immediately after bootstrap.
   //    facing/throttle/legVel/speedMag = 0 (stationary, no heading).
   const cmd65 = buildCmd65PositionSyncPacket(
@@ -779,6 +804,20 @@ function sendCombatBootstrapSequence(
     nextSeq(session),
   );
   send(socket, cmd65, capture, 'CMD65_INITIAL_POSITION');
+
+  // 5. Cmd65 — initial position for the bot (slot 1), 300000 units north (open arena space).
+  const cmd65Bot = buildCmd65PositionSyncPacket(
+    { slot: 1, x: 0, y: 0, z: 300000, facing: 0, throttle: 0, legVel: 0, speedMag: 0 },
+    nextSeq(session),
+  );
+  send(socket, cmd65Bot, capture, 'CMD65_BOT_POSITION');
+
+  // 6. Cmd62 — "all actors ready" / combat-start signal.
+  //    Clears DAT_0047ef60 bit 0x20, which blocks SPACEBAR weapon fire.
+  //    MUST be sent after all Cmd64/Cmd65 packets.
+  const cmd62 = buildCmd62CombatStartPacket(nextSeq(session));
+  send(socket, cmd62, capture, 'CMD62_COMBAT_START');
+
 
   session.combatInitialized = true;
   connLog.info('[world] combat entry complete for "%s"', callsign);
@@ -1167,6 +1206,17 @@ function handleWorldGameData(
     if (parsed.text.trim().toLowerCase() === '/fight') {
       if (!session.combatInitialized && session.phase === 'world') {
         sendCombatBootstrapSequence(session, connLog, capture);
+        session.botPositionTimer = setInterval(() => {
+          if (session.socket.destroyed || !session.socket.writable) return;
+          send(session.socket,
+            buildCmd65PositionSyncPacket(
+              { slot: 1, x: 0, y: 0, z: 300000, facing: 0, throttle: 0, legVel: 0, speedMag: 0 },
+              nextSeq(session),
+            ),
+            capture, 'CMD65_BOT_POSITION',
+          );
+        }, 1000);
+        session.botPositionTimer.unref();
       } else {
         connLog.debug('[world] /fight ignored: combatInitialized=%s phase=%s',
           session.combatInitialized, session.phase);
@@ -1462,6 +1512,9 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     worldCaptures.delete(session.id);
     if (keepaliveTimer !== undefined) {
       clearInterval(keepaliveTimer);
+    }
+    if (session.botPositionTimer !== undefined) {
+      clearInterval(session.botPositionTimer);
     }
     capture.close();
   });
