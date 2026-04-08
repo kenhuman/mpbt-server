@@ -67,7 +67,7 @@ These files are gitignored — place them in `research/` for local use.
 | Parse real `.MEC` files → `src/data/mechs.ts` | ✅ | `loadMechs()` scans `mechdata/*.MEC`, assigns correct `mech_id` from MPBT.MSG variant table; `mechType` field hardcoded to 0 pending M2 binary RE; `variant`/`name` empty → client falls back to its own MPBT.MSG lookup |
 | Cmd 20 — mech examine/stats response | ✅ | Single mode=2 packet with direct stats text built by `buildMechExamineText()` from `MECH_STATS`; `0x5C` (`\`) is the line separator (`FUN_00433310` NULs it before rendering); `#NNN` shortcode is NOT used — our MPBT.MSG has incomplete/stale stats data |
 | Cmd `0x1D` — cancel/ESC in menu dialogs | ✅ | Resolved — server re-sends mech list; sending nothing freezes client |
-| ACK reply for seq > 42 | 🔬 | Trigger condition documented in RESEARCH.md §9; reply format unknown |
+| ACK reply for seq > 42 | 🔬 | Trigger condition documented in RESEARCH.md §9; v1.23 RE confirms `FUN_0040eb40` is a no-op stub — no ACK is sent by the combat client in v1.23. Server must not require combat ACKs. |
 
 **Verification:** Connect real `MPBTWIN.EXE`; press `X` on a mech (stats appear), press `ESC` in dialog (no disconnect), browse the first 20 mechs without crash.
 
@@ -148,12 +148,12 @@ This milestone is pure Ghidra work. No code is written here — findings go into
 |---|---|---|
 | Room broadcast | 🔧 | Same-room presence seeds the roster with `Cmd10`, then uses `Cmd13` arrival and `Cmd11(status=0)` departure for incremental updates. World `cmd-4` free-text relay is implemented as room-local chat fan-out to other clients via `Cmd3`. Validated with the local two-client socket harness and a one-client `MPBTWIN.EXE` launch. Pending: real multi-client GUI verification. |
 | Player join / leave events | 🔧 | Same-room `Cmd10` / `Cmd13` / `Cmd11(status=0)` path is implemented and passes the local two-client socket smoke harness. Social-room status transitions are partially implemented: `Cmd7(listId=3)` `selection=0` grabs a booth, `selection=2` stands, `selection>=3` joins booth `selection-2`, with `Cmd11(status=5..12)` updating the roster table. Pending: real-client behavior with multiple GUI clients. |
-| F7 — team / lance channel | ❌ | Arena-only; requires `Cmd8` team assignment — moved to M7 |
-| F8 — all-comm / chat-window toggle | ❌ | Arena-only; wire format unknown — moved to M7 |
-| ComStar DM — store and deliver | 🔧 | `Cmd36` delivers received messages with a nonzero reply target; sender uses client `cmd 21` to submit text; the local `listId=1000` submenu can open compose without a server round-trip. Pending: offline persistence, unread delivery on login, exact message-body formatting, and real-GUI confirmation of the `Reply` flow. |
+| F7 — team / lance channel | ❌ | Arena-only; requires `Cmd8` team assignment — moved to M7. v1.23 RE (§19.4) confirms F7 does NOT emit a network packet — it only toggles the local chat-channel UI indicator. Channel selection is implicit via the mode command (`FUN_0043d920`). |
+| F8 — all-comm / chat-window toggle | ❌ | Arena-only; v1.23 RE (§19.4) confirms F8 does NOT emit a network packet — purely local UI state toggle (same `FUN_0042dc30` visual handler as F7). Moved to M7. |
+| ComStar DM — store and deliver | ✅ | `Cmd36` delivers to online recipients immediately. Offline messages are persisted to a `messages` DB table (`src/db/messages.ts`: `storeMessage` / `fetchUndeliveredMessages` / `markDelivered`). The message body is stored pre-formatted and delivered on the recipient's next world login (cmd-3 trigger). Offline detection: `100_000 < dialogId < 900_000` → `recipientAccountId = dialogId − 100_000`. Run `npm run db:migrate` after pulling to create the new table. Pending: real-GUI confirmation of the `Reply` flow. |
 | All-roster query | 🔧 | KP5 → `Cmd7(listId=3, selection=1)` sends `Cmd48_KeyedTripleStringList` (`0x51`) with live world sessions as rows; row picks open the inquiry submenu at `listId=1000`; `Cmd7(0x3f2, target_id + 1)` opens personnel data. Pending: confirm local `1000` submenu behavior against the real GUI client. |
 
-**Verification:** Local direct world-session smoke now covers `Cmd48` all-roster listing, row-pick inquiry submenu, `cmd 21` text submit, `Cmd36` inbound message delivery to the selected online target, and sender acknowledgment.
+**Verification:** Local direct world-session smoke now covers `Cmd48` all-roster listing, row-pick inquiry submenu, `cmd 21` text submit, `Cmd36` inbound message delivery to the selected online target, sender acknowledgment, and offline message queuing + delivery-on-login via the `messages` DB table.
 
 ---
 
@@ -167,8 +167,8 @@ The world uses two distinct room types: **bar** (social spaces, Tier Ranking ter
 
 | Task | Status | Notes |
 |---|---|---|
-| `SOLARIS.MAP` binary format RE | 🔬 | Fully decode record structure to extract room IDs, type flags, exits, and map coordinates |
-| RE movement protocol | 🔬 | Client → server movement commands; server → client position/environment updates |
+| `SOLARIS.MAP` binary format RE | � | **DECODED** (RESEARCH.md §19.7): 2-byte LE record_count header; each record = 18-byte fixed prefix (room_id, faction, raw_x, raw_y, 4×flags) + uint8 name_len + name chars + uint8 desc_len + desc chars. IS.MAP display: `x/3+380`, `y/−3+248`; SOLARIS.MAP: identity. Needs implementation in room-loader. |
+| RE movement protocol | 🔧 | **DECODED** (RESEARCH.md §19.2): client→server timer-based (100 ms). Cmd 8 (coasting): X(3w)+Y(3w)+heading(2w)+adj_vel(1w)+rotation(1w). Cmd 9 (moving): X(3w)+Y(3w)+heading(2w)+turn(1w)+0xe1c(1w)+throttle(1w)+leg(1w)+rotation(1w). Bias constant=0xe1c (3612), divisor=0xb6 (182). Server→client position packets still 🔬. |
 | Tram / monorail RE | 🔬 | Cross-sector navigation shortcut — client command format unknown |
 | Room model from `SOLARIS.MAP` | ❌ | Replace stub `World` with real rooms (bar / arena types), exits, and coordinates decoded from map files |
 | Server-side position tracking | ❌ | Extend `src/state/world.ts`; track current room + coordinates per player |
@@ -189,7 +189,7 @@ The world uses two distinct room types: **bar** (social spaces, Tier Ranking ter
 | RE weapon fire packets | 🔬 | Client → server fire command; server → client hit/miss result |
 | RE TIC system | 🔬 | Three Targeting Interlock Circuits (A/B/C); `[`/`]`/`\\` fire each; Space fires selected single weapon — wire format unknown |
 | RE damage model | 🔬 | Location-based armor/internal structure; heat states: green → yellow (system degradation) → red → shutdown |
-| RE jump jets | 🔬 | Fuel-based: depletes on jump, regenerates over time; also consumed while turning/accelerating in-flight; damaged jets reduce max jump for the match; **Z (altitude)** is tracked server state |
+| RE jump jets | 🔬 | Fire command **decoded** (§19.3): client sends ESC+'!'+0x2D+0x25+CRC (cmd=12, action=4) via `FUN_0040eb20('\x04')`. Fuel depletion, regeneration, Z-altitude tracking, and server→client feedback still 🔬. |
 | RE torso/leg independence | 🔬 | Legs = heading (KP4/6/2/8); torso = facing (WASD); server must track both; compass shows both simultaneously |
 | RE turn timer / match end | 🔬 | 15-minute server-enforced limit; how does server signal mech destruction / match end? |
 | RE physical combat | 🔬 | Death-from-above (DFA) and alpha strike — dedicated commands or derived from positional data? |
@@ -217,8 +217,8 @@ The world uses two distinct room types: **bar** (social spaces, Tier Ranking ter
 | Synchronized position | ❌ | Each client sees other mechs move in real time |
 | Synchronized damage | ❌ | Damage dealt by one client is reflected in all clients' views |
 | Match orchestration | ❌ | Ready-up, start, 15-min timer, end, sanctioned-match flag |
-| F7 — team / lance channel | 🔬 | Scoped broadcast to your lance teammates; wire format unknown; requires `Cmd8` team assignment to be established |
-| F8 — all-comm channel | 🔬 | Broadcast to all players in the current arena match; may share command code with chat-window toggle; wire format unknown |
+| F7 — team / lance channel | 🔬 | Scoped broadcast to your lance teammates; v1.23 RE confirms F7 is local-only (no network packet). The server-side team-channel fan-out mechanism (identifying which clients are on the same lance) remains 🔬; wire format unknown. Requires `Cmd8` team assignment to be established. |
+| F8 — all-comm channel | 🔬 | Broadcast to all players in the current arena match; v1.23 RE confirms F8 is local-only (no network packet). The all-comm delivery mechanism and any associated server→client command remain 🔬. |
 
 **Verification:** Two `MPBTWIN.EXE` instances connect, enter the same arena, see each other, and fight to completion.
 
