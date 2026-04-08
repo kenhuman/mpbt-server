@@ -3,7 +3,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import { parseMapFile } from '../data/maps.js';
+import { parseMapFile } from '../src/data/maps.js';
 
 function projectRoot(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../');

@@ -13,12 +13,19 @@ This project reverse-engineers the **ARIES** binary protocol used by `MPBTWIN.EX
 | SYNC ack + welcome escape sequence | ✅ Complete |
 | Inner game frame format (seq + cmd + CRC) | ✅ Complete |
 | Mech selection window opens | ✅ Complete |
-| Mech navigation (cmd 7) | ✅ Complete |
-| Confirmation dialog (server cmd 7) | ✅ Complete |
+| Mech navigation + confirm dialog (cmd 7) | ✅ Complete |
 | REDIRECT packet (type 0x03) sent on confirm | ✅ Complete |
-| Post-redirect game world / combat | 🔬 Under investigation |
+| Post-redirect world server (second TCP connection) | ✅ Complete |
+| Persistent accounts + character creation | ✅ Complete |
+| Room presence — join, leave, roster (cmd 10/13/11) | ✅ Complete |
+| ComStar direct messages (online + offline delivery) | ✅ Complete |
+| World map travel (Solaris / IS sectors) | ✅ Complete |
+| ARIES type-0x05 keepalive (lobby + world) | ✅ Complete |
+| Combat bootstrap packet builders (cmd 64–73) | ✅ Complete |
+| Server-authoritative combat loop | 🔬 Under investigation |
+| Multi-client combat + match orchestration | 🔬 Under investigation |
 
-The client reaches the mech selection screen, allows browsing, and displays a confirmation dialog before issuing a REDIRECT. That's further than any known prior public attempt.
+The client reaches the mech selection screen, confirms a mech selection, is redirected to the world server, creates a character, and enters a named room alongside other connected players.
 
 ## Game Data
 
@@ -136,18 +143,32 @@ Key commands confirmed by Ghidra analysis:
 ## Lobby Flow
 
 ```
-Client connects
+Client connects (port 2000)
   ← SERVER: LOGIN_REQUEST (type 0x16)
   → CLIENT: LOGIN (type 0x15, 333 bytes: username, version, email, password)
   ← SERVER: SYNC ack (type 0x00, empty)
   ← SERVER: WELCOME escape (type 0x00, payload="\x1b?MMW Copyright Kesmai Corp. 1991")
   → CLIENT: cmd 3 (client-ready, args [1,6,3,0])
+
+  [Returning player — character already in DB]
+  ← SERVER: REDIRECT (type 0x03) → directly to world server
+
+  [New player — no character yet]
   ← SERVER: cmd 26 (mech list)        ← mech selection window opens
   → CLIENT: cmd 7 (mech selected)
   ← SERVER: cmd 7 (confirm dialog)
   → CLIENT: cmd 7 (confirm pick)
   ← SERVER: REDIRECT (type 0x03, 120 bytes: addr[40] | internet[40] | pw[40])
-  → CLIENT: reconnects to game world address
+
+Client reconnects to world server (port 2001)
+  ← SERVER: LOGIN_REQUEST (type 0x16)
+  → CLIENT: LOGIN (same format)
+  ← SERVER: SYNC ack + "MMW" WELCOME escape
+  → CLIENT: cmd 3
+  ← SERVER: cmd 6 + cmd 4 (scene init) + cmd 10 (room roster)
+             + cmd 3 (text broadcast) + cmd 5 (cursor)
+  [first login only] ← cmd 9 (callsign + House allegiance prompt)
+  [first login only] → CLIENT: cmd 9 (display name + allegiance selection)
 ```
 
 ## Project Structure
@@ -155,21 +176,40 @@ Client connects
 ```
 mpbt-server/
 ├── src/
-│   ├── server.ts              # Main TCP server, connection & lobby state machine
+│   ├── server.ts              # Lobby TCP server — LOGIN, mech select, REDIRECT
+│   ├── server-world.ts        # World TCP server — room presence, chat, travel, combat entry
+│   ├── config.ts              # Environment variable config (ports, keepalive, etc.)
+│   ├── data/
+│   │   ├── maps.ts            # .MAP file parser (used by tools/dump-map.ts)
+│   │   ├── mechs.ts           # .MEC file loader → mech roster
+│   │   └── mech-stats.ts      # Static mech stats for cmd 20 examine response
+│   ├── db/
+│   │   ├── client.ts          # pg pool
+│   │   ├── schema.sql         # Canonical DB schema
+│   │   ├── migrate.ts         # Idempotent schema apply (npm run db:migrate)
+│   │   ├── accounts.ts        # Account lookup + bcrypt auth
+│   │   ├── characters.ts      # Character record CRUD
+│   │   ├── messages.ts        # ComStar offline message store + delivery
+│   │   ├── add-account.ts     # CLI — create account
+│   │   ├── edit-account.ts    # CLI — edit account
+│   │   └── delete-account.ts  # CLI — delete account
 │   ├── protocol/
 │   │   ├── aries.ts           # ARIES 12-byte framing (PacketParser, buildPacket)
 │   │   ├── auth.ts            # LOGIN handshake, SYNC ack, WELCOME packet
+│   │   ├── combat.ts          # Combat packet builders (cmd 64–73)
 │   │   ├── constants.ts       # Message types, port constants
-│   │   ├── game.ts            # Inner frame builder, CRC, base-85, cmd 26/7 builders
-│   │   └── lobby.ts           # Lobby protocol helpers
+│   │   ├── game.ts            # Inner frame builder, CRC, base-85, cmd builders
+│   │   └── world.ts           # World-server protocol encoder (cmd 3–14, 48)
 │   ├── state/
-│   │   ├── players.ts         # ClientSession interface, PlayerRegistry
-│   │   └── world.ts           # World/Room types (stub)
-│   ├── scripts/
-│   │   └── gen-pcgi.ts        # play.pcgi generator (see below)
+│   │   ├── launch.ts          # Lobby→world launch context (selectedMech, accountId)
+│   │   └── players.ts         # ClientSession interface, PlayerRegistry
 │   └── util/
 │       ├── capture.ts         # Per-session packet capture logger
 │       └── logger.ts          # Structured logger
+├── tools/
+│   ├── dump-map.ts            # MAP file inspector (npm run map:dump)
+│   ├── gen-pcgi.ts            # play.pcgi generator (npm run gen-pcgi)
+│   └── patch-mpbtwin-two-gui.ps1  # Runtime binary patches for two-client GUI testing
 ├── dist/                      # Compiled ESM output
 ├── logs/                      # Runtime logs
 ├── captures/                  # Per-session hex packet captures
@@ -181,7 +221,8 @@ mpbt-server/
 
 ### Requirements
 
-- Node.js 18+
+- Node.js 20.6+
+- PostgreSQL 14+ (local or Docker — see `docker-compose.yml`)
 - The original `MPBTWIN.EXE` and its DLLs (not included)
 - Windows (the game client is Win32)
 

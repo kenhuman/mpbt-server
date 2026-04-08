@@ -51,7 +51,7 @@ const serverArg = args['server'] ?? '127.0.0.1:2000';
 const user      = args['user']   ?? 'Player';
 const pass      = args['pass']   ?? 'password';
 const email     = args['email']  ?? 'player@mpbt.local';
-const outPath   = resolve(args['out'] ?? resolve(__dirname, '../../..', 'play.pcgi'));
+const outPath   = resolve(args['out'] ?? resolve(__dirname, '../..', 'play.pcgi'));
 
 // Extract host and port from the server argument ("host" or "host:port").
 const colonIdx = serverArg.lastIndexOf(':');

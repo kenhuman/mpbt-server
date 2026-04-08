@@ -83,9 +83,7 @@ Every RE finding should:
 2. Update the relevant section of `RESEARCH.md`
 3. Add any new canonical names to `symbols.json`
 
-If you use AI inside Ghidra, keep it evidence-bound: use
-[`docs/ghidra-ai-workflow.md`](docs/ghidra-ai-workflow.md) as the session
-playbook, and only commit findings that have been confirmed in code or captures.
+If you use AI inside Ghidra, keep the session evidence-bound: only commit findings that have been confirmed in code or packet captures.
 
 ---
 
