@@ -63,7 +63,125 @@ const EXTRA_CONNECTIONS: Array<[number, number]> = [
  *   '146:169:2': { name: 'The Iron Horse Pub', type: 'bar', icon: 5 },
  */
 const FLAVOR_OVERRIDES: Record<string, { name?: string; type?: RoomType; icon?: number }> = {
-  // fill in after /icons survey
+  // Keyed `${min(a,b)}:${max(a,b)}:${stepIndex}` — overrides name/type/icon for a specific
+  // intermediate room on a named connection.  stepIndex 1 = first intermediate from A.
+};
+
+/**
+ * Icon IDs discovered via /icons survey (IDs 0–54 are unique; 55+ repeat).
+ * The mechId field in Cmd4 scenes uses these as the image index.
+ */
+export const ICON = {
+  //  ── World / travel icons ──────────────────────────────────────────────────
+  MONORAIL:           0,
+  STREET:             1,
+  BAR:                2,
+  JOIN_PROMPT:        3,
+  LUNAR_LANDER:       4,   // starport / launch pad exterior
+  FACTION_BANNER:     5,   // dark purple banner with yellow circle
+  HQ_RED:             6,   // star+HQ red  (Kurita / generic)
+  NEW_MECHS:          7,
+  USED_MECHS:         8,
+  GALAXY:             9,
+  MECH_RETICLE:      10,   // mech with green targeting reticle
+  FACTORY:           12,
+  LANDING_PAD:       14,   // lunar lander + outer wall / gate
+  STREET_2:          15,
+  BANK:              16,
+  TERMINAL:          17,   // computer / office terminal
+  PARK:              18,   // field with trees
+  SNOW:              19,
+  DESERT:            20,
+  POWER_DEVICE:      21,
+  ACADEMY:           22,
+  STREET_DESERT:     23,
+  STREET_UPSCALE:    24,   // pillars, nicer district
+  RUINS:             25,   // desert ruins
+  PUB:               26,
+  ISHIYAMA:          28,
+  STEINER:           29,
+  FACTORY_2:         30,
+  JUNGLE:            31,
+  DAVION:            32,
+  HQ_BLUE:           34,   // Steiner / Lyran
+  HQ_PURPLE:         35,   // Marik / Free Worlds
+  HQ_GREEN:          36,   // Liao / Capellan
+  HQ_BROWN:          37,   // Davion / FedSuns
+  //  ── House emblems ─────────────────────────────────────────────────────────
+  EMBLEM_SERPENT:    38,   // red circle + serpent  (Kurita)
+  EMBLEM_FIST:       39,   // fist                  (Steiner)
+  EMBLEM_SCARAB:     40,   // Egyptian scarab       (Liao)
+  EMBLEM_SWORD:      41,   // triangle + sword arm  (Marik)
+  EMBLEM_ARROW:      42,   // orange circle + arrow (Davion)
+  //  ── Misc / environment ────────────────────────────────────────────────────
+  TREETOPS:          43,
+  SECURE_DOOR:       44,
+  CIVIC_BUILDING:    45,   // large white building / government
+  STREET_COASTAL:    46,   // desert / island / waterfront street
+  STREET_FUTURISTIC: 47,
+  STREET_FUTURISTIC2:48,
+  STREET_DESERT2:    49,
+  ALLEY:             50,
+  ALLEY_FUTURISTIC:  51,
+  STREET_BRICK:      52,
+  GARAGE:            53,
+  SATELLITE:         54,
+} as const;
+
+/**
+ * Per-room icon overrides for named rooms (roomId from SOLARIS.MAP).
+ * Sector hubs use House-aligned HQ star icons.
+ */
+const NAMED_ROOM_ICONS: Record<number, number> = {
+  // ── Sector hubs (IDs 1–6) ──────────────────────────────────────────────────
+  1: ICON.HQ_RED,          // International Sector  — neutral / generic
+  2: ICON.HQ_RED,          // Kobe Sector           — Kurita/Draconis Combine
+  3: ICON.HQ_BLUE,         // Silesia Sector        — Steiner/Lyran Commonwealth
+  4: ICON.HQ_PURPLE,       // Montenegro Sector     — Marik/Free Worlds League
+  5: ICON.HQ_GREEN,        // Cathay Sector         — Liao/Capellan Confederation
+  6: ICON.HQ_BROWN,        // Black Hills Sector    — Davion/Federated Suns
+  // ── Named locations ────────────────────────────────────────────────────────
+  146: ICON.LUNAR_LANDER,  // Solaris Starport
+  147: ICON.ISHIYAMA,      // Ishiyama Arena
+  148: ICON.CIVIC_BUILDING,// Government House
+  149: ICON.PUB,           // White Lotus (entertainment)
+  150: ICON.STREET_COASTAL,// Waterfront
+  151: ICON.ALLEY_FUTURISTIC, // Kobe Slums
+  152: ICON.STEINER,       // Steiner Stadium
+  153: ICON.TERMINAL,      // Lyran Building
+  154: ICON.PARK,          // Chahar Park
+  155: ICON.STREET_COASTAL,// Riverside
+  156: ICON.SECURE_DOOR,   // Black Throne
+  157: ICON.FACTORY,       // Factory
+  158: ICON.TERMINAL,      // Marik Tower
+  159: ICON.STREET,        // Allman
+  160: ICON.STREET_COASTAL,// Riverfront
+  161: ICON.RUINS,         // Wasteland
+  162: ICON.JUNGLE,        // Jungle
+  163: ICON.CIVIC_BUILDING,// Chancellor's Quarters
+  164: ICON.STREET,        // Middletown
+  165: ICON.STREET,        // Rivertown
+  166: ICON.ALLEY,         // Maze
+  167: ICON.DAVION,        // Davion Arena
+  168: ICON.TERMINAL,      // Sortek Building
+  169: ICON.PARK,          // Guzman Park
+  170: ICON.STREET_COASTAL,// Marina
+  171: ICON.TREETOPS,      // Viewpoint (hilltop overview)
+};
+
+/**
+ * Default icon to use for generated intermediate rooms, keyed by room type.
+ * FLAVOR_OVERRIDES can still override per-step.
+ */
+const TYPE_ICONS: Record<RoomType, number> = {
+  bar:      ICON.PUB,
+  arena:    ICON.FACTORY_2,
+  hub:      ICON.LUNAR_LANDER,
+  terminal: ICON.TERMINAL,
+  bank:     ICON.BANK,
+  street:   ICON.STREET,
+  sector:   ICON.HQ_RED,
+  path:     ICON.STREET,
 };
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -267,7 +385,7 @@ function buildConnections(
         _name:     flavor.name ?? 'Street',
         sector:    aRoom.sector,
         type:      flavor.type ?? 'street',
-        icon:      flavor.icon ?? null,
+        icon:      flavor.icon ?? TYPE_ICONS[flavor.type ?? 'street'] ?? null,
         _inferred: true,
         exits:     { north: null, south: null, east: null, west: null },
       };
@@ -446,7 +564,7 @@ function main(): void {
       _name:  room.name,
       sector: room.sector,
       type:   room.type,
-      icon:   null,
+      icon:   NAMED_ROOM_ICONS[room.id] ?? null,
       exits:  { north: null, south: null, east: null, west: null },
     });
     coordsById.set(room.id, room);

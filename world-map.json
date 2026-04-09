@@ -17,7 +17,7 @@
       "_name": "International Sector",
       "sector": "international",
       "type": "sector",
-      "icon": null,
+      "icon": 6,
       "exits": {
         "north": 1002,
         "south": null,
@@ -30,7 +30,7 @@
       "_name": "Kobe Sector",
       "sector": "kobe",
       "type": "sector",
-      "icon": null,
+      "icon": 6,
       "exits": {
         "north": 1003,
         "south": null,
@@ -43,7 +43,7 @@
       "_name": "Silesia Sector",
       "sector": "silesia",
       "type": "sector",
-      "icon": null,
+      "icon": 34,
       "exits": {
         "north": 1011,
         "south": 1016,
@@ -56,7 +56,7 @@
       "_name": "Montenegro Sector",
       "sector": "montenegro",
       "type": "sector",
-      "icon": null,
+      "icon": 35,
       "exits": {
         "north": 1023,
         "south": null,
@@ -69,7 +69,7 @@
       "_name": "Cathay Sector",
       "sector": "cathay",
       "type": "sector",
-      "icon": null,
+      "icon": 36,
       "exits": {
         "north": 1030,
         "south": 1029,
@@ -82,7 +82,7 @@
       "_name": "Black Hills Sector",
       "sector": "blackhills",
       "type": "sector",
-      "icon": null,
+      "icon": 37,
       "exits": {
         "north": 1034,
         "south": null,
@@ -95,7 +95,7 @@
       "_name": "Solaris Starport",
       "sector": "international",
       "type": "hub",
-      "icon": null,
+      "icon": 4,
       "exits": {
         "north": 1044,
         "south": 1000,
@@ -108,7 +108,7 @@
       "_name": "Ishiyama Arena",
       "sector": "kobe",
       "type": "arena",
-      "icon": null,
+      "icon": 28,
       "exits": {
         "north": 1006,
         "south": 1054,
@@ -121,7 +121,7 @@
       "_name": "Government House",
       "sector": "kobe",
       "type": "terminal",
-      "icon": null,
+      "icon": 45,
       "exits": {
         "north": null,
         "south": 1006,
@@ -134,7 +134,7 @@
       "_name": "White Lotus",
       "sector": "kobe",
       "type": "bar",
-      "icon": null,
+      "icon": 26,
       "exits": {
         "north": null,
         "south": 1010,
@@ -147,7 +147,7 @@
       "_name": "Waterfront",
       "sector": "kobe",
       "type": "bar",
-      "icon": null,
+      "icon": 46,
       "exits": {
         "north": 1009,
         "south": null,
@@ -160,7 +160,7 @@
       "_name": "Kobe Slums",
       "sector": "kobe",
       "type": "street",
-      "icon": null,
+      "icon": 51,
       "exits": {
         "north": null,
         "south": 1003,
@@ -173,7 +173,7 @@
       "_name": "Steiner Stadium",
       "sector": "silesia",
       "type": "arena",
-      "icon": null,
+      "icon": 29,
       "exits": {
         "north": 1013,
         "south": 1012,
@@ -186,7 +186,7 @@
       "_name": "Lyran Building",
       "sector": "silesia",
       "type": "terminal",
-      "icon": null,
+      "icon": 17,
       "exits": {
         "north": null,
         "south": null,
@@ -199,7 +199,7 @@
       "_name": "Chahar Park",
       "sector": "silesia",
       "type": "street",
-      "icon": null,
+      "icon": 18,
       "exits": {
         "north": null,
         "south": null,
@@ -212,7 +212,7 @@
       "_name": "Riverside",
       "sector": "silesia",
       "type": "bar",
-      "icon": null,
+      "icon": 46,
       "exits": {
         "north": 1056,
         "south": 1014,
@@ -225,7 +225,7 @@
       "_name": "Black Throne",
       "sector": "silesia",
       "type": "street",
-      "icon": null,
+      "icon": 44,
       "exits": {
         "north": 1017,
         "south": null,
@@ -238,7 +238,7 @@
       "_name": "Factory",
       "sector": "montenegro",
       "type": "arena",
-      "icon": null,
+      "icon": 12,
       "exits": {
         "north": null,
         "south": 1023,
@@ -251,7 +251,7 @@
       "_name": "Marik Tower",
       "sector": "montenegro",
       "type": "terminal",
-      "icon": null,
+      "icon": 17,
       "exits": {
         "north": null,
         "south": 1062,
@@ -264,7 +264,7 @@
       "_name": "Allman",
       "sector": "montenegro",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "exits": {
         "north": null,
         "south": 1026,
@@ -277,7 +277,7 @@
       "_name": "Riverfront",
       "sector": "montenegro",
       "type": "street",
-      "icon": null,
+      "icon": 46,
       "exits": {
         "north": 1026,
         "south": 1056,
@@ -290,7 +290,7 @@
       "_name": "Wasteland",
       "sector": "montenegro",
       "type": "street",
-      "icon": null,
+      "icon": 25,
       "exits": {
         "north": null,
         "south": null,
@@ -303,7 +303,7 @@
       "_name": "Jungle",
       "sector": "cathay",
       "type": "arena",
-      "icon": null,
+      "icon": 31,
       "exits": {
         "north": 1032,
         "south": 1031,
@@ -316,7 +316,7 @@
       "_name": "Chancellor's Quarters",
       "sector": "cathay",
       "type": "terminal",
-      "icon": null,
+      "icon": 45,
       "exits": {
         "north": 1029,
         "south": null,
@@ -329,7 +329,7 @@
       "_name": "Middletown",
       "sector": "cathay",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "exits": {
         "north": 1031,
         "south": 1030,
@@ -342,7 +342,7 @@
       "_name": "Rivertown",
       "sector": "cathay",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "exits": {
         "north": 1063,
         "south": 1033,
@@ -355,7 +355,7 @@
       "_name": "Maze",
       "sector": "silesia",
       "type": "street",
-      "icon": null,
+      "icon": 50,
       "exits": {
         "north": null,
         "south": 1058,
@@ -368,7 +368,7 @@
       "_name": "Davion Arena",
       "sector": "blackhills",
       "type": "arena",
-      "icon": null,
+      "icon": 32,
       "exits": {
         "north": 1061,
         "south": null,
@@ -381,7 +381,7 @@
       "_name": "Sortek Building",
       "sector": "blackhills",
       "type": "terminal",
-      "icon": null,
+      "icon": 17,
       "exits": {
         "north": 1041,
         "south": 1044,
@@ -394,7 +394,7 @@
       "_name": "Guzman Park",
       "sector": "blackhills",
       "type": "street",
-      "icon": null,
+      "icon": 18,
       "exits": {
         "north": null,
         "south": 1035,
@@ -407,7 +407,7 @@
       "_name": "Marina",
       "sector": "blackhills",
       "type": "bar",
-      "icon": null,
+      "icon": 46,
       "exits": {
         "north": 1055,
         "south": 1039,
@@ -420,7 +420,7 @@
       "_name": "Viewpoint",
       "sector": "blackhills",
       "type": "street",
-      "icon": null,
+      "icon": 43,
       "exits": {
         "north": 1038,
         "south": 1040,
@@ -433,7 +433,7 @@
       "_name": "Street",
       "sector": "international",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 146,
@@ -447,7 +447,7 @@
       "_name": "Street",
       "sector": "international",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 1000,
@@ -461,7 +461,7 @@
       "_name": "Street",
       "sector": "international",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 1001,
@@ -475,7 +475,7 @@
       "_name": "Street",
       "sector": "kobe",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 151,
@@ -489,7 +489,7 @@
       "_name": "Street",
       "sector": "kobe",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -503,7 +503,7 @@
       "_name": "Street",
       "sector": "kobe",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -517,7 +517,7 @@
       "_name": "Street",
       "sector": "kobe",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 148,
@@ -531,7 +531,7 @@
       "_name": "Street",
       "sector": "kobe",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -545,7 +545,7 @@
       "_name": "Street",
       "sector": "kobe",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -559,7 +559,7 @@
       "_name": "Street",
       "sector": "kobe",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 1010,
@@ -573,7 +573,7 @@
       "_name": "Street",
       "sector": "kobe",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 149,
@@ -587,7 +587,7 @@
       "_name": "Street",
       "sector": "silesia",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 1012,
@@ -601,7 +601,7 @@
       "_name": "Street",
       "sector": "silesia",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 152,
@@ -615,7 +615,7 @@
       "_name": "Street",
       "sector": "silesia",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 1014,
@@ -629,7 +629,7 @@
       "_name": "Street",
       "sector": "silesia",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 155,
@@ -643,7 +643,7 @@
       "_name": "Street",
       "sector": "silesia",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -657,7 +657,7 @@
       "_name": "Street",
       "sector": "silesia",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 3,
@@ -671,7 +671,7 @@
       "_name": "Street",
       "sector": "silesia",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 1016,
@@ -685,7 +685,7 @@
       "_name": "Street",
       "sector": "silesia",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -699,7 +699,7 @@
       "_name": "Street",
       "sector": "silesia",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -713,7 +713,7 @@
       "_name": "Street",
       "sector": "silesia",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -727,7 +727,7 @@
       "_name": "Street",
       "sector": "silesia",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -741,7 +741,7 @@
       "_name": "Street",
       "sector": "silesia",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -755,7 +755,7 @@
       "_name": "Street",
       "sector": "montenegro",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 157,
@@ -769,7 +769,7 @@
       "_name": "Street",
       "sector": "montenegro",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -783,7 +783,7 @@
       "_name": "Street",
       "sector": "montenegro",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -797,7 +797,7 @@
       "_name": "Street",
       "sector": "montenegro",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 159,
@@ -811,7 +811,7 @@
       "_name": "Street",
       "sector": "montenegro",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -825,7 +825,7 @@
       "_name": "Street",
       "sector": "montenegro",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -839,7 +839,7 @@
       "_name": "Street",
       "sector": "cathay",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 5,
@@ -853,7 +853,7 @@
       "_name": "Street",
       "sector": "cathay",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 164,
@@ -867,7 +867,7 @@
       "_name": "Street",
       "sector": "cathay",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 162,
@@ -881,7 +881,7 @@
       "_name": "Street",
       "sector": "cathay",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 1033,
@@ -895,7 +895,7 @@
       "_name": "Street",
       "sector": "cathay",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 165,
@@ -909,7 +909,7 @@
       "_name": "Street",
       "sector": "blackhills",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 1035,
@@ -923,7 +923,7 @@
       "_name": "Street",
       "sector": "blackhills",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 169,
@@ -937,7 +937,7 @@
       "_name": "Street",
       "sector": "blackhills",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -951,7 +951,7 @@
       "_name": "Street",
       "sector": "blackhills",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -965,7 +965,7 @@
       "_name": "Street",
       "sector": "blackhills",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 1039,
@@ -979,7 +979,7 @@
       "_name": "Street",
       "sector": "blackhills",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 170,
@@ -993,7 +993,7 @@
       "_name": "Street",
       "sector": "blackhills",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 171,
@@ -1007,7 +1007,7 @@
       "_name": "Street",
       "sector": "blackhills",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 1040,
@@ -1021,7 +1021,7 @@
       "_name": "Street",
       "sector": "blackhills",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -1035,7 +1035,7 @@
       "_name": "Street",
       "sector": "blackhills",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -1049,7 +1049,7 @@
       "_name": "Street",
       "sector": "international",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 168,
@@ -1063,7 +1063,7 @@
       "_name": "Street",
       "sector": "kobe",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -1077,7 +1077,7 @@
       "_name": "Street",
       "sector": "kobe",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -1091,7 +1091,7 @@
       "_name": "Street",
       "sector": "kobe",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -1105,7 +1105,7 @@
       "_name": "Street",
       "sector": "kobe",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -1119,7 +1119,7 @@
       "_name": "Street",
       "sector": "kobe",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -1133,7 +1133,7 @@
       "_name": "Street",
       "sector": "kobe",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -1147,7 +1147,7 @@
       "_name": "Street",
       "sector": "kobe",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -1161,7 +1161,7 @@
       "_name": "Street",
       "sector": "kobe",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -1175,7 +1175,7 @@
       "_name": "Street",
       "sector": "kobe",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -1189,7 +1189,7 @@
       "_name": "Street",
       "sector": "kobe",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 147,
@@ -1203,7 +1203,7 @@
       "_name": "Street",
       "sector": "kobe",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 1054,
@@ -1217,7 +1217,7 @@
       "_name": "Street",
       "sector": "silesia",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 160,
@@ -1231,7 +1231,7 @@
       "_name": "Street",
       "sector": "silesia",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -1245,7 +1245,7 @@
       "_name": "Street",
       "sector": "silesia",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 166,
@@ -1259,7 +1259,7 @@
       "_name": "Street",
       "sector": "silesia",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 1058,
@@ -1273,7 +1273,7 @@
       "_name": "Street",
       "sector": "silesia",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 1059,
@@ -1287,7 +1287,7 @@
       "_name": "Street",
       "sector": "silesia",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 1060,
@@ -1301,7 +1301,7 @@
       "_name": "Street",
       "sector": "montenegro",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 158,
@@ -1315,7 +1315,7 @@
       "_name": "Street",
       "sector": "montenegro",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": 1062,
@@ -1329,7 +1329,7 @@
       "_name": "Street",
       "sector": "cathay",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -1343,7 +1343,7 @@
       "_name": "Street",
       "sector": "cathay",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -1357,7 +1357,7 @@
       "_name": "Street",
       "sector": "cathay",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -1371,7 +1371,7 @@
       "_name": "Street",
       "sector": "international",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -1385,7 +1385,7 @@
       "_name": "Street",
       "sector": "international",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
@@ -1399,7 +1399,7 @@
       "_name": "Street",
       "sector": "international",
       "type": "street",
-      "icon": null,
+      "icon": 1,
       "_inferred": true,
       "exits": {
         "north": null,
