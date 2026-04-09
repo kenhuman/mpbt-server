@@ -1991,12 +1991,72 @@ The ROADMAP "ACK reply for seq > 42" item applies historically. In v1.23 the cli
 | TCP outbuf start | `DAT_004f7274` | Buffer base address |
 | TCP outbuf write ptr | `DAT_004f7278` | Current write position |
 
+#### §19.6.0 — v1.23 World Dispatch Pipeline (CONFIRMED)
+
+Follow-up RE against `C:\MPBT\Mpbtwin.exe` v1.23 tightened the receive path for
+world-mode packets:
+
+- `FUN_00435cb0` = `Comm_AccumulateEscapedPacketLine_v123`
+  - Accumulates inbound `ESC`-delimited packet lines into `DAT_004dcd1c`
+- `FUN_00435c60` = `Comm_ProcessAccumulatedPacketLine_v123`
+  - Terminates the accumulated line, verifies/decodes it, then dispatches the
+    decoded packet stream
+- `FUN_004018e0` = `Comm_VerifyDecodedPacketCrc_v123`
+  - Replays decoded bytes into `DAT_004f727c..DAT_004f7270`
+  - Uses mode-specific CRC seeds:
+    - world (`DAT_0047d05c == 3`) -> `0x0A5C25`
+    - combat (`DAT_0047d05c == 4`) -> `0x0A5C45`
+- `FUN_00401580` = `Comm_DispatchDecodedPacket_v123`
+  - Reads the command byte, indexes the active dispatch table selected by
+    `FUN_00401d70` / `Main_SetModeName_v123`, checks the row's minimum payload
+    length, and calls the handler
+
+Important correction: the v1.23 dispatch rows are not `(selector, handler)` pairs.
+Each 8-byte row is:
+
+```c
+struct PacketDispatchRow {
+  uint32 minPayloadBytesAfterCmd;
+  void (*handler)(void);
+};
+```
+
+`FUN_00401d70` / `Main_SetModeName_v123` installs:
+
+- world mode -> `DAT_00478070`, count `0x4d`
+- combat mode -> `DAT_004782d8`, count `0x52`
+
+Confirmed world-mode rows from `DAT_00478070`:
+
+| Cmd | Row address | Min payload | Handler | Notes |
+|-----|-------------|-------------|---------|-------|
+| 3 | `0x00478088` | `1` | `FUN_0043da70` | Generic status-text packet; writes to `g_world_SceneStatusTextWidget` in world mode |
+| 4 | `0x00478090` | `2` | `FUN_00413410` | `World_HandleSceneInitPacket_v123` — true outer world scene-init packet entry |
+| 5 | `0x00478098` | `0` | `FUN_0043dc40` | Simple UI clear/close helper |
+| 6 | `0x004780A0` | `0` | `FUN_0043dc50` | Simple UI helper |
+| 9 | `0x004780B8` | `1` | `FUN_0043dc60` | Counted-list packet feeding a world UI panel |
+| 11 | `0x004780C8` | `2` | `FUN_0043df80` | Updates one tracked entry and writes scene status text |
+| 12 | `0x004780D0` | `1` | `FUN_0043de80` | Replaces text for an existing tracked entry |
+| 13 | `0x004780D8` | `1` | `FUN_0043e1e0` | Adds/refreshes one tracked entry and appends scene status text |
+| 14 | `0x004780E0` | `10` | `FUN_004140B0` | Info-panel packet |
+| 15 | `0x004780E8` | `11` | `FUN_00412280` | Detail-panel packet |
+| 16 | `0x004780F0` | `3` | `FUN_004106C0` | List/dialog packet family |
+| 17 | `0x004780F8` | `5` | `FUN_0041BE90` | Scene-action response packet family |
+| 20 | `0x00478110` | `0` | `FUN_0041E410` | Modal message packet |
+| 21 | `0x00478118` | `0` | `FUN_0041E490` | Modal/popup reset packet |
+| 22 | `0x00478120` | `0` | `FUN_0041E4E0` | Modal message packet with decoded string |
+
+This also confirms that scene-init remains command 4 in v1.23. Earlier scratch
+notes that treated the leading dword in each row as an opcode selector were wrong.
+
 
 #### §19.6.1 — v1.23 Combat Server→Client Position Path (PARTIAL)
 
 Follow-up Ghidra pass against `C:\MPBT\Mpbtwin.exe` v1.23, starting from the combat dispatch table at `DAT_004782d8`.
 
-Combat dispatch entries are 8-byte records (`arity/kind`, `handler`). The allocated combat table spans commands 0–81, but most entries are null; the non-null combat-only cluster is 59–81.
+Combat dispatch entries use the same 8-byte row format as world mode:
+`{ minPayloadBytesAfterCmd, handler }`. The allocated combat table spans
+commands 0–81, but most entries are null; the non-null combat-only cluster is 59–81.
 
 Key handlers for combat bootstrap and position sync:
 
