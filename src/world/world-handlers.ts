@@ -33,6 +33,7 @@ import {
   worldMapByRoomId,
   getSolarisRoomExits,
   getSolarisRoomName,
+  setSessionRoomPosition,
 } from './world-data.js';
 import {
   send,
@@ -486,7 +487,7 @@ export function handleMapTravelReply(
 
   notifyRoomDeparture(players, session, connLog);
   session.roomId = newRoomId;
-  session.worldMapRoomId = selectedRoomId;
+  setSessionRoomPosition(session, selectedRoomId);
   session.worldPresenceStatus = 5;
 
   sendSceneRefresh(
@@ -545,7 +546,7 @@ export function handleLocationAction(
 
   notifyRoomDeparture(players, session, connLog);
   session.roomId = mapRoomKey(targetRoomId);
-  session.worldMapRoomId = targetRoomId;
+  setSessionRoomPosition(session, targetRoomId);
   session.worldPresenceStatus = 5;
   sendSceneRefresh(
     players,

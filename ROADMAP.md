@@ -171,8 +171,8 @@ The world uses two distinct room types: **bar** (social spaces, Tier Ranking ter
 | RE movement protocol | 🔧 | **DECODED** (RESEARCH.md §19.2): client→server timer-based (100 ms). Cmd 8 (coasting): X(3w)+Y(3w)+heading(2w)+adj_vel(1w)+rotation(1w). Cmd 9 (moving): X(3w)+Y(3w)+heading(2w)+turn(1w)+0xe1c(1w)+throttle(1w)+leg(1w)+rotation(1w). Bias constant=0xe1c (3612), divisor=0xb6 (182). Travel-reply: server cmd 40/43 opens IS/Solaris map UI; client replies `cmd 10` (`type1 contextId` + `type4 selectedRoomId+1`). Real GUI validated `Travel → Cmd43 → cmd 10(selection=148) → Ishiyama Arena`. Server→client position packets (Cmd65) still 🔬. |
 | Tram / monorail RE | 🔬 | Cross-sector navigation shortcut — client command format unknown |
 | Room model from map files | � | `parseMapFile()` implemented in `src/data/maps.ts`; `SOLARIS_SCENE_ROOMS` (32 rooms: 146–171 Solaris + sectors 1–6) is a hardcoded stub with provisional linear exits in `getSolarisRoomExits()`. `Cmd23` location-icon clicks handled via `handleLocationAction`; `Cmd43`→`cmd10` travel reply handled via `handleMapTravelReply`. Next: load rooms, types (bar / arena), and exits from `IS.MAP` / `SOLARIS.MAP` parsed data; replace hardcoded stub; authentic exit graph still 🔬. |
-| Server-side position tracking | ❌ | Extend `src/state/world.ts`; track current room + coordinates per player |
-| Position sync to client | ❌ | Server → client position / environment packets |
+| Server-side position tracking | ✅ | `worldX/Y/Z` + `worldMapRoomId` on `ClientSession`; populated atomically via `setSessionRoomPosition()` in `world-data.ts` from SOLARIS.MAP `centreX/centreY` at every room transition. |
+| Position sync to client | ✅ | World-mode scene position conveyed via Cmd4 `playerScoreSlot` (= room sceneIndex) — already working. Room type communicated via arena-only "Fight" button (`actionType 5`) in `buildSceneInitForSession`; Cmd65-equivalent server→client coord push in travel-world mode remains 🔬. |
 
 **Verification:** Single client can navigate between areas; room type (bar vs. arena) is correctly identified by the server.
 
