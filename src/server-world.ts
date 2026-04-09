@@ -225,9 +225,10 @@ function uniqueRoomIds(roomIds: number[]): number[] {
 /**
  * Return up to 4 exit room IDs for a given room.
  *
- * When SOLARIS.MAP was loaded (rooms have real coordinates), use spatial
- * adjacency: sort all other rooms by Euclidean distance from this room's
- * centroid and take the 4 nearest.
+ * When SOLARIS.MAP was loaded (rooms have real coordinates), assign one room
+ * per cardinal quadrant (N/E/S/W) using the closest room whose centroid lies
+ * in that half-plane.  This keeps directional navigation consistent — the room
+ * you arrived from always ends up in the opposite slot.
  *
  * When running on the hardcoded fallback (all centroids are 0,0), use the
  * provisional linear topology: room 146 is the Solaris hub, each Solaris room
@@ -239,16 +240,34 @@ function getSolarisRoomExits(roomId: number): number[] {
   const hasRealCoords = room.centreX !== 0 || room.centreY !== 0;
 
   if (hasRealCoords) {
-    // Spatial adjacency: nearest rooms by centroid distance, up to 4.
-    return solarisRooms
-      .filter(r => r.roomId !== roomId)
-      .sort((a, b) => {
-        const da = Math.hypot(a.centreX - room.centreX, a.centreY - room.centreY);
-        const db = Math.hypot(b.centreX - room.centreX, b.centreY - room.centreY);
-        return da - db;
-      })
-      .slice(0, 4)
-      .map(r => r.roomId);
+    // Directional adjacency: assign the closest room per cardinal quadrant
+    // (slot 0=N, 1=E, 2=S, 3=W).  A plain distance sort would place the room
+    // you just arrived from in the same slot every time, causing oscillation.
+    // With quadrant assignment the origin room always ends up in the opposite
+    // slot, so "keep going east" never bounces you back west.
+    type SlotCandidate = { roomId: number; dist: number };
+    const bySlot: (SlotCandidate | null)[] = [null, null, null, null];
+
+    for (const r of solarisRooms) {
+      if (r.roomId === roomId) continue;
+      if (r.centreX === 0 && r.centreY === 0) continue;
+      const dx = r.centreX - room.centreX;
+      const dy = r.centreY - room.centreY;
+      const dist = Math.hypot(dx, dy);
+      // Pick the cardinal slot whose axis dominates.
+      // Map Y increases downward (screen coords), so dy>0 → S.
+      const slot = Math.abs(dx) >= Math.abs(dy)
+        ? (dx > 0 ? 1 : 3)   // E=1, W=3
+        : (dy > 0 ? 2 : 0);  // S=2, N=0
+      const best = bySlot[slot];
+      if (!best || dist < best.dist) {
+        bySlot[slot] = { roomId: r.roomId, dist };
+      }
+    }
+
+    return bySlot
+      .filter((c): c is SlotCandidate => c !== null)
+      .map(c => c.roomId);
   }
 
   // Provisional topology fallback (hardcoded room list, no real coordinates).
