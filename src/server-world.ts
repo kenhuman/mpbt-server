@@ -69,6 +69,7 @@ import {
   PERSONNEL_MORE_ID,
   SOLARIS_TRAVEL_CONTEXT_ID,
   getSolarisRoomName,
+  setSessionRoomPosition,
 } from './world/world-data.js';
 import {
   send,
@@ -152,7 +153,7 @@ async function handleWorldLogin(
   );
 
   session.phase          = 'world';
-  session.worldMapRoomId = DEFAULT_MAP_ROOM_ID;
+  setSessionRoomPosition(session, DEFAULT_MAP_ROOM_ID);
   session.roomId         = mapRoomKey(DEFAULT_MAP_ROOM_ID);
 
   connLog.info(
@@ -310,6 +311,17 @@ function handleWorldGameData(
         return;
       }
       sendSolarisTravelMap(session, connLog, capture);
+      return;
+    }
+    if (parsed.actionType === 5) {
+      // "Fight" button — shown only in arena rooms by buildSceneInitForSession.
+      if (!session.combatInitialized && session.phase === 'world') {
+        connLog.info('[world] cmd-5 Fight button: triggering combat bootstrap');
+        sendCombatBootstrapSequence(session, connLog, capture);
+      } else {
+        connLog.debug('[world] cmd-5 Fight ignored: combatInitialized=%s phase=%s',
+          session.combatInitialized, session.phase);
+      }
       return;
     }
     connLog.warn('[world] cmd-5 unsupported scene action type=%d', parsed.actionType);
