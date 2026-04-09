@@ -226,9 +226,12 @@ function uniqueRoomIds(roomIds: number[]): number[] {
  * Return up to 4 exit room IDs for a given room.
  *
  * When SOLARIS.MAP was loaded (rooms have real coordinates), assign one room
- * per cardinal quadrant (N/E/S/W) using the closest room whose centroid lies
- * in that half-plane.  This keeps directional navigation consistent — the room
- * you arrived from always ends up in the opposite slot.
+ * per cardinal slot using the closest room whose centroid lies in that
+ * half-plane.  Slot→button mapping (confirmed from client UI):
+ *   slot 0 = North  slot 1 = South  slot 2 = East  slot 3 = West
+ * SOLARIS.MAP axes: Y is E↔W (dy>0 = East), X is N↔S (dx>0 = South).
+ * Using quadrant assignment ensures the origin room always ends up in
+ * the opposite slot after a directional move.
  *
  * When running on the hardcoded fallback (all centroids are 0,0), use the
  * provisional linear topology: room 146 is the Solaris hub, each Solaris room
@@ -254,11 +257,13 @@ function getSolarisRoomExits(roomId: number): number[] {
       const dx = r.centreX - room.centreX;
       const dy = r.centreY - room.centreY;
       const dist = Math.hypot(dx, dy);
-      // Pick the cardinal slot whose axis dominates.
-      // Map Y increases downward (screen coords), so dy>0 → S.
+      // Slot → compass button mapping (confirmed from client UI):
+      //   slot 0 = North  slot 1 = South  slot 2 = East  slot 3 = West
+      // In SOLARIS.MAP coordinates the Y axis is E↔W and X axis is N↔S,
+      // i.e. dy>0 → East, dy<0 → West, dx>0 → South, dx<0 → North.
       const slot = Math.abs(dx) >= Math.abs(dy)
-        ? (dx > 0 ? 1 : 3)   // E=1, W=3
-        : (dy > 0 ? 2 : 0);  // S=2, N=0
+        ? (dx > 0 ? 1 : 0)   // S=1, N=0
+        : (dy > 0 ? 2 : 3);  // E=2, W=3
       const best = bySlot[slot];
       if (!best || dist < best.dist) {
         bySlot[slot] = { roomId: r.roomId, dist };
