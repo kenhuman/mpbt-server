@@ -641,6 +641,18 @@ export function buildCmd36MessageViewPacket(
   return buildGamePacket(36, buildCmd36MessageViewArgs(dialogId, text), false, seq);
 }
 
+// ── Command 37 — Open ComStar compose editor (server→client) ─────────────────
+// CONFIRMED from FUN_00416d40 (Cmd37_OpenCompose) RE (RESEARCH.md §18 table).
+//
+// Wire layout: [type4 5B: target_id]
+// If 0 < target_id < 1000 → count mode.  For >= 1000 → single target identifier.
+// All our comstarIds are 100000+ so single-target is always the right path.
+
+/** Build a Cmd37 packet to open the local ComStar compose editor pre-addressed to `targetId`. */
+export function buildCmd37OpenComposePacket(targetId: number, seq = 0): Buffer {
+  return buildGamePacket(37, encodeB85_4(targetId), false, seq);
+}
+
 // ── Command 20 — Text dialog (server→client) ──────────────────────────────────
 // CONFIRMED from Cmd20_ParseTextDialog (FUN_00411D90) + FUN_00411a10 RE.
 // See RESEARCH.md §14.

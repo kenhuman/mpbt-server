@@ -34,6 +34,7 @@ import {
 } from './protocol/auth.js';
 import {
   buildCmd36MessageViewPacket,
+  buildCmd37OpenComposePacket,
   buildMenuDialogPacket,
   parseClientCmd4,
   parseClientCmd5SceneAction,
@@ -135,7 +136,11 @@ const SOLARIS_ROOM_BY_ID = new Map<number, { roomId: number; name: string; scene
   SOLARIS_SCENE_ROOMS.map((room, index) => [room.roomId, { ...room, sceneIndex: index }]),
 );
 const ALL_ROSTER_LIST_ID = 0x3F4;
-const INQUIRY_MENU_ID    = 1000;
+// 0x3E8 (1000) is reserved by the client for its own local "Personal inquiry on:"
+// submenu (FUN_00412980).  Sending Cmd7 with that listId triggers special client
+// handling that ignores our payload and uses a garbage internal target_id.  Use
+// any non-reserved positive integer instead (see RESEARCH.md §11 avoid-list).
+const INQUIRY_MENU_ID    = 0x3F3;  // 1011 — safe, not in client avoid-list
 const PERSONNEL_LIST_ID  = 0x3F2;
 const PERSONNEL_MORE_ID  = 0x95;
 const SOLARIS_TRAVEL_CONTEXT_ID = 0xC6;
@@ -291,7 +296,11 @@ function buildAllRosterEntries(players: PlayerRegistry) {
 function buildPersonnelRecordLines(target: ClientSession, page: number): string[] {
   if (page <= 1) {
     return [
-      'Rank     : Warrior',
+      // The client's Cmd14 header always shows the querying user's own callsign
+      // as "Handle" (it reads from the room-roster selection cursor, which
+      // defaults to self).  We have no wire field that overrides it, so we
+      // repeat the correct handle as the first body line.
+      `Handle   : ${getDisplayName(target)}`,
       `House    : ${target.allegiance ?? 'Unaffiliated'}`,
       `Sector   : ${getSolarisRoomName(target.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID)}`,
       `Location : ${getPresenceLocation(target)}`,
@@ -457,9 +466,16 @@ function sendPersonnelRecord(
     connLog.warn('[world] personnel record target not found: id=%d page=%d', targetId, page);
     send(
       session.socket,
-      buildCmd3BroadcastPacket('Personnel record unavailable.', nextSeq(session)),
+      buildCmd14PersonnelRecordPacket(
+        {
+          comstarId: targetId,
+          battlesToDate: 0,
+          lines: ['Status   : Offline', 'Record   : Unavailable', '', '', '', ''],
+        },
+        nextSeq(session),
+      ),
       capture,
-      'CMD3_PERSONNEL_MISSING',
+      'CMD14_PERSONNEL_OFFLINE',
     );
     return;
   }
@@ -468,9 +484,16 @@ function sendPersonnelRecord(
   session.worldInquiryTargetId = resolvedTargetId;
   session.worldInquiryPage = page;
 
+  // The client's Cmd14 handler looks up the handle for the record in the room
+  // presence table (seeded by Cmd10/Cmd13), which is keyed by worldRosterId.
+  // Sending getComstarId (100000+accountId) as comstarId results in a lookup
+  // miss → "Handle = null" and the client falls back to its own callsign.
+  // The real ComStar ID is already shown in the body lines ('ComStar  : N').
+  const presenceId = target.worldRosterId ?? 0;
+
   connLog.info(
-    '[world] sending Cmd14 personnel record: target=%d handle="%s" page=%d',
-    resolvedTargetId,
+    '[world] sending Cmd14 personnel record: presenceId=%d handle="%s" page=%d',
+    presenceId,
     getDisplayName(target),
     page,
   );
@@ -478,7 +501,7 @@ function sendPersonnelRecord(
     session.socket,
     buildCmd14PersonnelRecordPacket(
       {
-        comstarId:     resolvedTargetId,
+        comstarId:     presenceId,
         battlesToDate: 0,
         lines:         buildPersonnelRecordLines(target, page),
       },
@@ -805,13 +828,22 @@ function handleWorldTextCommand(
   const line = `${getDisplayName(session)}: ${clean}`;
   connLog.info('[world] cmd-4 text: %s', line);
 
+  const senderStatus = getPresenceStatus(session);
+  const senderInBooth = senderStatus > 5;
+
   for (const other of players.inRoom(session.roomId)) {
     if (
-      other.id === session.id ||
       other.phase !== 'world' ||
       !other.worldInitialized ||
       other.socket.destroyed
     ) {
+      continue;
+    }
+
+    // Booth privacy: booth chat is only heard by occupants of the same booth;
+    // standing chat is only heard by other standing players.
+    const otherStatus = getPresenceStatus(other);
+    if (senderInBooth ? otherStatus !== senderStatus : otherStatus > 5) {
       continue;
     }
 
@@ -1262,8 +1294,14 @@ function handleWorldGameData(
 
       if (parsed.selection === 1) {
         connLog.info(
-          '[world] inquiry submenu: local ComStar compose expected for target=%d',
+          '[world] inquiry submenu: sending Cmd37 open-compose for target=%d',
           targetId,
+        );
+        send(
+          session.socket,
+          buildCmd37OpenComposePacket(targetId, nextSeq(session)),
+          capture,
+          'CMD37_OPEN_COMPOSE',
         );
         return;
       }
