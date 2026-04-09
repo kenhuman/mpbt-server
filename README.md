@@ -19,6 +19,7 @@ This project reverse-engineers the **ARIES** binary protocol used by `MPBTWIN.EX
 | Persistent accounts + character creation | ✅ Complete |
 | Room presence — join, leave, roster (cmd 10/13/11) | ✅ Complete |
 | ComStar direct messages (online + offline delivery) | ✅ Complete |
+| ComStar inquiry submenu — all-roster, addressed compose, personnel record | ✅ Complete |
 | World map travel (Solaris / IS sectors) | ✅ Complete |
 | ARIES type-0x05 keepalive (lobby + world) | ✅ Complete |
 | Combat bootstrap packet builders (cmd 64–73) | ✅ Complete |
