@@ -2035,9 +2035,10 @@ Confirmed world-mode rows from `DAT_00478070`:
 | 5 | `0x00478098` | `0` | `FUN_0043dc40` | Simple UI clear/close helper |
 | 6 | `0x004780A0` | `0` | `FUN_0043dc50` | Simple UI helper |
 | 9 | `0x004780B8` | `1` | `FUN_0043dc60` | Counted-list packet feeding a world UI panel |
-| 11 | `0x004780C8` | `2` | `FUN_0043df80` | Updates one tracked entry and writes scene status text |
-| 12 | `0x004780D0` | `1` | `FUN_0043de80` | Replaces text for an existing tracked entry |
-| 13 | `0x004780D8` | `1` | `FUN_0043e1e0` | Adds/refreshes one tracked entry and appends scene status text |
+| 10 | `0x004780C0` | `1` | `World_HandleRoomPresenceSync_v123` | Seeds the live room-presence table and appends the `Here you see ...` summary |
+| 11 | `0x004780C8` | `2` | `World_HandleRoomPresenceRename_v123` | Replaces the callsign for an existing tracked entry and appends `%s becomes %s.` |
+| 12 | `0x004780D0` | `1` | `World_HandleRoomPresenceEvent_v123` | Applies leave/booth/battle/heading events and appends the matching room-status text |
+| 13 | `0x004780D8` | `1` | `World_HandleRoomPresenceArrival_v123` | Adds/refreshes one tracked entry and appends `%s enters the room.` |
 | 14 | `0x004780E0` | `10` | `FUN_004140B0` | Info-panel packet |
 | 15 | `0x004780E8` | `11` | `FUN_00412280` | Detail-panel packet |
 | 16 | `0x004780F0` | `3` | `FUN_004106C0` | List/dialog packet family |
@@ -2048,6 +2049,62 @@ Confirmed world-mode rows from `DAT_00478070`:
 
 This also confirms that scene-init remains command 4 in v1.23. Earlier scratch
 notes that treated the leading dword in each row as an opcode selector were wrong.
+
+#### §19.6.0a — World Opcode 17 Scene-Action Family (STATIC MODEL)
+
+Follow-up RE on `FUN_0041BE90` / `World_HandleSceneActionResponsePacket_v123`
+shows that world opcode `17` is the main non-travel `cmd5` response family for
+contracts / offers / duel terms.
+
+**Packet shape (high level):**
+- byte 0: subtype
+- byte 1: shared panel-mode byte
+- remaining fields: strings and numeric fields whose layout depends on subtype
+
+**Shared panel-mode byte (`byte 1`)**
+
+| Mode | Meaning |
+|------|---------|
+| `0` | Editable offer state |
+| `1` | Readonly details |
+| `2` | Counter-offer / share-revision editor state for subtype `1/5` |
+| `3` | Binary accept / decline review |
+
+**Confirmed subtype model**
+
+| Subtype | Current meaning | Outbound follow-up |
+|---------|------------------|--------------------|
+| `1` | Base contract/agreement editor family (non-subcontract) | submit `cmd 12` |
+| `2` | Binary review / acceptance variant paired with subtype `1` | Enter `cmd 13`, ESC `cmd 11` |
+| `3` | Duel stakes/details panel | Enter `cmd 15`, ESC `cmd 11` |
+| `4` | Membership-bid editor | submit `cmd 17` |
+| `5` | Subcontract offer/details editor | submit `cmd 14` |
+| `6` | Binary review / acceptance variant paired with subtype `5` | Enter `cmd 13`, ESC `cmd 11` |
+| `7` | Subcontract terms editor | submit `cmd 30`, ESC `cmd 32` |
+
+**Structural distinction that matters**
+- Subtypes `1/2` are now best read as the **base agreement** family.
+- Subtypes `5/6/7` are the **subcontract-specific** family.
+- Subtype `4` is separate and centered on membership bidding.
+- Subtype `3` is the duel branch.
+
+The remaining ambiguity is no longer control flow. It is:
+1. the exact in-game noun for the base agreement family behind subtype `1/2`
+2. the concrete scene-specific mapping from outbound `cmd5 actionId` values to
+   opcode `17` subtypes
+
+**Deferred live-capture plan**
+- Record one scene that produces subtype `1`
+- Record the matching review flow that produces subtype `2`
+- Capture:
+  - outbound `cmd5 actionId`
+  - inbound opcode `17`
+  - subtype byte
+  - panel-mode byte
+  - any follow-up `cmd 11/12/13/14/17/29/30/32`
+  - visible scene button text / room context
+
+That single capture should close the remaining subtype `1/2` naming gap.
 
 
 #### §19.6.1 — v1.23 Combat Server→Client Position Path (PARTIAL)
