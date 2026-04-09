@@ -1,0 +1,951 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>MPBT Map Editor</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0d0d1a;
+      color: #ccc;
+      font: 13px/1.4 monospace;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    /* ── Toolbar ─────────────────────────────────────────────────────────── */
+    #toolbar {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 6px 10px;
+      background: #12122a;
+      border-bottom: 1px solid #2a2a4a;
+      flex-shrink: 0;
+    }
+    #toolbar .sep { width: 1px; height: 20px; background: #2a2a4a; margin: 0 2px; }
+    button {
+      background: #1e1e3a;
+      color: #aac;
+      border: 1px solid #3a3a5a;
+      padding: 4px 10px;
+      cursor: pointer;
+      border-radius: 3px;
+      font: inherit;
+      white-space: nowrap;
+    }
+    button:hover { background: #2a2a5a; }
+    button.active { background: #2a4a6a; border-color: #5a8ab0; color: #adf; }
+    button.danger { background: #2a1010; color: #f88; border-color: #5a2a2a; }
+    button.danger:hover { background: #3a1515; }
+    input[type=file] { display: none; }
+    .check-label {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+      color: #99a;
+      font-size: 12px;
+    }
+    .check-label input { cursor: pointer; accent-color: #5a8ab0; }
+    #status {
+      margin-left: auto;
+      color: #667;
+      font-size: 11px;
+    }
+
+    /* ── Layout ──────────────────────────────────────────────────────────── */
+    #main {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    #canvas-wrap {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+    canvas { position: absolute; top: 0; left: 0; cursor: default; }
+
+    /* ── HUD overlays ────────────────────────────────────────────────────── */
+    #hud-mode {
+      position: absolute;
+      bottom: 8px;
+      left: 8px;
+      background: rgba(5, 5, 20, 0.8);
+      color: #88a;
+      padding: 5px 9px;
+      border-radius: 3px;
+      font-size: 11px;
+      pointer-events: none;
+      border: 1px solid #2a2a4a;
+    }
+    #legend {
+      position: absolute;
+      bottom: 8px;
+      right: 8px;
+      background: rgba(5, 5, 20, 0.85);
+      padding: 8px 10px;
+      border-radius: 3px;
+      font-size: 11px;
+      pointer-events: none;
+      border: 1px solid #2a2a4a;
+      line-height: 1.9;
+    }
+    .ld { display: flex; align-items: center; gap: 5px; }
+    .dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      display: inline-block; flex-shrink: 0;
+    }
+
+    /* ── Side panel ──────────────────────────────────────────────────────── */
+    #panel {
+      width: 255px;
+      background: #0e0e20;
+      border-left: 1px solid #2a2a4a;
+      overflow-y: auto;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    #panel-empty {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #334;
+      font-size: 12px;
+      text-align: center;
+      line-height: 2;
+    }
+    #editor { padding: 10px; display: none; }
+    .ph {
+      color: #556;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin: 12px 0 6px;
+      border-bottom: 1px solid #2a2a4a;
+      padding-bottom: 4px;
+    }
+    .ph:first-child { margin-top: 0; }
+    .field { margin-bottom: 7px; }
+    .field > label { display: block; color: #668; font-size: 11px; margin-bottom: 3px; }
+    .field input[type=text],
+    .field input[type=number],
+    .field select {
+      width: 100%;
+      background: #12122a;
+      color: #bbc;
+      border: 1px solid #2a2a4a;
+      padding: 4px 6px;
+      font: inherit;
+      border-radius: 2px;
+    }
+    .field input:focus, .field select:focus { outline: none; border-color: #5a8ab0; }
+    .field input[readonly] { color: #556; cursor: default; }
+    .exits-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 5px;
+    }
+    .exit-row { display: flex; align-items: center; gap: 4px; }
+    .exit-dir {
+      width: 16px; flex-shrink: 0;
+      font-size: 11px; color: #668; text-align: center;
+    }
+    .exit-row input { flex: 1; min-width: 0; }
+    .pos-row { display: flex; gap: 5px; }
+    .pos-row .lbl { color: #668; font-size: 11px; line-height: 28px; flex-shrink: 0; }
+    .pos-row input { flex: 1; min-width: 0; }
+    .btn-full { width: 100%; margin-top: 5px; }
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      color: #778;
+      font-size: 12px;
+      margin-bottom: 7px;
+    }
+    .checkbox-row input { cursor: pointer; accent-color: #5a8ab0; }
+  </style>
+</head>
+<body>
+
+<div id="toolbar">
+  <button id="btnLoadJson">Load JSON</button>
+  <input type="file" id="fileJson" accept=".json">
+  <button id="btnLoadBg">Load Background</button>
+  <input type="file" id="fileBg" accept="image/*">
+  <button id="btnSave">Save JSON</button>
+
+  <div class="sep"></div>
+
+  <button id="btnAdd">Add Room</button>
+  <button id="btnAutoPlace">Auto-Place</button>
+  <button id="btnFit">Fit View [F]</button>
+
+  <div class="sep"></div>
+
+  <label class="check-label"><input type="checkbox" id="chkLabels" checked> Labels</label>
+  <label class="check-label"><input type="checkbox" id="chkExits" checked> Exits</label>
+  <label class="check-label"><input type="checkbox" id="chkGrid"> Grid</label>
+
+  <span id="status">Load world-map.json to begin</span>
+</div>
+
+<div id="main">
+  <div id="canvas-wrap">
+    <canvas id="canvas"></canvas>
+
+    <div id="hud-mode">
+      Scroll to zoom · Drag to pan · Click room to select · Drag room to move
+    </div>
+
+    <div id="legend">
+      <div class="ld"><span class="dot" style="background:#e55"></span>Arena</div>
+      <div class="ld"><span class="dot" style="background:#fa0"></span>Hub</div>
+      <div class="ld"><span class="dot" style="background:#4af"></span>Terminal</div>
+      <div class="ld"><span class="dot" style="background:#5c5"></span>Bar</div>
+      <div class="ld"><span class="dot" style="background:#f80"></span>Sector</div>
+      <div class="ld"><span class="dot" style="background:#c5c"></span>Bank</div>
+      <div class="ld"><span class="dot" style="background:#555"></span>Street/Path</div>
+    </div>
+  </div>
+
+  <div id="panel">
+    <div id="panel-empty">No room selected.<br>Click a room to edit.<br><br>Load world-map.json<br>to begin.</div>
+    <div id="editor">
+      <p class="ph">Room</p>
+
+      <div class="field">
+        <label>Room ID</label>
+        <input type="number" id="eId" readonly tabindex="-1">
+      </div>
+      <div class="field">
+        <label>Name</label>
+        <input type="text" id="eName" placeholder="(unnamed)">
+      </div>
+      <div class="field">
+        <label>Type</label>
+        <select id="eType">
+          <option value="street">street</option>
+          <option value="path">path</option>
+          <option value="arena">arena</option>
+          <option value="hub">hub</option>
+          <option value="terminal">terminal</option>
+          <option value="bar">bar</option>
+          <option value="sector">sector</option>
+          <option value="bank">bank</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Sector</label>
+        <select id="eSector">
+          <option value="international">international</option>
+          <option value="kobe">kobe</option>
+          <option value="silesia">silesia</option>
+          <option value="montenegro">montenegro</option>
+          <option value="cathay">cathay</option>
+          <option value="blackhills">blackhills</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Icon ID</label>
+        <input type="number" id="eIcon" min="0" max="255" placeholder="null">
+      </div>
+      <div id="icon-preview" style="display:none;text-align:center;margin-bottom:8px">
+        <img id="icon-img" style="width:64px;height:64px;image-rendering:pixelated;border:1px solid #2a2a4a;border-radius:3px">
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="eInferred">
+        <label for="eInferred">Inferred (not from SOLARIS.MAP)</label>
+      </div>
+
+      <p class="ph">Exits (room IDs, blank = none)</p>
+      <div class="exits-grid">
+        <div class="exit-row"><span class="exit-dir">N</span><input type="number" id="eN" min="0" placeholder="—"></div>
+        <div class="exit-row"><span class="exit-dir">S</span><input type="number" id="eS" min="0" placeholder="—"></div>
+        <div class="exit-row"><span class="exit-dir">E</span><input type="number" id="eE" min="0" placeholder="—"></div>
+        <div class="exit-row"><span class="exit-dir">W</span><input type="number" id="eW" min="0" placeholder="—"></div>
+      </div>
+
+      <button id="btnApply" class="btn-full">Apply Changes</button>
+      <button id="btnDelete" class="btn-full danger" style="margin-top:4px">Delete Room</button>
+
+      <p class="ph" style="margin-top:14px">Canvas Position</p>
+      <div class="pos-row">
+        <span class="lbl">X</span>
+        <input type="number" id="ePosX" step="0.5">
+        <span class="lbl" style="margin-left:4px">Y</span>
+        <input type="number" id="ePosY" step="0.5">
+      </div>
+      <button id="btnApplyPos" class="btn-full" style="margin-top:5px">Set Position</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const ASSETS = '../../assets';
+
+// ── Icon image cache (icon ID → HTMLImageElement) ─────────────────────────────
+const iconCache = new Map();
+function getIconImg(iconId) {
+  if (iconCache.has(iconId)) return iconCache.get(iconId);
+  const img = new Image();
+  img.src = `${ASSETS}/icons/I${iconId + 101}.png`;
+  img.onload = () => render();
+  iconCache.set(iconId, img);
+  return img;
+}
+function iconReady(img) {
+  return img && img.complete && img.naturalWidth > 0;
+}
+
+// ── Anchor positions from SOLARIS.MAP (centreX, centreY) ─────────────────────
+const ANCHOR_POS = {
+  1:   [42,  388],  // International Sector
+  2:   [86,  106],  // Kobe Sector
+  3:   [322, 306],  // Silesia Sector
+  4:   [274,  92],  // Montenegro Sector
+  5:   [206, 326],  // Cathay Sector
+  6:   [104, 310],  // Black Hills Sector
+  146: [30,  311],  // Solaris Starport
+  147: [132, 131],  // Ishiyama Arena
+  148: [142,  85],  // Government House
+  149: [25,   84],  // White Lotus
+  150: [35,  140],  // Waterfront
+  151: [83,   60],  // Kobe Slums
+  152: [323, 249],  // Steiner Stadium
+  153: [366, 182],  // Lyran Building
+  154: [387, 331],  // Chahar Park
+  155: [321, 199],  // Riverside
+  156: [303, 369],  // Black Throne
+  157: [296,  61],  // Factory
+  158: [240, 126],  // Marik Tower
+  159: [311, 124],  // Allman
+  160: [305, 155],  // Riverfront
+  161: [365,  50],  // Wasteland
+  162: [240, 246],  // Jungle
+  163: [196, 366],  // Chancellor's Quarters
+  164: [228, 289],  // Middletown
+  165: [236, 187],  // Rivertown
+  166: [251, 213],  // Maze
+  167: [159, 224],  // Davion Arena
+  168: [46,  266],  // Sortek Building
+  169: [109, 252],  // Guzman Park
+  170: [99,  170],  // Marina
+  171: [67,  214],  // Viewpoint
+};
+
+const TYPE_COLOR = {
+  arena:    '#e55',
+  hub:      '#fa0',
+  terminal: '#4af',
+  bar:      '#5c5',
+  sector:   '#f80',
+  bank:     '#c5c',
+  street:   '#555',
+  path:     '#445',
+};
+const TYPE_RADIUS = {
+  arena: 9, hub: 11, terminal: 8, bar: 7,
+  sector: 11, bank: 7, street: 5, path: 5,
+};
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let rooms     = [];             // WorldMapRoom[]
+let positions = new Map();      // roomId → {x, y}
+let byId      = new Map();      // roomId → room
+let selectedId = null;
+let bgImage   = null;
+let nextNewId = 2000;
+
+let VIEW = { scale: 1, tx: 20, ty: 20 };
+let dragging = null;   // { roomId, startCX, startCY, startPX, startPY }
+let panning  = null;   // { startCX, startCY, startTX, startTY }
+let addMode  = false;
+
+// ── Canvas ────────────────────────────────────────────────────────────────────
+const wrap   = document.getElementById('canvas-wrap');
+const canvas = document.getElementById('canvas');
+const ctx    = canvas.getContext('2d');
+
+function resizeCanvas() {
+  canvas.width  = wrap.clientWidth;
+  canvas.height = wrap.clientHeight;
+  render();
+}
+new ResizeObserver(resizeCanvas).observe(wrap);
+
+// ── Coordinate transforms ─────────────────────────────────────────────────────
+function toCanvas(mx, my) {
+  return { x: mx * VIEW.scale + VIEW.tx, y: my * VIEW.scale + VIEW.ty };
+}
+function toMap(cx, cy) {
+  return { x: (cx - VIEW.tx) / VIEW.scale, y: (cy - VIEW.ty) / VIEW.scale };
+}
+
+// ── Auto-placement ─────────────────────────────────────────────────────────────
+function autoPlace(forceAll = false) {
+  if (forceAll) {
+    // Clear non-anchor positions
+    for (const room of rooms) {
+      if (!ANCHOR_POS[room.roomId]) positions.delete(room.roomId);
+    }
+  }
+
+  // Seed anchors
+  for (const room of rooms) {
+    const a = ANCHOR_POS[room.roomId];
+    if (a) positions.set(room.roomId, { x: a[0], y: a[1] });
+  }
+
+  // Iterative relaxation: place unplaced rooms at average of placed neighbors
+  for (let iter = 0; iter < 200; iter++) {
+    let changed = false;
+    for (const room of rooms) {
+      if (positions.has(room.roomId)) continue;
+      const placed = [room.exits.north, room.exits.south, room.exits.east, room.exits.west]
+        .filter(id => id != null && positions.has(id));
+      if (placed.length > 0) {
+        const x = placed.reduce((s, id) => s + positions.get(id).x, 0) / placed.length;
+        const y = placed.reduce((s, id) => s + positions.get(id).y, 0) / placed.length;
+        positions.set(room.roomId, { x, y });
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+
+  // Fallback: anything still unplaced gets a random scatter
+  const allPlaced = [...positions.values()];
+  let si = 0;
+  for (const room of rooms) {
+    if (!positions.has(room.roomId)) {
+      positions.set(room.roomId, { x: 50 + (si % 20) * 20, y: 450 + Math.floor(si / 20) * 20 });
+      si++;
+    }
+  }
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function render() {
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0a0a18';
+  ctx.fillRect(0, 0, W, H);
+
+  // Background image
+  if (bgImage) {
+    ctx.globalAlpha = 0.4;
+    const { x: ox, y: oy } = toCanvas(0, 0);
+    ctx.drawImage(bgImage, ox, oy, bgImage.naturalWidth * VIEW.scale, bgImage.naturalHeight * VIEW.scale);
+    ctx.globalAlpha = 1;
+  }
+
+  // Grid
+  if (document.getElementById('chkGrid').checked) {
+    ctx.strokeStyle = '#151525';
+    ctx.lineWidth = 1;
+    for (let mx = 0; mx <= 440; mx += 20) {
+      const { x } = toCanvas(mx, 0);
+      if (x < -1 || x > W + 1) continue;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    }
+    for (let my = 0; my <= 440; my += 20) {
+      const { y } = toCanvas(0, my);
+      if (y < -1 || y > H + 1) continue;
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+  }
+
+  if (rooms.length === 0) {
+    ctx.fillStyle = '#334';
+    ctx.font = '14px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('Load world-map.json to begin', W / 2, H / 2);
+    return;
+  }
+
+  // Draw exit lines
+  if (document.getElementById('chkExits').checked) {
+    const drawn = new Set();
+    for (const room of rooms) {
+      const p0 = positions.get(room.roomId);
+      if (!p0) continue;
+      const c0 = toCanvas(p0.x, p0.y);
+      for (const targetId of Object.values(room.exits)) {
+        if (targetId == null) continue;
+        const key = room.roomId < targetId
+          ? `${room.roomId}-${targetId}`
+          : `${targetId}-${room.roomId}`;
+        if (drawn.has(key)) continue;
+        drawn.add(key);
+        const p1 = positions.get(targetId);
+        if (!p1) continue;
+        const c1 = toCanvas(p1.x, p1.y);
+        const isAdj = room.roomId === selectedId || targetId === selectedId;
+        ctx.strokeStyle = isAdj ? '#6688cc' : '#252535';
+        ctx.lineWidth   = isAdj ? 1.5 : 1;
+        ctx.beginPath();
+        ctx.moveTo(c0.x, c0.y);
+        ctx.lineTo(c1.x, c1.y);
+        ctx.stroke();
+      }
+    }
+  }
+
+  // Draw rooms
+  const showLbl = document.getElementById('chkLabels').checked;
+  const labelScale = Math.min(1, VIEW.scale / 2.2);
+  const fontSize = Math.round(Math.max(9, Math.min(12, 10 * labelScale)));
+
+  for (const room of rooms) {
+    const pos = positions.get(room.roomId);
+    if (!pos) continue;
+    const { x, y } = toCanvas(pos.x, pos.y);
+
+    // Frustum cull
+    if (x < -20 || x > canvas.width + 20 || y < -20 || y > canvas.height + 20) continue;
+
+    const baseR = TYPE_RADIUS[room.type] ?? 5;
+    const r = Math.max(2, baseR * Math.min(1.4, VIEW.scale / 1.8));
+    const isSel = room.roomId === selectedId;
+    const color = TYPE_COLOR[room.type] ?? '#555';
+
+    if (isSel) {
+      ctx.beginPath();
+      ctx.arc(x, y, r + 5, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(80, 130, 220, 0.25)';
+      ctx.fill();
+    }
+
+    // Draw icon image if available and zoomed in enough
+    const iconImg = room.icon != null ? getIconImg(room.icon) : null;
+    if (iconReady(iconImg) && VIEW.scale >= 0.6) {
+      const size = Math.max(14, r * 2.5);
+      ctx.save();
+      if (isSel) {
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 6;
+      }
+      ctx.globalAlpha = isSel ? 1.0 : 0.9;
+      ctx.drawImage(iconImg, x - size / 2, y - size / 2, size, size);
+      ctx.globalAlpha = 1;
+      ctx.restore();
+      // Selection ring over icon
+      if (isSel) {
+        ctx.beginPath();
+        ctx.arc(x, y, size / 2 + 2, 0, Math.PI * 2);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    } else {
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = isSel ? '#ffffff' : color;
+      ctx.fill();
+      if (isSel) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    }
+
+    // Label
+    if (showLbl && VIEW.scale >= 1.0) {
+      const name = room._name ?? '';
+      const isAnon = !name || name === 'Street' || name === 'Path';
+      const lbl = isAnon ? String(room.roomId) : name;
+      ctx.font = `${fontSize}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = isSel ? '#ffffff' : (isAnon ? '#446' : '#99b');
+      ctx.fillText(lbl, x, y - r - 3);
+    }
+  }
+}
+
+// ── Hit test ──────────────────────────────────────────────────────────────────
+function hitTest(cx, cy) {
+  let bestId = null, bestDist = 18;
+  for (const room of rooms) {
+    const pos = positions.get(room.roomId);
+    if (!pos) continue;
+    const { x, y } = toCanvas(pos.x, pos.y);
+    const d = Math.hypot(cx - x, cy - y);
+    const r = Math.max(2, (TYPE_RADIUS[room.type] ?? 5) * Math.min(1.4, VIEW.scale / 1.8)) + 5;
+    if (d < r && d < bestDist) { bestId = room.roomId; bestDist = d; }
+  }
+  return bestId;
+}
+
+// ── Selection & panel ──────────────────────────────────────────────────────────
+function selectRoom(id) {
+  selectedId = id;
+  const room = id != null ? byId.get(id) : null;
+  document.getElementById('panel-empty').style.display = room ? 'none' : '';
+  document.getElementById('editor').style.display = room ? '' : 'none';
+  if (!room) updateIconPreview(null);
+  if (room) {
+    document.getElementById('eId').value      = room.roomId;
+    document.getElementById('eName').value    = room._name ?? '';
+    document.getElementById('eType').value    = room.type ?? 'street';
+    document.getElementById('eSector').value  = room.sector ?? 'international';
+    document.getElementById('eIcon').value    = room.icon != null ? room.icon : '';
+    document.getElementById('eInferred').checked = !!room._inferred;
+    updateIconPreview(room.icon);
+    document.getElementById('eN').value  = room.exits.north ?? '';
+    document.getElementById('eS').value  = room.exits.south ?? '';
+    document.getElementById('eE').value  = room.exits.east  ?? '';
+    document.getElementById('eW').value  = room.exits.west  ?? '';
+    const pos = positions.get(id);
+    document.getElementById('ePosX').value = pos ? pos.x.toFixed(1) : '';
+    document.getElementById('ePosY').value = pos ? pos.y.toFixed(1) : '';
+  }
+  render();
+}
+
+function updateIconPreview(iconId) {
+  const wrap = document.getElementById('icon-preview');
+  const img  = document.getElementById('icon-img');
+  if (iconId != null && iconId !== '') {
+    img.src = `${ASSETS}/icons/I${parseInt(iconId) + 101}.png`;
+    wrap.style.display = '';
+  } else {
+    wrap.style.display = 'none';
+  }
+}
+
+function applyChanges() {
+  if (selectedId == null) return;
+  const room = byId.get(selectedId);
+  if (!room) return;
+
+  const nameVal = document.getElementById('eName').value.trim();
+  room._name    = nameVal || undefined;
+  room.type     = document.getElementById('eType').value;
+  room.sector   = document.getElementById('eSector').value;
+  const iconVal = document.getElementById('eIcon').value.trim();
+  room.icon     = iconVal !== '' ? parseInt(iconVal) : null;
+  room._inferred = document.getElementById('eInferred').checked || undefined;
+  updateIconPreview(room.icon);
+
+  const nv = document.getElementById('eN').value.trim();
+  const sv = document.getElementById('eS').value.trim();
+  const ev = document.getElementById('eE').value.trim();
+  const wv = document.getElementById('eW').value.trim();
+  room.exits.north = nv !== '' ? parseInt(nv) : null;
+  room.exits.south = sv !== '' ? parseInt(sv) : null;
+  room.exits.east  = ev !== '' ? parseInt(ev) : null;
+  room.exits.west  = wv !== '' ? parseInt(wv) : null;
+
+  render();
+  setStatus(`Updated room ${selectedId}`);
+}
+
+function applyPosition() {
+  if (selectedId == null) return;
+  const x = parseFloat(document.getElementById('ePosX').value);
+  const y = parseFloat(document.getElementById('ePosY').value);
+  if (!isNaN(x) && !isNaN(y)) {
+    positions.set(selectedId, { x, y });
+    render();
+  }
+}
+
+function deleteRoom() {
+  if (selectedId == null) return;
+  if (!confirm(`Delete room ${selectedId} (${byId.get(selectedId)?._name ?? 'unnamed'})?`)) return;
+  const id = selectedId;
+  rooms.splice(rooms.findIndex(r => r.roomId === id), 1);
+  byId.delete(id);
+  positions.delete(id);
+  for (const r of rooms) {
+    for (const dir of ['north', 'south', 'east', 'west']) {
+      if (r.exits[dir] === id) r.exits[dir] = null;
+    }
+  }
+  selectRoom(null);
+  setStatus(`Deleted room ${id}`);
+}
+
+// ── File I/O ───────────────────────────────────────────────────────────────────
+function loadJson(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (!Array.isArray(data.rooms)) throw new Error('"rooms" array not found');
+      rooms = data.rooms;
+      byId.clear(); positions.clear(); selectedId = null;
+      // Determine next ID for new rooms
+      let maxId = 1999;
+      for (const r of rooms) {
+        byId.set(r.roomId, r);
+        if (r.roomId > maxId) maxId = r.roomId;
+        // Restore saved editor positions if present
+        if (typeof r._x === 'number' && typeof r._y === 'number') {
+          positions.set(r.roomId, { x: r._x, y: r._y });
+        }
+      }
+      nextNewId = maxId + 1;
+      autoPlace(false);   // fill gaps without overriding _x/_y
+      selectRoom(null);
+      fitView();
+      render();
+      setStatus(`Loaded ${rooms.length} rooms from ${file.name}`);
+    } catch (err) {
+      alert('Failed to load JSON:\n' + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+function saveJson() {
+  for (const room of rooms) {
+    const pos = positions.get(room.roomId);
+    if (pos) {
+      room._x = Math.round(pos.x * 10) / 10;
+      room._y = Math.round(pos.y * 10) / 10;
+    } else {
+      delete room._x; delete room._y;
+    }
+  }
+  const json = JSON.stringify({ rooms }, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'world-map.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  setStatus(`Saved ${rooms.length} rooms to world-map.json`);
+}
+
+function loadBackground(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    const img = new Image();
+    img.onload = () => { bgImage = img; render(); setStatus('Background image loaded'); };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+// ── View helpers ───────────────────────────────────────────────────────────────
+function fitView() {
+  if (positions.size === 0) return;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const { x, y } of positions.values()) {
+    if (x < minX) minX = x; if (x > maxX) maxX = x;
+    if (y < minY) minY = y; if (y > maxY) maxY = y;
+  }
+  const W = canvas.width, H = canvas.height;
+  const pad = 50;
+  const s = Math.min((W - pad * 2) / (maxX - minX || 1), (H - pad * 2) / (maxY - minY || 1), 8);
+  VIEW.scale = s;
+  VIEW.tx = pad - minX * s + ((W - pad * 2) - (maxX - minX) * s) / 2;
+  VIEW.ty = pad - minY * s + ((H - pad * 2) - (maxY - minY) * s) / 2;
+}
+
+function setStatus(msg) { document.getElementById('status').textContent = msg; }
+
+// ── Add room ───────────────────────────────────────────────────────────────────
+function setAddMode(on) {
+  addMode = on;
+  document.getElementById('btnAdd').classList.toggle('active', on);
+  document.getElementById('hud-mode').textContent = on
+    ? 'Add mode: click canvas to place new room · Esc to cancel'
+    : 'Scroll to zoom · Drag to pan · Click room to select · Drag room to move';
+}
+
+function addRoomAt(mx, my) {
+  const id = nextNewId++;
+  const room = {
+    roomId: id,
+    _name: 'New Room',
+    sector: 'international',
+    type: 'street',
+    icon: 1,
+    _inferred: true,
+    exits: { north: null, south: null, east: null, west: null },
+  };
+  rooms.push(room);
+  byId.set(id, room);
+  positions.set(id, { x: mx, y: my });
+  setAddMode(false);
+  selectRoom(id);
+  render();
+  setStatus(`Added room ${id} — edit name and exits in panel`);
+}
+
+// ── Mouse events ───────────────────────────────────────────────────────────────
+function getCanvasXY(e) {
+  const rect = canvas.getBoundingClientRect();
+  return { cx: e.clientX - rect.left, cy: e.clientY - rect.top };
+}
+
+canvas.addEventListener('mousedown', e => {
+  const { cx, cy } = getCanvasXY(e);
+
+  if (addMode && e.button === 0) {
+    const mp = toMap(cx, cy);
+    addRoomAt(mp.x, mp.y);
+    return;
+  }
+
+  if (e.button === 1 || (e.button === 0 && e.altKey)) {
+    panning = { startCX: e.clientX, startCY: e.clientY, startTX: VIEW.tx, startTY: VIEW.ty };
+    canvas.style.cursor = 'move';
+    e.preventDefault();
+    return;
+  }
+
+  if (e.button === 0) {
+    const hit = hitTest(cx, cy);
+    if (hit != null) {
+      selectRoom(hit);
+      const pos = positions.get(hit);
+      dragging = { roomId: hit, startCX: cx, startCY: cy, startPX: pos.x, startPY: pos.y };
+      canvas.style.cursor = 'grabbing';
+    } else {
+      selectRoom(null);
+      panning = { startCX: e.clientX, startCY: e.clientY, startTX: VIEW.tx, startTY: VIEW.ty };
+      canvas.style.cursor = 'move';
+    }
+  }
+});
+
+canvas.addEventListener('mousemove', e => {
+  const { cx, cy } = getCanvasXY(e);
+
+  if (panning) {
+    VIEW.tx = panning.startTX + (e.clientX - panning.startCX);
+    VIEW.ty = panning.startTY + (e.clientY - panning.startCY);
+    render();
+    return;
+  }
+  if (dragging) {
+    const dx = (cx - dragging.startCX) / VIEW.scale;
+    const dy = (cy - dragging.startCY) / VIEW.scale;
+    const newPos = { x: dragging.startPX + dx, y: dragging.startPY + dy };
+    positions.set(dragging.roomId, newPos);
+    document.getElementById('ePosX').value = newPos.x.toFixed(1);
+    document.getElementById('ePosY').value = newPos.y.toFixed(1);
+    render();
+    return;
+  }
+
+  // Cursor feedback
+  if (!addMode) {
+    const hit = hitTest(cx, cy);
+    canvas.style.cursor = hit != null ? 'grab' : 'default';
+  }
+});
+
+canvas.addEventListener('mouseup', () => {
+  dragging = null;
+  panning  = null;
+  canvas.style.cursor = addMode ? 'crosshair' : 'default';
+});
+canvas.addEventListener('mouseleave', () => {
+  dragging = null; panning = null;
+});
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const { cx, cy } = getCanvasXY(e);
+  const factor = e.deltaY > 0 ? 0.88 : 1.14;
+  const newScale = Math.max(0.2, Math.min(12, VIEW.scale * factor));
+  VIEW.tx = cx - (cx - VIEW.tx) * (newScale / VIEW.scale);
+  VIEW.ty = cy - (cy - VIEW.ty) * (newScale / VIEW.scale);
+  VIEW.scale = newScale;
+  render();
+}, { passive: false });
+
+canvas.addEventListener('dblclick', e => {
+  const { cx, cy } = getCanvasXY(e);
+  const hit = hitTest(cx, cy);
+  if (hit == null) return;
+  const room = byId.get(hit);
+  const cur = room._name ?? '';
+  const next = prompt(`Rename room ${hit}:`, cur);
+  if (next !== null) {
+    room._name = next.trim() || undefined;
+    document.getElementById('eName').value = room._name ?? '';
+    render();
+  }
+});
+
+// ── Keyboard shortcuts ─────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  const inInput = ['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName);
+
+  if (e.key === 'Escape') {
+    if (addMode) setAddMode(false);
+    else selectRoom(null);
+    return;
+  }
+  if ((e.key === 'f' || e.key === 'F') && !inInput) {
+    fitView(); render(); return;
+  }
+  if (e.key === 'Delete' && !inInput && selectedId != null) {
+    deleteRoom(); return;
+  }
+  if (e.key === 'Enter' && inInput) {
+    applyChanges();
+  }
+});
+
+// ── Toolbar bindings ───────────────────────────────────────────────────────────
+document.getElementById('btnLoadJson').addEventListener('click', () =>
+  document.getElementById('fileJson').click());
+document.getElementById('fileJson').addEventListener('change', e => {
+  if (e.target.files[0]) { loadJson(e.target.files[0]); e.target.value = ''; }
+});
+
+document.getElementById('btnLoadBg').addEventListener('click', () =>
+  document.getElementById('fileBg').click());
+document.getElementById('fileBg').addEventListener('change', e => {
+  if (e.target.files[0]) { loadBackground(e.target.files[0]); e.target.value = ''; }
+});
+
+document.getElementById('btnSave').addEventListener('click', saveJson);
+
+document.getElementById('btnAdd').addEventListener('click', () => setAddMode(!addMode));
+
+document.getElementById('btnAutoPlace').addEventListener('click', () => {
+  autoPlace(true);   // force reset all intermediate positions
+  fitView();
+  render();
+  setStatus('Auto-placed all rooms from graph topology');
+});
+
+document.getElementById('btnFit').addEventListener('click', () => { fitView(); render(); });
+
+document.getElementById('chkLabels').addEventListener('change', render);
+document.getElementById('chkExits').addEventListener('change', render);
+document.getElementById('chkGrid').addEventListener('change', render);
+
+document.getElementById('btnApply').addEventListener('click', applyChanges);
+document.getElementById('btnApplyPos').addEventListener('click', applyPosition);
+document.getElementById('btnDelete').addEventListener('click', deleteRoom);
+
+// Auto-load Solaris background
+(function() {
+  const img = new Image();
+  img.onload = () => { bgImage = img; render(); setStatus('Solaris map loaded — Load world-map.json to begin'); };
+  img.src = `${ASSETS}/maps/solaris_background.png`;
+})();
+
+// Initial render
+resizeCanvas();
+</script>
+</body>
+</html>
