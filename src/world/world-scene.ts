@@ -528,7 +528,7 @@ export function sendMechVariantPicker(
     mechType:   mech.mechType,
     slot:       mech.slot,
     typeString: mech.typeString,
-    variant:    `${mechKph(mech.maxSpeedMag)} kph`,
+    variant:    `${mechKph(mech.walkSpeedMag)}/${mechKph(mech.maxSpeedMag)} kph`,
     name:       mech.typeString,
     walkSpeedMag: mech.walkSpeedMag,
     maxSpeedMag: mech.maxSpeedMag,

@@ -2965,9 +2965,10 @@ maxSpeedMag  = round(walk_mp × 1.5) × 300
 
 The server must read this from the decrypted `.MEC` buffer as `int16LE` at offset `0x16`.
 
-**Approximate in-game kph** (informational; displayed in the Mech Bay variant picker):
+**Approximate in-game kph** (informational; displayed in the Mech Bay variant picker as walk/run):
 ```
-mechKph = round(maxSpeedMag × 16.2 / 450)
+walkKph = round(walkSpeedMag × 16.2 / 450)
+runKph  = round(maxSpeedMag × 16.2 / 450)
 ```
 
 Cross-validation against `mech-stats.ts` and BT-MAN:
@@ -3005,13 +3006,13 @@ At full reverse samples (`throttlePct ≈ +30`): `signedSpeedMag = -maxSpeedMag`
 | Client command | Server action | Rationale |
 |---|---|---|
 | Cmd9 (moving: `sVar1 ≠ 0 OR sVar2 ≠ 0`) | Echo Cmd65 with `speedMag=signedSpeedMag`, `throttle=MOTION_NEUTRAL`, `legVel=MOTION_NEUTRAL` | Drives client HUD speed gauge and interpolation state |
-| Cmd8 (coasting: `sVar1 == 0 AND sVar2 == 0`) | Do not continuously echo Cmd65; only send a one-shot positive `speedMag=maxSpeedMag` if the client has reached the walk plateau (`clientSpeed >= walkSpeedMag - tolerance`) and has no run target latched | A zero Cmd65 resets `legVelY` (`DAT_004f1f7a`) to MOTION_NEUTRAL inside `FUN_0040d2d0`; without local keyboard input the accumulator never rebuilds. The one-shot run latch only touches `DAT_004f20a2` after the coasting packet already reports zero throttle/leg velocity. |
+| Cmd8 (coasting: `sVar1 == 0 AND sVar2 == 0`) | Do not echo Cmd65 | A zero Cmd65 resets `legVelY` (`DAT_004f1f7a`) to MOTION_NEUTRAL inside `FUN_0040d2d0`; without local keyboard input the accumulator never rebuilds. Live ANH-1A testing showed a server-side `Cmd65 speedMag=maxSpeedMag` run latch did not move the local client above the walk plateau, so the remaining run-speed path is client-local throttle target state (`FUN_004229a0`). |
 
 #### Implementation reference
 
 - `src/data/mechs.ts` → `readMecFields()` reads `walk_mp` at offset `0x16`; the loader derives `walkSpeedMag` and `maxSpeedMag`.
-- `src/world/world-data.ts` → `mechKph(maxSpeedMag)` converts for display.
-- `src/world/world-handlers.ts` → `handleCombatMovementFrame()` applies the Cmd9 formula and the one-shot Cmd8 run-speed latch.
+- `src/world/world-data.ts` → `mechKph(speedMag)` converts walk/run speed magnitudes for display.
+- `src/world/world-handlers.ts` → `handleCombatMovementFrame()` applies the Cmd9 formula and suppresses Cmd8 echo.
 
 ---
 
@@ -3362,7 +3363,7 @@ MechEntry {
   id:         m.id,                // drives 3D model
   slot:       m.slot,              // real slot; client returns slot+1
   typeString: m.typeString,        // shown GREEN line 1, e.g. "SDR-5V"
-  variant:    mechKph(m.maxSpeedMag) + " kph",   // shown GREEN line 2
+  variant:    mechKph(m.walkSpeedMag) + "/" + mechKph(m.maxSpeedMag) + " kph",   // shown GREEN line 2
   name:       "",                  // empty → client auto-generates from id
 }
 ```
@@ -3431,7 +3432,7 @@ server — any command that causes a modal window or text overlay must close wit
 | `MECH_CHASSIS_LIST_ID = 0x3e` | `src/world/world-data.ts` | listId for chassis picker |
 | `CLASS_LABELS`, `CLASS_KEYS` | `src/world/world-data.ts` | Display names and key strings for the 4 weight classes |
 | `CHASSIS_BY_PREFIX`, `getMechChassis()` | `src/world/world-data.ts` | Groups mechs into chassis families by designation prefix |
-| `mechKph()` | `src/world/world-data.ts` | Converts maxSpeedMag → display kph for variant picker |
+| `mechKph()` | `src/world/world-data.ts` | Converts walk/run speedMag values → display kph for variant picker |
 | `sendMechClassPicker()` | `src/world/world-scene.ts` | Sends step 1 |
 | `sendMechChassisPicker()` | `src/world/world-scene.ts` | Sends step 2 |
 | `sendMechVariantPicker()` | `src/world/world-scene.ts` | Sends step 3 |
