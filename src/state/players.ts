@@ -125,7 +125,7 @@ export interface ClientSession {
   selectedMechSlot?: number;
 
   /** Optional scripted combat verification mode consumed on the next /fight bootstrap. */
-  combatVerificationMode?: 'autowin' | 'autolose' | 'dmglocal' | 'dmgbot';
+  combatVerificationMode?: 'autowin' | 'autolose' | 'dmglocal' | 'dmgbot' | 'strictfire';
 
   /**
    * Pending mech slot chosen in the mech-select dialog, held until the
@@ -156,6 +156,14 @@ export interface ClientSession {
   combatJumpFuel?: number;
   /** Timestamp (ms) of the last cmd12/action 0 fire trigger frame from client. */
   lastCombatFireActionAt?: number;
+  /** If true, cmd10 weapon-fire frames are accepted only after cmd12/action0. */
+  combatRequireAction0ForFire?: boolean;
+  /** Count of cmd10 weapon-fire frames accepted in the current combat session. */
+  combatShotsAccepted?: number;
+  /** Count of cmd10 weapon-fire frames rejected by the strict action0 gate. */
+  combatShotsRejected?: number;
+  /** Count of cmd10 shots accepted without a recent cmd12/action0 gate (relaxed mode). */
+  combatShotsUngatedAccepted?: number;
   /** Per-mech run/max speedMag cap (round(mec_speed * 1.5) * 300), set at combat bootstrap. */
   combatMaxSpeedMag?: number;
   /** Per-mech walk speedMag (mec_speed * 300), set at combat bootstrap. */

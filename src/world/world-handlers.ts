@@ -529,6 +529,10 @@ export function sendCombatBootstrapSequence(
 
   const verificationMode = session.combatVerificationMode;
   session.combatVerificationMode = undefined;
+  session.combatRequireAction0ForFire = verificationMode === 'strictfire';
+  session.combatShotsAccepted = 0;
+  session.combatShotsRejected = 0;
+  session.combatShotsUngatedAccepted = 0;
   if (verificationMode === 'autowin') {
     setTimeout(() => {
       if (session.socket.destroyed || !session.socket.writable) return;
@@ -599,6 +603,17 @@ export function sendCombatBootstrapSequence(
     };
 
     setTimeout(sendSweep, VERIFY_DELAY_MS).unref();
+  } else if (verificationMode === 'strictfire') {
+    setTimeout(() => {
+      if (session.socket.destroyed || !session.socket.writable) return;
+      connLog.info('[world/combat] scripted verification: strictfire gate enabled');
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket('Verification mode: strict fire gate enabled (cmd10 requires recent cmd12/action0).', nextSeq(session)),
+        capture,
+        'CMD3_VERIFY_STRICTFIRE',
+      );
+    }, VERIFY_DELAY_MS).unref();
   }
 
   session.combatInitialized = true;
@@ -1016,9 +1031,19 @@ export function handleCombatWeaponFireFrame(
     ? undefined
     : now - session.lastCombatFireActionAt;
   const hasRecentFireAction = actionAgeMs !== undefined && actionAgeMs >= 0 && actionAgeMs <= FIRE_ACTION_WINDOW_MS;
+  if (session.combatRequireAction0ForFire === true && !hasRecentFireAction) {
+    session.combatShotsRejected = (session.combatShotsRejected ?? 0) + 1;
+    connLog.info(
+      '[world/combat] cmd-10 rejected by strict action0 gate (rejected=%d)',
+      session.combatShotsRejected,
+    );
+    return;
+  }
+  session.combatShotsAccepted = (session.combatShotsAccepted ?? 0) + 1;
   if (hasRecentFireAction) {
     connLog.debug('[world/combat] cmd-10 correlated with cmd12/action0 (age=%dms)', actionAgeMs);
   } else {
+    session.combatShotsUngatedAccepted = (session.combatShotsUngatedAccepted ?? 0) + 1;
     connLog.debug('[world/combat] cmd-10 without recent cmd12/action0 gate (age=%s)', actionAgeMs === undefined ? 'n/a' : `${actionAgeMs}ms`);
   }
   session.lastCombatFireActionAt = undefined;

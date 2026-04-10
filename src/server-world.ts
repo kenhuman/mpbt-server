@@ -298,7 +298,8 @@ function handleWorldGameData(
       textCmd === '/fightwin' ||
       textCmd === '/fightlose' ||
       textCmd === '/fightdmglocal' ||
-      textCmd === '/fightdmgbot'
+      textCmd === '/fightdmgbot' ||
+      textCmd === '/fightstrictfire'
     ) {
       if (textCmd === '/fightwin') {
         session.combatVerificationMode = 'autowin';
@@ -308,6 +309,8 @@ function handleWorldGameData(
         session.combatVerificationMode = 'dmglocal';
       } else if (textCmd === '/fightdmgbot') {
         session.combatVerificationMode = 'dmgbot';
+      } else if (textCmd === '/fightstrictfire') {
+        session.combatVerificationMode = 'strictfire';
       } else {
         session.combatVerificationMode = undefined;
       }
@@ -668,11 +671,28 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
       clearInterval(session.combatJumpFuelRegenTimer);
     }
     // Reset combat per-session counters so a reconnect starts fresh.
+    if (
+      session.combatShotsAccepted !== undefined ||
+      session.combatShotsRejected !== undefined ||
+      session.combatShotsUngatedAccepted !== undefined
+    ) {
+      connLog.info(
+        '[world/combat] fire-gate summary: requireAction0=%s accepted=%d rejected=%d ungatedAccepted=%d',
+        session.combatRequireAction0ForFire === true,
+        session.combatShotsAccepted ?? 0,
+        session.combatShotsRejected ?? 0,
+        session.combatShotsUngatedAccepted ?? 0,
+      );
+    }
     session.botHealth            = undefined;
     session.playerHealth         = undefined;
     session.combatVerificationMode = undefined;
     session.combatJumpFuel       = undefined;
     session.lastCombatFireActionAt = undefined;
+    session.combatRequireAction0ForFire = undefined;
+    session.combatShotsAccepted = undefined;
+    session.combatShotsRejected = undefined;
+    session.combatShotsUngatedAccepted = undefined;
     capture.close();
   });
 
