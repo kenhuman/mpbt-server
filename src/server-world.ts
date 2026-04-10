@@ -466,7 +466,7 @@ function handleWorldGameData(
 
     connLog.debug('[world] cmd-7 ignored: unsupported listId=%d', parsed.listId);
   } else if (session.phase === 'combat') {
-    // Combat-mode inbound frame (client sends Cmd8/Cmd9 for movement/fire).
+    // Combat-mode inbound frame (client sends Cmd8/Cmd9 for movement; weapon fire uses Cmd10).
     if (cmdIdx === 8 || cmdIdx === 9) {
       handleCombatMovementFrame(session, payload, connLog, capture);
     } else if (cmdIdx === 12) {
