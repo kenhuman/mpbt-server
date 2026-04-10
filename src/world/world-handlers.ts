@@ -521,6 +521,52 @@ export function sendCombatBootstrapSequence(
   }, BOT_FIRE_INTERVAL_MS);
   session.botFireTimer.unref();
 
+  const verificationMode = session.combatVerificationMode;
+  session.combatVerificationMode = undefined;
+  if (verificationMode === 'autowin') {
+    setTimeout(() => {
+      if (session.socket.destroyed || !session.socket.writable) return;
+      connLog.info('[world/combat] scripted verification: autowin');
+      session.botHealth = 0;
+      send(
+        session.socket,
+        buildCmd66ActorDamagePacket(1, 1, 999, nextSeq(session)),
+        capture,
+        'CMD66_VERIFY_AUTOWIN',
+      );
+      send(
+        session.socket,
+        buildCmd70ActorTransitionPacket(1, 4, nextSeq(session)),
+        capture,
+        'CMD70_VERIFY_AUTOWIN',
+      );
+      if (session.botPositionTimer !== undefined) {
+        clearInterval(session.botPositionTimer);
+        session.botPositionTimer = undefined;
+      }
+      if (session.botFireTimer !== undefined) {
+        clearInterval(session.botFireTimer);
+        session.botFireTimer = undefined;
+      }
+    }, 1200).unref();
+  } else if (verificationMode === 'autolose') {
+    setTimeout(() => {
+      if (session.socket.destroyed || !session.socket.writable) return;
+      connLog.info('[world/combat] scripted verification: autolose');
+      session.playerHealth = 0;
+      send(
+        session.socket,
+        buildCmd67LocalDamagePacket(1, 999, nextSeq(session)),
+        capture,
+        'CMD67_VERIFY_AUTOLOSE',
+      );
+      if (session.botFireTimer !== undefined) {
+        clearInterval(session.botFireTimer);
+        session.botFireTimer = undefined;
+      }
+    }, 1200).unref();
+  }
+
   session.combatInitialized = true;
   connLog.info('[world] combat entry complete for "%s"', callsign);
 }
