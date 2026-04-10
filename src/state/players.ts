@@ -140,8 +140,10 @@ export interface ClientSession {
   combatLegVel?: number;
   /** Current speedMag echoed in Cmd65 responses. */
   combatSpeedMag?: number;
-  /** Per-mech speedMag cap (mec_speed * 450), set at combat bootstrap. */
+  /** Per-mech run/max speedMag cap (round(mec_speed * 1.5) * 300), set at combat bootstrap. */
   combatMaxSpeedMag?: number;
+  /** Per-mech walk speedMag (mec_speed * 300), set at combat bootstrap. */
+  combatWalkSpeedMag?: number;
 
   // ── 3-step mech picker state ──────────────────────────────────────────────
 
@@ -151,6 +153,8 @@ export interface ClientSession {
   mechPickerClass?: number;
   /** Chassis name (e.g. "Jenner") chosen in step 2. */
   mechPickerChassis?: string;
+  /** Page offset for the chassis picker when a weight class has more than 19 rows. */
+  mechPickerChassisPage?: number;
 
   // ── Persistence fields (set after DB lookup / character creation) ─────────
 

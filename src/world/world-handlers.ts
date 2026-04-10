@@ -54,8 +54,10 @@ import {
   setSessionRoomPosition,
   CLASS_KEYS,
   getMechChassis,
+  getMechChassisListForClass,
   MECH_CLASS_LIST_ID,
   MECH_CHASSIS_LIST_ID,
+  MECH_CHASSIS_PAGE_SIZE,
 } from './world-data.js';
 import {
   send,
@@ -83,6 +85,11 @@ const BOT_DAMAGE_PER_HIT = 20;
 const BOT_FIRE_INTERVAL_MS = 3_000;
 /** Prototype damage per bot retaliatory shot (Cmd67 damageCode=1, value=10). */
 const BOT_RETALIATION_DAMAGE = 10;
+
+// KP8 full-forward produces sVar2 ≈ 20 in the client's throttle accumulator.
+// Using 20 as the scale means sVar2=20 → maxSpeedMag (run speed), rather than
+// the upstream assumption of 45 which capped movement at walk speed.
+const THROTTLE_RUN_SCALE = 20;
 
 // ── ComStar messaging ─────────────────────────────────────────────────────────
 
@@ -323,8 +330,9 @@ export function sendCombatBootstrapSequence(
   const extraCritCount  = mechEntry?.extraCritCount ?? 0;
   const critBytes       = Math.max(0, extraCritCount + 21);
 
-  // Store per-mech speedMag cap so Cmd8/9 handlers can apply it.
-  session.combatMaxSpeedMag = mechEntry?.maxSpeedMag ?? 0;
+  // Store per-mech speedMag caps so Cmd8/9 handlers can apply them.
+  session.combatMaxSpeedMag  = mechEntry?.maxSpeedMag  ?? 0;
+  session.combatWalkSpeedMag = mechEntry?.walkSpeedMag ?? 0;
   session.botHealth    = BOT_INITIAL_HEALTH;
   session.playerHealth = BOT_INITIAL_HEALTH; // simplified IS counter (stops Cmd67 when ≤ 0)
 
@@ -750,30 +758,55 @@ export function handleCombatMovementFrame(
     session.combatY          = frame.yRaw - COORD_BIAS;
     session.combatHeadingRaw = frame.headingRaw;
     const throttle = session.combatThrottle ?? 0;
-    const legVel = session.combatLegVel ?? 0;
-    const speedMag = session.combatSpeedMag ?? 0;
-    connLog.debug(
-      '[world/combat] cmd8 coasting: x=%d y=%d heading=%d throttle=%d legVel=%d speedMag=%d',
-      session.combatX, session.combatY, frame.headingRaw, throttle, legVel, speedMag,
-    );
+    const legVel   = session.combatLegVel   ?? 0;
+    let speedMag   = session.combatSpeedMag ?? 0;
 
-    send(
-      session.socket,
-      buildCmd65PositionSyncPacket(
-        {
-          slot:     0,
-          x:        session.combatX,
-          y:        session.combatY,
-          z:        0,
-          facing:   (frame.headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
-          throttle,
-          legVel,
-          speedMag,
-        },
-        nextSeq(session),
-      ),
-      capture,
-      'CMD65_MOVEMENT',
+    // Ghidra: DAT_004f1f7c=0 → is_moving=false → client sends Cmd8 forever.
+    // When the mech is moving (clientSpeed!=0), echo Cmd65 with a non-zero
+    // throttle to set DAT_004f1f7c != 0 → is_moving=true → next frame is Cmd9.
+    const clientSpeed = frame.rotationRaw - MOTION_NEUTRAL;
+    if (clientSpeed !== 0) {
+      const maxSpeedMag   = session.combatMaxSpeedMag ?? 0;
+      const dir           = Math.sign(clientSpeed);
+      const boostThrottle = dir * MOTION_DIV;   // minimal non-zero value in correct direction
+      const boostSpeedMag = dir * maxSpeedMag;  // drive to run speed immediately
+      session.combatThrottle = boostThrottle;
+      session.combatLegVel   = 0;
+      session.combatSpeedMag = boostSpeedMag;
+      connLog.debug(
+        '[world/combat] cmd8 coasting: x=%d y=%d heading=%d clientSpeed=%d → boosting Cmd65 throttle=%d speedMag=%d',
+        session.combatX, session.combatY, frame.headingRaw, clientSpeed, boostThrottle, boostSpeedMag,
+      );
+      send(
+        session.socket,
+        buildCmd65PositionSyncPacket(
+          {
+            slot:     0,
+            x:        session.combatX,
+            y:        session.combatY,
+            z:        0,
+            facing:   (frame.headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
+            throttle: boostThrottle,
+            legVel:   0,
+            speedMag: boostSpeedMag,
+          },
+          nextSeq(session),
+        ),
+        capture,
+        'CMD65_MOVEMENT',
+      );
+      return;
+    }
+
+    // clientSpeed === 0 → mech has stopped; suppress Cmd65 echo to avoid
+    // resetting the movement accumulator while stationary.
+    if (speedMag !== 0) {
+      session.combatSpeedMag = 0;
+      speedMag = 0;
+    }
+    connLog.debug(
+      '[world/combat] cmd8 coasting: x=%d y=%d heading=%d clientSpeed=0 suppressing echo (stopped)',
+      session.combatX, session.combatY, frame.headingRaw,
     );
     return;
   }
@@ -785,22 +818,36 @@ export function handleCombatMovementFrame(
     session.combatY          = frame.yRaw - COORD_BIAS;
     session.combatHeadingRaw = frame.headingRaw;
 
-    const maxSpeedMag = session.combatMaxSpeedMag ?? 0;
-    const throttlePct = frame.throttleRaw - MOTION_NEUTRAL; // negative = forward
-    const signedSpeedMag = maxSpeedMag > 0
-      ? Math.round(-throttlePct * maxSpeedMag / 45)
+    const maxSpeedMag    = session.combatMaxSpeedMag ?? 0;
+    const throttlePct    = frame.throttleRaw - MOTION_NEUTRAL; // negative = forward
+    const legVelPct      = frame.legVelRaw   - MOTION_NEUTRAL;
+    const previousSpeedMag = session.combatSpeedMag ?? 0;
+
+    // Scale sVar2 (max=20 from KP8) directly to maxSpeedMag so full-throttle
+    // input produces run speed rather than stopping at walk speed.
+    const nextSpeedMag = maxSpeedMag > 0
+      ? Math.max(-maxSpeedMag, Math.min(maxSpeedMag, Math.round(-throttlePct * maxSpeedMag / THROTTLE_RUN_SCALE)))
       : 0;
+
+    // Only latch new speed when the throttle or leg velocity is active; idle
+    // Cmd9 samples (legVelPct==0 and clientSpeed==0) preserve the last speed.
+    const clientSpeed  = frame.rotationRaw - MOTION_NEUTRAL;
+    const shouldLatch  = !(legVelPct === 0 && clientSpeed === 0);
+    const signedSpeedMag = shouldLatch ? nextSpeedMag : previousSpeedMag;
+
     const throttle = (frame.throttleRaw - MOTION_NEUTRAL) * MOTION_DIV;
-    const legVel = (frame.legVelRaw - MOTION_NEUTRAL) * MOTION_DIV;
+    const legVel   = (frame.legVelRaw   - MOTION_NEUTRAL) * MOTION_DIV;
     session.combatThrottle = throttle;
-    session.combatLegVel = legVel;
+    session.combatLegVel   = legVel;
     session.combatSpeedMag = signedSpeedMag;
 
     connLog.debug(
-      '[world/combat] cmd9 moving: throttlePct=%d throttle=%d legVel=%d maxSpeedMag=%d signedSpeedMag=%d',
-      throttlePct, throttle, legVel, maxSpeedMag, signedSpeedMag,
+      '[world/combat] cmd9 moving: throttlePct=%d legVelPct=%d clientSpeed=%d throttle=%d legVel=%d maxSpeedMag=%d nextSpeedMag=%d latchedSpeedMag=%d',
+      throttlePct, legVelPct, clientSpeed, throttle, legVel, maxSpeedMag, nextSpeedMag, signedSpeedMag,
     );
 
+    // Echo only the speed target; negate throttle so the sign convention
+    // (FUN_0042c830 negation of DAT_004f1f7c) keeps the client in Cmd9 mode.
     send(
       session.socket,
       buildCmd65PositionSyncPacket(
@@ -810,7 +857,7 @@ export function handleCombatMovementFrame(
           y:        session.combatY,
           z:        0,
           facing:   (frame.headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
-          throttle,
+          throttle: -throttle,
           legVel,
           speedMag: signedSpeedMag,
         },
@@ -909,6 +956,10 @@ export function handleCombatActionFrame(
     connLog.warn('[world/combat] cmd-12 action parse failed (len=%d)', payload.length);
     return;
   }
+  // Ghidra confirmed: action 0x34 (THROTTLE_UP) calls FUN_004229a0 locally
+  // but does NOT call Combat_SendCmd12Action_v123 — so these packets never
+  // arrive from the client.  Speed is driven entirely by the Cmd9
+  // throttleRaw → THROTTLE_RUN_SCALE path; no server response is needed here.
   connLog.debug('[world/combat] cmd-12 combat action=%d — no response', action.action);
 }
 
@@ -940,17 +991,19 @@ export function handleMechPickerCmd7(
       sendMechClassPicker(session, connLog, capture);
       return true;
     }
-    const seenChassis = new Set<string>();
-    const chassisList: string[] = [];
-    for (const mech of WORLD_MECHS) {
-      const chassis = getMechChassis(mech.typeString);
-      if (!seenChassis.has(chassis)) {
-        seenChassis.add(chassis);
-        chassisList.push(chassis);
-      }
+    const classIndex  = session.mechPickerClass ?? 0;
+    const page        = session.mechPickerChassisPage ?? 0;
+    const chassisList = getMechChassisListForClass(classIndex);
+    const start       = page * MECH_CHASSIS_PAGE_SIZE;
+    const visible     = chassisList.slice(start, start + MECH_CHASSIS_PAGE_SIZE);
+    const hasMore     = start + MECH_CHASSIS_PAGE_SIZE < chassisList.length;
+
+    // "More…" row is always the last entry when hasMore is true.
+    if (hasMore && selection === visible.length + 1) {
+      sendMechChassisPicker(session, classIndex, connLog, capture, page + 1);
+      return true;
     }
-    chassisList.sort((a, b) => a.localeCompare(b));
-    const chassis = chassisList[selection - 1];
+    const chassis = visible[selection - 1];
     if (!chassis) {
       sendMechClassPicker(session, connLog, capture);
       return true;
@@ -961,7 +1014,7 @@ export function handleMechPickerCmd7(
 
   if (step === 'variant' && listId === MECH_CLASS_LIST_ID) {
     if (selection === 0) {
-      sendMechChassisPicker(session, session.mechPickerClass ?? 0, connLog, capture);
+      sendMechChassisPicker(session, session.mechPickerClass ?? 0, connLog, capture, session.mechPickerChassisPage ?? 0);
       return true;
     }
     const chassis = session.mechPickerChassis ?? '';
@@ -978,11 +1031,12 @@ export function handleMechPickerCmd7(
       return true;
     }
 
-    session.selectedMechSlot  = chosen.slot;
-    session.selectedMechId    = chosen.id;
-    session.mechPickerStep    = undefined;
-    session.mechPickerClass   = undefined;
-    session.mechPickerChassis = undefined;
+    session.selectedMechSlot       = chosen.slot;
+    session.selectedMechId         = chosen.id;
+    session.mechPickerStep         = undefined;
+    session.mechPickerClass        = undefined;
+    session.mechPickerChassis      = undefined;
+    session.mechPickerChassisPage  = undefined;
 
     connLog.info('[world] mech selected: callsign="%s" slot=%d id=%d typeString=%s',
       getDisplayName(session), chosen.slot, chosen.id, chosen.typeString);
