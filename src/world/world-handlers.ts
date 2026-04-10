@@ -83,6 +83,8 @@ const BOT_INITIAL_HEALTH = 100;
 const BOT_DAMAGE_PER_HIT = 20;
 /** Prototype jump-jet altitude echoed through Cmd65 after cmd12/action 4. */
 const JUMP_JET_ALTITUDE = 1200;
+/** Max age for correlating cmd12/action0 to the following cmd10 shot frame. */
+const FIRE_ACTION_WINDOW_MS = 1_000;
 /** Interval (ms) at which the scripted bot fires back at the player. */
 const BOT_FIRE_INTERVAL_MS = 3_000;
 /** Prototype damage per bot retaliatory shot (Cmd67 damageCode=1, value=10). */
@@ -884,6 +886,18 @@ export function handleCombatWeaponFireFrame(
     return;
   }
 
+  const now = Date.now();
+  const actionAgeMs = session.lastCombatFireActionAt === undefined
+    ? undefined
+    : now - session.lastCombatFireActionAt;
+  const hasRecentFireAction = actionAgeMs !== undefined && actionAgeMs >= 0 && actionAgeMs <= FIRE_ACTION_WINDOW_MS;
+  if (hasRecentFireAction) {
+    connLog.debug('[world/combat] cmd-10 correlated with cmd12/action0 (age=%dms)', actionAgeMs);
+  } else {
+    connLog.debug('[world/combat] cmd-10 without recent cmd12/action0 gate (age=%s)', actionAgeMs === undefined ? 'n/a' : `${actionAgeMs}ms`);
+  }
+  session.lastCombatFireActionAt = undefined;
+
   if (session.botHealth === undefined) {
     session.botHealth = BOT_INITIAL_HEALTH;
   }
@@ -957,6 +971,14 @@ export function handleCombatActionFrame(
   const action = parseClientCmd12Action(payload);
   if (!action) {
     connLog.warn('[world/combat] cmd-12 action parse failed (len=%d)', payload.length);
+    return;
+  }
+
+  if (action.action === 0) {
+    session.lastCombatFireActionAt = Date.now();
+    connLog.debug('[world/combat] cmd-12 action=0 (fire trigger/TIC gate)');
+    // Keep the local effects state fresh before the following cmd10 shot frame.
+    send(session.socket, buildCmd71ResetEffectStatePacket(nextSeq(session)), capture, 'CMD71_FIRE_GATE');
     return;
   }
 
