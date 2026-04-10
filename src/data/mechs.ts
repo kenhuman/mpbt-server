@@ -87,7 +87,7 @@ function decryptMec(buf: Buffer, nameLower: string): void {
  * @param mecPath   Absolute path to the .MEC file.
  * @param nameLower Lowercase mech name WITHOUT extension (e.g. "anh-1a").
  */
-function readMecFields(mecPath: string, nameLower: string): { mecSpeed: number; extraCritCount: number } {
+function readMecFields(mecPath: string, nameLower: string): { mecSpeed: number; extraCritCount: number; tonnage: number } {
   const raw = fs.readFileSync(mecPath);
   if (raw.length < 0x3e) {
     throw new Error(`${mecPath}: too short for mec fields (${raw.length} < 0x3e)`);
@@ -96,8 +96,58 @@ function readMecFields(mecPath: string, nameLower: string): { mecSpeed: number; 
   decryptMec(buf, nameLower);
   return {
     mecSpeed:       buf.readUInt16LE(0x16),
+    tonnage:        buf.readUInt16LE(0x18),
     extraCritCount: buf.readInt16LE(0x3c),
   };
+}
+
+// ── Internal Structure lookup table ──────────────────────────────────────────
+//
+// Pre-computed from Combat_GetInternalStructureForSection_v123 (0x00433c70).
+// Table at 0x0047af7c, stride 0x14, rows 0-20 decoded from Ghidra RE (§23.8).
+// Columns per row: [ct, leg, arm, side].  Row = tonnage / 5.
+// Section IDs: 0/1 = arms (col 2), 2/3 = sides (col 3), 4 = CT (col 0),
+//              5/6 = legs (col 1), 7 = head (always 9).
+// Rows 0-1 overlap unrelated data in the binary; rows 2-20 are verified.
+const IS_TABLE: ReadonlyArray<readonly [number, number, number, number]> = [
+  [ 0,  0,  0,  0], // row 0: 0-4t  (unused — overlaps previous data)
+  [ 0,  0,  0,  0], // row 1: 5-9t  (unused — overlaps previous data)
+  [ 4,  3,  1,  2], // row 2: 10-14t
+  [ 5,  4,  2,  3], // row 3: 15-19t
+  [ 6,  5,  3,  4], // row 4: 20-24t
+  [ 8,  6,  4,  6], // row 5: 25-29t
+  [10,  7,  5,  7], // row 6: 30-34t
+  [11,  8,  6,  8], // row 7: 35-39t
+  [12, 10,  6, 10], // row 8: 40-44t
+  [14, 11,  7, 11], // row 9: 45-49t
+  [16, 12,  8, 12], // row 10: 50-54t
+  [18, 13,  9, 13], // row 11: 55-59t
+  [20, 14, 10, 14], // row 12: 60-64t
+  [21, 15, 10, 15], // row 13: 65-69t
+  [22, 15, 11, 15], // row 14: 70-74t
+  [23, 15, 12, 16], // row 15: 75-79t
+  [25, 17, 13, 17], // row 16: 80-84t
+  [27, 18, 14, 18], // row 17: 85-89t
+  [29, 19, 15, 19], // row 18: 90-94t
+  [30, 20, 16, 20], // row 19: 95-99t
+  [31, 21, 17, 21], // row 20: 100-104t (Atlas class)
+];
+
+/**
+ * Compute the 8-byte internal-structure block for Cmd72 from mech tonnage.
+ *
+ * Replicates `Combat_GetInternalStructureForSection_v123` (0x00433c70) for
+ * section IDs 0-7.  Order is [arm, arm, side, side, CT, leg, leg, head].
+ *
+ * @param tonnage Mech mass in tons (from .MEC offset 0x18).
+ * @returns Array of 8 IS values, one per section.
+ */
+export function mechInternalStateBytes(tonnage: number): number[] {
+  const group = Math.min(IS_TABLE.length - 1, Math.floor(tonnage / 5));
+  const row = IS_TABLE[group] ?? ([0, 0, 0, 0] as const);
+  const [ct, leg, arm, side] = row;
+  // Section 0 = arm, 1 = arm, 2 = side, 3 = side, 4 = CT, 5 = leg, 6 = leg, 7 = head
+  return [arm, arm, side, side, ct, leg, leg, 9];
 }
 
 // ── MPBT.MSG variant table ────────────────────────────────────────────────────
@@ -173,7 +223,7 @@ export function loadMechs(): MechEntry[] {
         );
       }
       const mecPath = path.join(mechDir, filename);
-      const { mecSpeed, extraCritCount } = readMecFields(mecPath, typeString.toLowerCase());
+      const { mecSpeed, extraCritCount, tonnage } = readMecFields(mecPath, typeString.toLowerCase());
       return {
         id,
         mechType: 0,
@@ -183,6 +233,7 @@ export function loadMechs(): MechEntry[] {
         name:    '', // empty → client calls MechWin_LookupMechName(id)
         maxSpeedMag: mecSpeed * 450,
         extraCritCount,
+        tonnage,
       };
     });
 

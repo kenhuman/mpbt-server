@@ -39,6 +39,7 @@ import { PlayerRegistry, ClientSession } from '../state/players.js';
 import { storeMessage } from '../db/messages.js';
 import { Logger }        from '../util/logger.js';
 import { CaptureLogger } from '../util/capture.js';
+import { mechInternalStateBytes } from '../data/mechs.js';
 
 import {
   FALLBACK_MECH_ID,
@@ -324,7 +325,8 @@ export function sendCombatBootstrapSequence(
 
   // Store per-mech speedMag cap so Cmd8/9 handlers can apply it.
   session.combatMaxSpeedMag = mechEntry?.maxSpeedMag ?? 0;
-  session.botHealth = BOT_INITIAL_HEALTH;
+  session.botHealth    = BOT_INITIAL_HEALTH;
+  session.playerHealth = BOT_INITIAL_HEALTH; // simplified IS counter (stops Cmd67 when ≤ 0)
 
   // 1. MMC SYNC — plain ARIES packet; no game-frame CRC.
   send(socket, buildCombatWelcomePacket(), capture, 'COMBAT_WELCOME_MMC');
@@ -367,9 +369,8 @@ export function sendCombatBootstrapSequence(
         // internalStateBytes[i] must be non-zero for each IS slot index i
         // referenced by a weapon (mec[0x8e+slot*2] == i per FUN_0042c200).
         // Indices 4 and 7 are also required non-zero by the IS gate (FUN_0042bb00).
-        // Fill all 8 slots with 100 (full) as a generic default valid for any mech;
-        // per-mech values will be read from .MEC files in issue #80.
-        internalStateBytes:   Array<number>(8).fill(100),
+        // Order: [arm, arm, side, side, CT, leg, leg, head] (§23.8, IS lookup RE).
+        internalStateBytes:   mechInternalStateBytes(mechEntry?.tonnage ?? 0),
         // Empty ammoStateValues → client uses mec file defaults; avoids the
         // "400/slot" display artefact from sending arbitrary capacity values.
         // Per-mech ammo bin data will be wired in issue #80.
@@ -437,8 +438,25 @@ export function sendCombatBootstrapSequence(
   session.botPositionTimer.unref();
 
   // Bot fires back at the player every BOT_FIRE_INTERVAL_MS milliseconds.
+  // Stops once server-side playerHealth estimate reaches 0 (client handles
+  // the actual death/results screen via local IS simulation — see §23.6).
   session.botFireTimer = setInterval(() => {
     if (session.socket.destroyed || !session.socket.writable) return;
+
+    // Server-side health gate — stop retaliating after estimated player death.
+    if ((session.playerHealth ?? 0) <= 0) {
+      clearInterval(session.botFireTimer);
+      session.botFireTimer = undefined;
+      connLog.info('[world/combat] player IS depleted (server-side estimate) — bot stopped firing');
+      return;
+    }
+
+    session.playerHealth = Math.max(0, (session.playerHealth ?? 0) - BOT_RETALIATION_DAMAGE);
+    connLog.debug(
+      '[world/combat] bot fires Cmd67: damage=%d playerHealth=%d',
+      BOT_RETALIATION_DAMAGE,
+      session.playerHealth,
+    );
     send(
       session.socket,
       buildCmd67LocalDamagePacket(1, BOT_RETALIATION_DAMAGE, nextSeq(session)),

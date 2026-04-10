@@ -280,6 +280,12 @@ export interface MechEntry {
    * CONFIRMED by RE of Combat_InitActorRuntimeFromMec_v123 @ 0x00433910.
    */
   maxSpeedMag: number;
+  /**
+   * Mech mass in tons, read from .MEC offset 0x18 (uint16 LE after decryption).
+   * Used to compute per-section internal-structure maxima for Cmd72 bootstrap.
+   * CONFIRMED from RESEARCH.md §20 cross-validation table.
+   */
+  tonnage: number;
 }
 
 /**

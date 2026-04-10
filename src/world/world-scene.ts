@@ -441,6 +441,7 @@ export function sendMechClassPicker(
     name:       label,
     maxSpeedMag: 0,
     extraCritCount: 0,
+    tonnage:    0,
   }));
   connLog.info('[world] sending mech class picker');
   send(
@@ -485,6 +486,7 @@ export function sendMechChassisPicker(
     name:       chassis,
     maxSpeedMag: 0,
     extraCritCount: 0,
+    tonnage:    0,
   }));
 
   connLog.info('[world] sending mech chassis picker: class=%s entries=%d', classKey ?? classIndex, entries.length);
@@ -517,6 +519,7 @@ export function sendMechVariantPicker(
     name:       mech.typeString,
     maxSpeedMag: mech.maxSpeedMag,
     extraCritCount: mech.extraCritCount,
+    tonnage:    mech.tonnage,
   }));
 
   connLog.info('[world] sending mech variant picker: chassis="%s" entries=%d', chassis, entries.length);
