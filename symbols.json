@@ -107,11 +107,20 @@
   },
   "MPBTWIN.EXE v1.23": {
     "functions": {
+      "Comm_DispatchDecodedPacket_v123":      { "binary": "FUN_00401580", "role": "Dispatches decoded packet bytes through the active world/combat dispatch table; validates command index and minimum payload size before calling the handler" },
+      "Comm_VerifyDecodedPacketCrc_v123":     { "binary": "FUN_004018e0", "role": "Verifies the decoded packet CRC using DAT_0047d05c to select the RPS vs combat seed, then strips the trailing CRC bytes" },
+      "Comm_AccumulateEscapedPacketLine_v123":{ "binary": "FUN_00435cb0", "role": "Accumulates inbound ESC-delimited packet lines into DAT_004dcd1c before decode/CRC verification" },
+      "Comm_ProcessAccumulatedPacketLine_v123":{ "binary": "FUN_00435c60", "role": "Terminates the accumulated packet line, verifies/decodes it, then dispatches the decoded packet stream" },
       "Main_NetQueueTick_v123":        { "binary": "FUN_00435b20", "role": "Drains queued COMMEG payloads, dispatches mode packets, then ticks RPS state 3 or combat state 4" },
       "Main_ModePacketDispatch_v123":  { "binary": "FUN_00435ed0", "role": "Classifies queued payloads after RPS start; routes later MMW/MMC handshakes or normal text-frame parsing" },
       "Main_InitialModeGate_v123":     { "binary": "FUN_00435ff0", "role": "Initial MMW/MMC welcome gate; MMW enters RPS, MMC is only valid after RPS state is established" },
       "Main_ModeWelcomeClassify_v123": { "binary": "FUN_00436340", "role": "Returns 2 for ESC?MMW welcome, 3 for ESC?MMC welcome, 0 for non-handshake data" },
       "Main_SetModeName_v123":         { "binary": "FUN_00401d70", "role": "Argument 0 copies \"Solaris RPS\"; argument 1 copies \"Solaris COMBAT\"" },
+      "World_HandleSceneInitPacket_v123":     { "binary": "FUN_00413410", "role": "True outer Cmd4 world scene-init handler; resets scene UI state, installs callbacks, populates cached scene row, and rebuilds the scene window" },
+      "World_ParseSceneInitCacheRow_v123":    { "binary": "FUN_00413480", "role": "Inner Cmd4 cache-row parser inside World_HandleSceneInitPacket_v123; reads current scene and optional travel-slot payload into the cached scene tables" },
+      "World_HandleInfoPanelPacket_v123":     { "binary": "FUN_004140B0", "role": "World-mode info panel packet handler; opens a modal/list-style panel from decoded packet content" },
+      "World_HandleDetailPanelPacket_v123":   { "binary": "FUN_00412280", "role": "World-mode detail panel packet handler; reads a detail/follow-up payload and opens the corresponding UI panel" },
+      "World_HandleSceneActionResponsePacket_v123": { "binary": "FUN_0041BE90", "role": "World-mode scene-action response family handler for the non-travel Cmd5 scene action flow" },
       "Combat_InitMode_v123":          { "binary": "FUN_00435db0", "role": "Combat-mode initializer after MMC welcome; tears down RPS UI, loads scenes.dat, resets combat globals" },
       "Combat_Tick_v123":              { "binary": "FUN_00435eb0", "role": "Per-frame combat tick; runs combat update and calls combat music selector when music is enabled" },
       "Audio_CombatMusicSelect_v123":  { "binary": "FUN_00428370", "role": "Chooses requested combat music state from target distance/visibility/advantage, then calls Audio_RequestMusicState_v123" },
@@ -119,6 +128,10 @@
       "Audio_TickMusicState_v123":     { "binary": "FUN_0042aa10", "role": "Applies pending KSND/Miles music state transitions and invokes selected state callback" }
     },
     "data": {
+      "g_comm_ActivePacketDispatchTable_v123": { "binary": "DAT_00484741", "role": "Pointer to the currently active v1.23 packet dispatch table; set by Main_SetModeName_v123 to DAT_00478070 or DAT_004782d8" },
+      "g_comm_ActivePacketDispatchCount_v123": { "binary": "DAT_00484745", "role": "Entry count for g_comm_ActivePacketDispatchTable_v123; 0x4d in world mode and 0x52 in combat mode" },
+      "g_packetDispatchTable_World_v123":      { "binary": "DAT_00478070", "role": "World-mode packet dispatch table; 8-byte rows of { minimum payload bytes after command byte, handler }" },
+      "g_packetDispatchTable_Combat_v123":     { "binary": "DAT_004782d8", "role": "Combat-mode packet dispatch table; 8-byte rows of { minimum payload bytes after command byte, handler }" },
       "g_modeState_v123":              { "binary": "DAT_0047d05c", "role": "Mode state: 3 = Solaris RPS tick, 4 = Solaris COMBAT tick" },
       "g_modeRpsActive_v123":          { "binary": "DAT_0047a7f0", "role": "Set after the MMW/RPS welcome path starts" },
       "g_musicStateCurrent_v123":      { "binary": "DAT_00479b00", "role": "Current internal music state id" },
