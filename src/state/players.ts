@@ -73,9 +73,10 @@ export interface ClientSession {
    */
   worldMapRoomId?: number;
   /**
-   * Current world X coordinate (centreX from SOLARIS.MAP / world-map.json for
-   * the player's current room).  Set via setSessionRoomPosition() on every room
-   * transition so server-side position is always current.
+   * Current world X coordinate (centreX from SOLARIS.MAP for the player's
+   * current room, or 0 for generated rooms not in SOLARIS.MAP).  Set via
+   * setSessionRoomPosition() on every room transition so server-side position
+   * is always current.
    *
    * In RPS/world (social) mode there is no confirmed server→client position
    * wire packet distinct from Cmd65 (which is combat-only per RESEARCH.md

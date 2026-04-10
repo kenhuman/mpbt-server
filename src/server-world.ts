@@ -70,6 +70,7 @@ import {
   SOLARIS_TRAVEL_CONTEXT_ID,
   getSolarisRoomName,
   setSessionRoomPosition,
+  worldMapByRoomId,
 } from './world/world-data.js';
 import {
   send,
@@ -314,9 +315,18 @@ function handleWorldGameData(
       return;
     }
     if (parsed.actionType === 5) {
-      // "Fight" button — shown only in arena rooms by buildSceneInitForSession.
+      // "Fight" button — verify the session is in an arena room server-side
+      // even though buildSceneInitForSession only shows the button for arenas,
+      // because a client can always send cmd-5 type=5 manually.
+      const currentRoomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
+      const mapRoom = worldMapByRoomId.get(currentRoomId);
+      if (mapRoom?.type !== 'arena') {
+        connLog.warn('[world] cmd-5 Fight rejected: room %d is not an arena (type=%s)',
+          currentRoomId, mapRoom?.type ?? 'unknown');
+        return;
+      }
       if (!session.combatInitialized && session.phase === 'world') {
-        connLog.info('[world] cmd-5 Fight button: triggering combat bootstrap');
+        connLog.info('[world] cmd-5 Fight button: triggering combat bootstrap room=%d', currentRoomId);
         sendCombatBootstrapSequence(session, connLog, capture);
       } else {
         connLog.debug('[world] cmd-5 Fight ignored: combatInitialized=%s phase=%s',
