@@ -640,6 +640,9 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     if (session.botPositionTimer !== undefined) {
       clearInterval(session.botPositionTimer);
     }
+    if (session.botFireTimer !== undefined) {
+      clearInterval(session.botFireTimer);
+    }
     capture.close();
   });
 

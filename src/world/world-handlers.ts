@@ -27,6 +27,7 @@ import {
   buildCmd72LocalBootstrapPacket,
   buildCmd65PositionSyncPacket,
   buildCmd66ActorDamagePacket,
+  buildCmd67LocalDamagePacket,
   buildCmd68ProjectileSpawnPacket,
   buildCmd70ActorTransitionPacket,
   buildCmd71ResetEffectStatePacket,
@@ -77,6 +78,10 @@ import {
 const BOT_INITIAL_HEALTH = 100;
 /** Prototype damage applied to the scripted bot for each cmd10 fire frame. */
 const BOT_DAMAGE_PER_HIT = 20;
+/** Interval (ms) at which the scripted bot fires back at the player. */
+const BOT_FIRE_INTERVAL_MS = 3_000;
+/** Prototype damage per bot retaliatory shot (Cmd67 damageCode=1, value=10). */
+const BOT_RETALIATION_DAMAGE = 10;
 
 // ── ComStar messaging ─────────────────────────────────────────────────────────
 
@@ -359,14 +364,16 @@ export function sendCombatBootstrapSequence(
         criticalStateBytes:   Array<number>(critBytes).fill(0),
         extraStateBytes:      [],
         armorLikeStateBytes:  Array<number>(11).fill(0),  // full armor
-        // internalStateBytes[i] must be non-zero for each weapon slot that uses
-        // mec[0x8e+slot*2] == i as the ammo-type/IS index (RE: FUN_0042c200).
+        // internalStateBytes[i] must be non-zero for each IS slot index i
+        // referenced by a weapon (mec[0x8e+slot*2] == i per FUN_0042c200).
         // Indices 4 and 7 are also required non-zero by the IS gate (FUN_0042bb00).
-        // ANH-1A mec[0x8e] values = [1,0,6,5,1,0,4,4] → indices 0,1,4,5,6 active.
-        internalStateBytes:   [100, 100, 100, 100, 12, 100, 100, 9],
-        // ANH-1A has 4 ammo bins, all serving weapon type 8 (mec[0x202+j*2]=8).
-        // FUN_0042c200 checks actor[0x1e6+bin_index*2] > 0 before allowing fire.
-        ammoStateValues:      [],  // let client use mec defaults; avoids display showing 400/slot
+        // Fill all 8 slots with 100 (full) as a generic default valid for any mech;
+        // per-mech values will be read from .MEC files in issue #80.
+        internalStateBytes:   Array<number>(8).fill(100),
+        // Empty ammoStateValues → client uses mec file defaults; avoids the
+        // "400/slot" display artefact from sending arbitrary capacity values.
+        // Per-mech ammo bin data will be wired in issue #80.
+        ammoStateValues:      [],  // let client use mec defaults
         actorDisplayName:     callsign.substring(0, 31),
       },
     },
@@ -428,6 +435,17 @@ export function sendCombatBootstrapSequence(
     );
   }, 1000);
   session.botPositionTimer.unref();
+
+  // Bot fires back at the player every BOT_FIRE_INTERVAL_MS milliseconds.
+  session.botFireTimer = setInterval(() => {
+    if (session.socket.destroyed || !session.socket.writable) return;
+    send(
+      session.socket,
+      buildCmd67LocalDamagePacket(1, BOT_RETALIATION_DAMAGE, nextSeq(session)),
+      capture, 'CMD67_BOT_RETALIATION',
+    );
+  }, BOT_FIRE_INTERVAL_MS);
+  session.botFireTimer.unref();
 
   session.combatInitialized = true;
   connLog.info('[world] combat entry complete for "%s"', callsign);
@@ -854,6 +872,10 @@ export function handleCombatWeaponFireFrame(
     if (session.botPositionTimer !== undefined) {
       clearInterval(session.botPositionTimer);
       session.botPositionTimer = undefined;
+    }
+    if (session.botFireTimer !== undefined) {
+      clearInterval(session.botFireTimer);
+      session.botFireTimer = undefined;
     }
   }
 }
