@@ -713,7 +713,32 @@ export function handleCombatMovementFrame(
     session.combatX          = frame.xRaw - COORD_BIAS;
     session.combatY          = frame.yRaw - COORD_BIAS;
     session.combatHeadingRaw = frame.headingRaw;
-    connLog.debug('[world/combat] cmd8 coasting: x=%d y=%d heading=%d', session.combatX, session.combatY, frame.headingRaw);
+    const throttle = session.combatThrottle ?? 0;
+    const legVel = session.combatLegVel ?? 0;
+    const speedMag = session.combatSpeedMag ?? 0;
+    connLog.debug(
+      '[world/combat] cmd8 coasting: x=%d y=%d heading=%d throttle=%d legVel=%d speedMag=%d',
+      session.combatX, session.combatY, frame.headingRaw, throttle, legVel, speedMag,
+    );
+
+    send(
+      session.socket,
+      buildCmd65PositionSyncPacket(
+        {
+          slot:     0,
+          x:        session.combatX,
+          y:        session.combatY,
+          z:        0,
+          facing:   (frame.headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
+          throttle,
+          legVel,
+          speedMag,
+        },
+        nextSeq(session),
+      ),
+      capture,
+      'CMD65_MOVEMENT',
+    );
     return;
   }
 
@@ -729,11 +754,15 @@ export function handleCombatMovementFrame(
     const signedSpeedMag = maxSpeedMag > 0
       ? Math.round(-throttlePct * maxSpeedMag / 45)
       : 0;
+    const throttle = (frame.throttleRaw - MOTION_NEUTRAL) * MOTION_DIV;
+    const legVel = (frame.legVelRaw - MOTION_NEUTRAL) * MOTION_DIV;
+    session.combatThrottle = throttle;
+    session.combatLegVel = legVel;
     session.combatSpeedMag = signedSpeedMag;
 
     connLog.debug(
-      '[world/combat] cmd9 moving: throttlePct=%d maxSpeedMag=%d signedSpeedMag=%d',
-      throttlePct, maxSpeedMag, signedSpeedMag,
+      '[world/combat] cmd9 moving: throttlePct=%d throttle=%d legVel=%d maxSpeedMag=%d signedSpeedMag=%d',
+      throttlePct, throttle, legVel, maxSpeedMag, signedSpeedMag,
     );
 
     send(
@@ -745,8 +774,8 @@ export function handleCombatMovementFrame(
           y:        session.combatY,
           z:        0,
           facing:   (frame.headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
-          throttle: 0,
-          legVel:   0,
+          throttle,
+          legVel,
           speedMag: signedSpeedMag,
         },
         nextSeq(session),
