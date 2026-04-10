@@ -293,11 +293,21 @@ function handleWorldGameData(
     }
     const textCmd = parsed.text.trim().toLowerCase();
     // "/fight" family: trigger combat bootstrap if not already in combat.
-    if (textCmd === '/fight' || textCmd === '/fightwin' || textCmd === '/fightlose') {
+    if (
+      textCmd === '/fight' ||
+      textCmd === '/fightwin' ||
+      textCmd === '/fightlose' ||
+      textCmd === '/fightdmglocal' ||
+      textCmd === '/fightdmgbot'
+    ) {
       if (textCmd === '/fightwin') {
         session.combatVerificationMode = 'autowin';
       } else if (textCmd === '/fightlose') {
         session.combatVerificationMode = 'autolose';
+      } else if (textCmd === '/fightdmglocal') {
+        session.combatVerificationMode = 'dmglocal';
+      } else if (textCmd === '/fightdmgbot') {
+        session.combatVerificationMode = 'dmgbot';
       } else {
         session.combatVerificationMode = undefined;
       }

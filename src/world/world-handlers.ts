@@ -103,6 +103,12 @@ const FIRE_ACTION_WINDOW_MS = 1_000;
 const BOT_FIRE_INTERVAL_MS = 3_000;
 /** Prototype damage per bot retaliatory shot (Cmd67 damageCode=1, value=10). */
 const BOT_RETALIATION_DAMAGE = 10;
+/** Delay before scripted verification actions run after bootstrap. */
+const VERIFY_DELAY_MS = 1200;
+/** Delay between scripted damage sweep packets (ms). */
+const VERIFY_SWEEP_STEP_MS = 700;
+/** Damage codes used for quick client-side classifier probing. */
+const VERIFY_DAMAGE_CODES = [1, 2, 8, 16, 32, 64] as const;
 
 // KP8 full-forward produces sVar2 ≈ 20 in the client's throttle accumulator.
 // Using 20 as the scale means sVar2=20 → maxSpeedMag (run speed), rather than
@@ -548,7 +554,7 @@ export function sendCombatBootstrapSequence(
         clearInterval(session.botFireTimer);
         session.botFireTimer = undefined;
       }
-    }, 1200).unref();
+    }, VERIFY_DELAY_MS).unref();
   } else if (verificationMode === 'autolose') {
     setTimeout(() => {
       if (session.socket.destroyed || !session.socket.writable) return;
@@ -564,7 +570,35 @@ export function sendCombatBootstrapSequence(
         clearInterval(session.botFireTimer);
         session.botFireTimer = undefined;
       }
-    }, 1200).unref();
+    }, VERIFY_DELAY_MS).unref();
+  } else if (verificationMode === 'dmglocal' || verificationMode === 'dmgbot') {
+    const sendSweep = (): void => {
+      if (session.socket.destroyed || !session.socket.writable) return;
+      connLog.info('[world/combat] scripted verification: %s sweep', verificationMode);
+
+      VERIFY_DAMAGE_CODES.forEach((code, idx) => {
+        setTimeout(() => {
+          if (session.socket.destroyed || !session.socket.writable) return;
+          if (verificationMode === 'dmglocal') {
+            send(
+              session.socket,
+              buildCmd67LocalDamagePacket(code, 5, nextSeq(session)),
+              capture,
+              `CMD67_VERIFY_SWEEP_${code}`,
+            );
+          } else {
+            send(
+              session.socket,
+              buildCmd66ActorDamagePacket(1, code, 5, nextSeq(session)),
+              capture,
+              `CMD66_VERIFY_SWEEP_${code}`,
+            );
+          }
+        }, idx * VERIFY_SWEEP_STEP_MS).unref();
+      });
+    };
+
+    setTimeout(sendSweep, VERIFY_DELAY_MS).unref();
   }
 
   session.combatInitialized = true;

@@ -125,7 +125,7 @@ export interface ClientSession {
   selectedMechSlot?: number;
 
   /** Optional scripted combat verification mode consumed on the next /fight bootstrap. */
-  combatVerificationMode?: 'autowin' | 'autolose';
+  combatVerificationMode?: 'autowin' | 'autolose' | 'dmglocal' | 'dmgbot';
 
   /**
    * Pending mech slot chosen in the mech-select dialog, held until the
