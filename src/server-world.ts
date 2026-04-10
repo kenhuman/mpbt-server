@@ -690,12 +690,16 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
       session.combatShotsRejected !== undefined ||
       session.combatShotsUngatedAccepted !== undefined
     ) {
+      const durationMs = session.combatStartAt !== undefined
+        ? Date.now() - session.combatStartAt
+        : undefined;
       connLog.info(
-        '[world/combat] fire-gate summary: requireAction0=%s accepted=%d rejected=%d ungatedAccepted=%d',
+        '[world/combat] session summary: requireAction0=%s accepted=%d rejected=%d ungatedAccepted=%d duration=%s',
         session.combatRequireAction0ForFire === true,
         session.combatShotsAccepted ?? 0,
         session.combatShotsRejected ?? 0,
         session.combatShotsUngatedAccepted ?? 0,
+        durationMs !== undefined ? `${(durationMs / 1000).toFixed(1)}s` : 'n/a',
       );
     }
     session.botHealth            = undefined;
@@ -707,6 +711,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     session.combatShotsAccepted = undefined;
     session.combatShotsRejected = undefined;
     session.combatShotsUngatedAccepted = undefined;
+    session.combatStartAt = undefined;
     capture.close();
   });
 
