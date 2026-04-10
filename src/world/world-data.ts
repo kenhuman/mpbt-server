@@ -220,3 +220,37 @@ export function getSolarisRoomIcon(roomId: number): number {
   if (mapRoom?.icon !== null && mapRoom?.icon !== undefined) return mapRoom.icon;
   return getSolarisSceneIndex(roomId);
 }
+
+// ── Per-session world position ────────────────────────────────────────────────
+
+/**
+ * Update the session's world position from the given room's data.
+ *
+ * Sets worldMapRoomId, worldX (centreX), worldY (centreY), and worldZ (0).
+ *
+ * Call this on every room transition:
+ *   - initial spawn (handleWorldLogin, DEFAULT_MAP_ROOM_ID)
+ *   - Cmd43 map-UI travel reply  (handleMapTravelReply)
+ *   - Cmd23 compass-exit navigation (handleLocationAction)
+ *
+ * NOTE: In RPS/world mode there is no confirmed server→client position wire
+ * packet separate from Cmd65 (which is combat-only, RESEARCH.md §19.6.1).
+ * The client receives its scene position via Cmd4 playerScoreSlot on every
+ * room entry.  worldX/Y/Z are server-side bookkeeping for roster display,
+ * future multiplayer broadcasts, and combat spawn positioning.
+ */
+export function setSessionRoomPosition(
+  session: { worldMapRoomId?: number; worldX?: number; worldY?: number; worldZ?: number },
+  roomId: number,
+): void {
+  // Always assign the caller's roomId directly so that generated rooms
+  // (IDs ≥ 1000, in world-map.json but not in SOLARIS_ROOM_BY_ID) are
+  // correctly tracked.  getSolarisRoomInfo may fall back to DEFAULT_MAP_ROOM_ID
+  // when roomId is unknown; centreX/Y from the fallback are acceptable
+  // placeholder coords, but worldMapRoomId must be the real room.
+  const room = getSolarisRoomInfo(roomId);
+  session.worldMapRoomId = roomId;
+  session.worldX         = room.centreX;
+  session.worldY         = room.centreY;
+  session.worldZ         = 0;
+}

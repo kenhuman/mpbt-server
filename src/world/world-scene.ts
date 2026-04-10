@@ -236,6 +236,19 @@ export function buildSceneInitForSession(session: ClientSession) {
     0,
   );
 
+  // Room-type-aware action buttons.
+  // actionType 4 → "Travel" (opens Cmd43 travel map).
+  // actionType 5 → "Fight"  (enter combat; handled by cmd-5 dispatch in server-world.ts).
+  // The client hard-codes actionType 0 (0x100 wire) as the local Help button.
+  const isArena = mapRoom?.type === 'arena';
+  const arenaOptions: Array<{ type: number; label: string }> = [
+    { type: 0, label: 'Help' },
+    { type: 4, label: 'Travel' },
+  ];
+  if (isArena) {
+    arenaOptions.push({ type: 5, label: 'Fight' });
+  }
+
   return buildCmd4SceneInitPacket(
     {
       sessionFlags:     0x30 | exitMask,
@@ -255,12 +268,7 @@ export function buildSceneInitForSession(session: ClientSession) {
       })(),
       callsign:         getDisplayName(session),
       sceneName:        getSolarisRoomName(roomId),
-      // The client special-cases the first Cmd4 option button (0x100) as local Help.
-      // Put server actions at 0x101+ so FUN_00413790 emits cmd 5 with the type byte.
-      arenaOptions:     [
-        { type: 0, label: 'Help' },
-        { type: 4, label: 'Travel' },
-      ],
+      arenaOptions,
     },
     nextSeq(session),
   );

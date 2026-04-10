@@ -157,6 +157,25 @@
       border-radius: 2px; font-size: 10px; font-weight: bold;
       background: #223; border: 1px solid #334;
     }
+    /* Road icon tools dialog */
+    #road-icon-overlay {
+      position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:100;
+      display:flex;align-items:center;justify-content:center;
+    }
+    #road-icon-box {
+      background:#0e0e20;border:1px solid #3a3a5a;border-radius:6px;
+      padding:14px;width:560px;max-height:80vh;display:flex;flex-direction:column;gap:10px;
+    }
+    #road-icon-box h3 { color:#aac;font-size:13px;margin:0; }
+    #road-icon-grid { display:flex;flex-wrap:wrap;gap:4px;padding:4px; }
+    .ri-cell {
+      width:56px;text-align:center;cursor:pointer;
+      border:1px solid #2a2a4a;border-radius:3px;padding:3px;background:#12122a;
+    }
+    .ri-cell:hover { border-color:#5a8ab0;background:#1a2a4a; }
+    .ri-cell.selected { border-color:#5a8ab0;background:#1a3a5a;box-shadow:0 0 0 1px #5a8ab0; }
+    .ri-cell img { width:40px;height:40px;image-rendering:pixelated;display:block;margin:0 auto; }
+    .ri-cell span { font-size:9px;color:#667;display:block; }
   </style>
 </head>
 <body>
@@ -194,6 +213,7 @@
 
   <button id="btnFit">Fit [F]</button>
   <button id="btnImport">Import Positions</button>
+  <button id="btnRoadTools">Road Icons…</button>
 
   <span id="status">Load world-map.json to begin</span>
 </div>
@@ -1320,6 +1340,125 @@ document.getElementById('chkIcons').addEventListener('change', render);
     if (!built) buildPicker();
     const cur = parseInt(document.getElementById('eIcon').value);
     window._openIconPicker(isNaN(cur) ? null : cur);
+  });
+})();
+
+// ── Road Icon Tools ──────────────────────────────────────────────────────────
+(function() {
+  const ROAD_ICON_RANGE = Array.from({ length: 13 }, (_, i) => 45 + i); // 45..57
+  const ROAD_TYPES = new Set(['street', 'path']);
+  const SECTORS = ['international','kobe','silesia','montenegro','cathay','blackhills'];
+
+  let overlay = null;
+  let selectedIconIds = new Set(ROAD_ICON_RANGE); // all selected by default
+
+  function buildDialog() {
+    overlay = document.createElement('div');
+    overlay.id = 'road-icon-overlay';
+    overlay.style.display = 'none';
+    overlay.innerHTML = `
+      <div id="road-icon-box">
+        <h3>Populate Road Icons &nbsp;<small style="color:#667;font-weight:normal">assign random icons to road-type rooms in a sector</small></h3>
+        <div style="display:flex;align-items:center;gap:8px">
+          <label style="color:#668;font-size:11px">Sector:</label>
+          <select id="ri-sector" class="sm" style="flex:1">
+            ${SECTORS.map(s => `<option value="${s}">${s}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <span style="color:#668;font-size:11px">Icons to use &mdash; click to toggle (${ROAD_ICON_RANGE[0]}&ndash;${ROAD_ICON_RANGE[ROAD_ICON_RANGE.length-1]}):</span>
+            <span style="display:flex;gap:6px">
+              <button id="ri-all" style="font-size:11px;padding:2px 6px">All</button>
+              <button id="ri-none" style="font-size:11px;padding:2px 6px">None</button>
+            </span>
+          </div>
+          <div id="road-icon-grid"></div>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;color:#99a;font-size:12px;cursor:pointer">
+          <input type="checkbox" id="ri-name" checked style="accent-color:#5a8ab0">
+          Also name unnamed road rooms in this sector &ldquo;Road&rdquo;
+        </label>
+        <div style="display:flex;gap:8px;margin-top:2px">
+          <button id="ri-cancel" style="flex:1">Cancel</button>
+          <button id="ri-apply" class="active" style="flex:1">Apply to sector</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    const iconGridEl = overlay.querySelector('#road-icon-grid');
+
+    function renderIconGrid() {
+      iconGridEl.innerHTML = '';
+      for (const id of ROAD_ICON_RANGE) {
+        const cell = document.createElement('div');
+        cell.className = 'ri-cell' + (selectedIconIds.has(id) ? ' selected' : '');
+        const img = document.createElement('img');
+        img.src = `${ASSETS}/icons/I${id + 101}.png`;
+        img.onerror = () => { img.style.opacity = '0.2'; };
+        const lbl = document.createElement('span');
+        lbl.textContent = `#${id}`;
+        cell.appendChild(img);
+        cell.appendChild(lbl);
+        cell.addEventListener('click', () => {
+          if (selectedIconIds.has(id)) selectedIconIds.delete(id);
+          else selectedIconIds.add(id);
+          cell.classList.toggle('selected', selectedIconIds.has(id));
+        });
+        iconGridEl.appendChild(cell);
+      }
+    }
+    renderIconGrid();
+
+    overlay.querySelector('#ri-all').addEventListener('click', () => {
+      selectedIconIds = new Set(ROAD_ICON_RANGE);
+      renderIconGrid();
+    });
+    overlay.querySelector('#ri-none').addEventListener('click', () => {
+      selectedIconIds.clear();
+      renderIconGrid();
+    });
+
+    function close() { overlay.style.display = 'none'; }
+
+    overlay.querySelector('#ri-cancel').addEventListener('click', close);
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+    document.addEventListener('keydown', e => {
+      if (overlay.style.display !== 'none' && e.key === 'Escape') close();
+    });
+
+    overlay.querySelector('#ri-apply').addEventListener('click', () => {
+      const sector = overlay.querySelector('#ri-sector').value;
+      const nameUnnamed = overlay.querySelector('#ri-name').checked;
+      const iconList = [...selectedIconIds];
+      if (!iconList.length) { alert('Select at least one icon.'); return; }
+
+      let updated = 0, named = 0;
+      for (let r = 0; r < GRID_SIZE; r++) {
+        for (let c = 0; c < GRID_SIZE; c++) {
+          const room = grid[r][c];
+          if (!room || !ROAD_TYPES.has(room.type) || room.sector !== sector) continue;
+          room.icon = iconList[Math.floor(Math.random() * iconList.length)];
+          updated++;
+          if (nameUnnamed && !room._name) { room._name = 'Road'; named++; }
+        }
+      }
+
+      render();
+      // Refresh panel if the selected room was affected
+      if (selectedCell && grid[selectedCell.row][selectedCell.col])
+        selectCell(selectedCell.col, selectedCell.row);
+
+      let msg = `Set icons on ${updated} road room(s) in ${sector}`;
+      if (named) msg += `, named ${named} \u201cRoad\u201d`;
+      setStatus(msg);
+      close();
+    });
+  }
+
+  document.getElementById('btnRoadTools').addEventListener('click', () => {
+    if (!overlay) buildDialog();
+    overlay.style.display = 'flex';
   });
 })();
 
