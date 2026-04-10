@@ -56,6 +56,8 @@ export interface ClientSession {
   worldInitialized?: boolean;
   /** True once the combat bootstrap sequence (MMC welcome + Cmd72) has been sent. */
   combatInitialized?: boolean;
+  /** Repeating setInterval that sends bot position updates during combat. */
+  botPositionTimer?: ReturnType<typeof setInterval>;
   /**
    * Stable per-connection roster identifier used by world presence packets
    * (Cmd10/Cmd11/Cmd12/Cmd13). This is distinct from accountId and only needs to be

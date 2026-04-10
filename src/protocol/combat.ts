@@ -95,6 +95,23 @@ function encodeLongString(s: string, maxBytes: number): Buffer {
   return Buffer.concat([Buffer.from([raw.length + 0x21]), raw]);
 }
 
+// ── Cmd62 / wire 0x5f / table index 62 ───────────────────────────────────────
+// CONFIRMED — handler FUN_0040d7f0 @ 0040d7f0 — All-actors-ready / combat-start.
+//
+// Wire layout: NO PAYLOAD.
+//
+// Effect: clears DAT_0047ef60 bit 0x20 (the "waiting for actors" gate that blocks
+// SPACEBAR firing and other combat actions).  Also sets bits 0x04 and 0x10, and
+// resets _DAT_0047ef70 (expected-actor counter) to 0.
+//
+// Must be sent after all Cmd64 (actor add) and Cmd65 (initial position) packets
+// so the client can transition out of the "waiting" state and allow weapon fire.
+
+/** Build a Cmd62 combat-start signal packet.  No payload.  CONFIRMED. */
+export function buildCmd62CombatStartPacket(seq = 0): Buffer {
+  return buildGamePacket(62, Buffer.alloc(0), true, seq); // wire 0x5f
+}
+
 // ── Cmd64 / wire 0x61 / table index 64 ───────────────────────────────────────
 // CONFIRMED — handler Combat_Cmd64_AddActor_v123 @ 0040d390 — Remote actor add.
 //

@@ -1643,6 +1643,435 @@ Useful follow-up leads from the fresh audit:
 
 ---
 
+## 20. MEC File Binary Format
+
+**Source**: `mechdata/*.MEC` (161 files, 552 bytes each)  
+**Loader**: v1.23 `FUN_00433d10` (`MecFile_Load`) @ `0x00433d10`, MPBTWIN.EXE
+**Confirmed against**: AS7-D (Atlas 100t), BJ-1 (Blackjack 45t), SDR-5V (Spider 30t), plus a full local v1.23 `mechdata/*.MEC` offset spot-check
+
+### 20.1 Encryption
+
+Every `.MEC` file is XOR-encrypted with a deterministic pseudo-random key stream
+derived from the mech's variant name (the filename stem, lowercased).
+
+**Seed derivation** (`FUN_0042f5a0`, "GetSeedID"):
+1. Lowercase the stem (e.g. `"AS7-D.MEC"` → stem `"as7-d"`)
+2. Take the last 4 characters of the stem, in reverse order: `'d', '-', '7', 's'`
+3. Pack them as a little-endian uint32 → seed = `0x73372D64` for AS7-D
+
+**PRNG step** (`FUN_0042f690`):
+```python
+def prng_step(state: int) -> int:          # all arithmetic mod 2^32
+    uvar1    = (state * 0xF0F1 + 1) & 0xFFFFFFFF
+    rotated  = ((uvar1 << 16) | (uvar1 >> 16)) & 0xFFFFFFFF
+    return   (uvar1 + rotated) & 0xFFFFFFFF
+```
+The new state is returned in EAX and stored back to `DAT_00479980`.
+
+**XOR decryption loop** (`FUN_0042f660`):
+```python
+def decrypt_mec(data: bytes, seed: int) -> bytearray:
+    buf   = bytearray(data)
+    state = seed
+    n     = len(buf)          # 552
+    for k in range(n - 3):   # 549 iterations (0 … 548)
+        state = prng_step(state)
+        for j in range(4):   # XOR 4 bytes at 1-byte stride
+            if k + j < n:
+                buf[k + j] ^= (state >> (8 * j)) & 0xFF
+    return buf
+```
+This is an overlapping 4-byte XOR stream: each interior byte is XORed 4 times
+by different PRNG outputs, giving a strong obfuscation.  Inner bytes 3–548 each
+receive 4 XOR contributions; the first 3 and last 3 bytes receive fewer.
+
+**Post-load transform** (inside `MecFile_Load`):
+```c
+struct->speed_raw = (struct->speed_raw * 2) / 3;
+```
+The field at offset `0x2E` is scaled down immediately after decryption; the stored
+file value is the *raw* speed-related parameter.
+
+### 20.2 Struct Layout
+
+All fields are little-endian.  Offsets are from the start of the decrypted buffer.
+
+| Offset | Size | Field | Notes |
+|--------|------|-------|-------|
+| `0x00` | u32  | `unk_combat_rating_a` | Bounded check: must be ≤ 0xAA (170); purpose unknown; correlates with mech capability |
+| `0x04` | u32  | `unk_combat_rating_b` | Companion value to `0x00`; purpose unknown |
+| `0x08` | u32  | `unk_point_value`     | Unknown large value (varies widely by mech) |
+| `0x0C` | u32  | `unk_battle_value`    | Correlates with mech BV (~1800 Atlas, ~800 Spider) |
+| `0x10` | u32  | `unk_modified_bv`     | Slightly lower than `0x0C`; purpose unknown |
+| `0x14` | u16  | *(reserved/zero)*     | Always `0` in all tested files |
+| `0x16` | u16  | `walk_mp`             | Walk hexes-per-turn (tabletop MP) |
+| `0x18` | u16  | `tonnage`             | Mech mass in tons |
+| `0x1A` | u16  | `armor_la`            | Left Arm armor |
+| `0x1C` | u16  | `armor_ra`            | Right Arm armor |
+| `0x1E` | u16  | `armor_ll`            | Left Leg armor |
+| `0x20` | u16  | `armor_rl`            | Right Leg armor |
+| `0x22` | u16  | `armor_ct_front`      | Center Torso front armor |
+| `0x24` | u16  | `armor_lt_front`      | Left Torso front armor |
+| `0x26` | u16  | `armor_rt_front`      | Right Torso front armor |
+| `0x28` | u16  | `armor_ct_rear`       | Center Torso rear armor |
+| `0x2A` | u16  | `armor_lt_rear`       | Left Torso rear armor |
+| `0x2C` | u16  | `armor_rt_rear`       | Right Torso rear armor |
+| `0x2E` | u16  | `speed_raw`           | Speed parameter, scaled to `speed_raw × 2/3` by loader |
+| `0x30` | u16  | *(zero)*              | — |
+| `0x32` | u16  | *(zero)*              | — |
+| `0x34` | u16  | `heat_sinks`          | Total heat sink count |
+| `0x36` | u16  | *(zero)*              | — |
+| `0x38` | u16  | `jump_mp`             | Jump hexes-per-turn (0 if no jump jets) |
+| `0x3A` | u16  | `weapon_count`        | Number of weapon slots |
+| `0x3C` | i16  | `crit_state_extra_count` | v1.23 correction: used by `Combat_ClassifyDamageCode_v123` as the signed bound for a post-weapon class-0 damage-code range; this is **not** `weapon_ids[0]` |
+| `0x3E` | u16[] | `weapon_ids[weapon_count]` | Array of weapon type IDs (see §20.3) |
+| *var*  | …    | *(unknown fields)*    | Critical-hit slot data, ammo tracking; see §20.4 |
+| `0xDE` | u16[45] | `crit_slot_table` | Critical-hit slot assignments; 0xFFFF = empty |
+| `0x1EC` | u16 | `ammo_bin_count`      | Number of ammo bin records that follow |
+| `0x1EE` | u16[] | `ammo_bin_qty[ammo_bin_count]` | Quantity per ammo bin |
+| `0x202` | u16[] | `ammo_bin_type[ammo_bin_count]` | Weapon type ID for each ammo bin |
+
+**Not stored in the file** (computed or hardcoded at runtime):
+- Head armor: hardcoded as `9` for all mechs (`FUN_00438750` case 7)
+- Internal structure per section: computed from `tonnage` via lookup table (`FUN_00438750`)
+- Run MP: not stored; standard BattleTech formula `⌊walk_mp × 5/3⌋` applies
+
+### 20.3 Weapon Type IDs
+
+| ID | Weapon | Evidence |
+|----|--------|---------|
+| `3`  | Medium Laser | Present in Atlas ×4, Blackjack ×3, Spider ×1; most ubiquitous energy weapon in 3025 |
+| `6`  | AC/2 (Autocannon/2) | Appears in BJ-1 weapon list and matched ammo bin type |
+| `8`  | Unconfirmed | Present in ANH-1A ×4 after the v1.23 offset correction; no longer from AS7-D/BJ-1 shifted reads |
+| `9`  | Unconfirmed missile | AS7-D weapon slot and matching ammo-bin type |
+| `12` | Unconfirmed missile | AS7-D weapon slot and matching ammo-bin type; likely the old shifted read hid this slot |
+| `16` | AC/20 (Autocannon/20) | AS7-D weapon index 1; 2 ammo bins of 5 rounds each = 10 total ✓ |
+
+IDs `1`, `2`, `4`, `5`, `7`, `8`, `10`, `11`, `12`, `13`, `14`, and `15` appear in local v1.23 mechdata and remain unresolved without
+cross-referencing the weapon global table at `DAT_00477b58` (stride `0x5C`, 0-indexed).
+Prior notes treated `0x3C+` as the weapon-id array. v1.23 `FUN_00433910` reads weapon ids from `0x3E + slot*2`, and `Combat_ClassifyDamageCode_v123` reads `0x3C` separately as a signed count/bound for damage-state codes. Local decode examples:
+AS7-D `field_0x3c=8`, weapons `[9,16,3,3,3,3,12]`; BJ-1 `field_0x3c=8`, weapons `[6,6,3,3,3,3]`; SDR-5V `field_0x3c=9`, weapons `[3,3]`.
+
+### 20.4 Cross-Validation Table
+
+| Field | AS7-D (Atlas 100t) | BJ-1 (Blackjack 45t) | SDR-5V (Spider 30t) |
+|-------|--------------------|----------------------|---------------------|
+| Seed  | `0x73372D64` | `0x626A2D31` | `0x722D3576` |
+| `tonnage` (0x18) | **100** | **45** | **30** |
+| `walk_mp` (0x16) | **3** | **4** | **8** |
+| `jump_mp` (0x38) | **0** | **4** | **8** |
+| `heat_sinks` (0x34) | **20** | **11** | **10** |
+| `crit_state_extra_count` (0x3C) | 8 | 8 | 9 |
+| `speed_raw` (0x2E) | 27 → 18 | 27 → 18 | 18 → 12 |
+| `armor_la` (0x1A) | **34** | **12** | **5** |
+| `armor_ra` (0x1C) | **34** | **12** | **5** |
+| `armor_ll` (0x1E) | **41** | **17** | **6** |
+| `armor_rl` (0x20) | **41** | **17** | **6** |
+| `armor_ct_front` (0x22) | **47** | **18** | **8** |
+| `armor_lt_front` (0x24) | **32** | **15** | **6** |
+| `armor_rt_front` (0x26) | **32** | **15** | **6** |
+| `armor_ct_rear` (0x28) | **14** | **9** | **4** |
+| `armor_lt_rear` (0x2A) | **10** | **6** | **2** |
+| `armor_rt_rear` (0x2C) | **10** | **6** | **2** |
+| `weapon_count` (0x3A) | 7 | 6 | 2 |
+| `weapon_ids` (0x3E+) | `[9,16,3,3,3,3,12]` | `[6,6,3,3,3,3]` | `[3,3]` |
+| `ammo_bin_count` (0x1EC) | 5 | 1 | 0 |
+
+**Variant name**: sourced from `MechWin_LookupMechName` (§Appendix A) which reads the
+mech string table at `MPBT.MSG` offset `(mech_id + 0x3AE) * 2` (§15).  The loader
+uses this name both to construct the filename `mechdata\<name>.MEC` and as the
+encryption seed source.
+
+---
+
+## 21. MAP File Leading Room Table
+
+**Source**: `IS.MAP`, `SOLARIS.MAP` (local licensed installation; not committed)
+**Parser**: `src/data/maps.ts`, runnable via `npm run map:dump -- --rooms`
+**Client loader**: `Map_LoadFile` (`FUN_004100c0`) via `Map_InitSpace` (`FUN_00410340`)
+
+The earlier map-file note that treated the first bytes as a room record was off
+by one field. Both local map files start with a little-endian `u16` record count,
+followed by exactly that many leading room records. The trailing bytes after the
+leading table are still not decoded; they may contain palette, graphics, or
+topology data.
+
+Leading table layout:
+
+```
+[u16 room_record_count]
+repeat room_record_count times:
+  [u16 room_id]
+  [u16 flags]
+  [u16 x1] [u16 y1] [u16 x2] [u16 y2]
+  [u16 aux0] [u16 aux1] [u16 aux2]
+  [u16 name_len_including_nul] [name bytes]
+  [u16 desc_len_including_nul] [description bytes]
+```
+
+Local parser validation on 2026-04-07:
+
+| File | Count | Parsed room IDs | First / last | Room-table end | Trailing bytes |
+|------|------:|-----------------|--------------|---------------:|---------------:|
+| `IS.MAP` | 271 | `1-271` | `1 Luthien` / `271 New Westin` | `0x4F28` | 19771 |
+| `SOLARIS.MAP` | 32 | `146-171`, `1-6` | `146 Solaris Starport` / `6 Black Hills Sector` | `0x2123` | 180826 |
+
+Notable correction: the local `IS.MAP` is not only rooms `1-145`; its leading
+room table covers the full global namespace through `271`, including Solaris
+entries. The local `SOLARIS.MAP` leading table is a 32-row Solaris subset plus
+six sector rows, followed by a much larger undecoded section.
+
+The current parser intentionally preserves `flags` and the three auxiliary
+fields as numeric values. Their semantics are not yet confirmed. The next M5
+RE step is to identify where exits and movement topology live: either in the
+trailing map sections or in a separate client-side table.
+
+Ghidra follow-up on 2026-04-07 confirms the runtime loader shape:
+
+- `Map_LoadFile` reads the record count, allocates `count * 0x1a` bytes, and
+  converts each variable-length on-disk room row into a fixed 26-byte in-memory
+  record. String pointers are stored at offsets `+0x12` (name) and `+0x16`
+  (description).
+- The first 18 bytes of each in-memory record are copied directly from disk.
+  That matches the parser fields: `room_id`, `flags`, four coordinate words,
+  and three auxiliary words.
+- After the room table, `Map_LoadFile` calls `Picture_ReadFromFile`
+  (`FUN_00428770`) and stores the returned pointer at map object offset `+8`.
+  That means the large trailing section is currently better treated as a map
+  picture/resource blob, not an exit graph, until proven otherwise.
+- `Map_InitSpace` loads `IS.MAP` when `DAT_00472a54 == 0`, filters out room IDs
+  `0x92..0xAB` (`146..171`) while building its sorted list, and sorts the
+  remaining pointers by `*(byte *)(record + 2)` then case-insensitive room name.
+  This supports the observed split: `IS.MAP` carries the global location table,
+  while the Solaris arena subset is handled specially.
+
+### 21.1 Map UI Commands
+
+Two server command handlers now have concrete map semantics:
+
+| Cmd | Wire | Handler | Semantics |
+|-----|------|---------|-----------|
+| 40 | `0x49` | `MapOpenInnerSphere` (`0x0040ecb0`) | Reads `type1 contextId`, `type1 currentRoomId`, `type4 value/cost`, then opens the Inner Sphere map. |
+| 43 | `0x4c` | `MapOpenSolaris` (`0x0040eed0`) | Reads `type1 contextId`, `type1 currentRoomIdPlusOne`, then 26 `type1` values used to populate Solaris room/sector counters before opening the Solaris map. |
+
+The context id controls local button text / behavior. Confirmed cases from the
+handler conditionals and `MPBT.MSG`:
+
+| Context | Observed UI labels |
+|---------|--------------------|
+| `0x08` | `Travel`, `Planet`, `Cancel`; shows `Wealth`, `Cost`, `Tonnage` |
+| `0x03`, `0x6c`, `0x6f`, `0x78` | `Ship`, `Planet`, `Cancel`; shows cost/wealth fields |
+| `0x67` | `Attack`, `Planet`, `Cancel` |
+| other Inner Sphere contexts | `Info`, `Planet`, `Done` |
+| Solaris context `0xc6` | `Travel`, `Cancel` |
+
+When the user confirms or cancels from either map, the client sends
+`FUN_0040d360(contextId, selection)`, which emits client command `10`:
+
+```
+cmd 10 args: [type1 contextId] [type4 selection]
+selection == 0: cancel / close
+selection > 0: selected room id + 1
+```
+
+The follow-up branch now uses successful map replies to change server-side room
+state and send a full scene refresh sequence for the destination:
+`Cmd6 -> Cmd4 -> Cmd10 -> Cmd3 -> Cmd5`. The `Cmd4` refresh is important because
+it updates the visible room title, scene location icons, and action buttons
+instead of only changing backend presence.
+
+Engineering follow-up on this branch adds a prototype trigger and state update:
+typing `/map` or `/travel` into the world chat sends `Cmd43` with Solaris
+travel context `0xc6`; a returned `cmd 10` selection moves the session into a
+server-side `map_room_<roomId>` grouping, sends the scene refresh sequence above,
+and notifies occupants in the target room with `Cmd13`. This is a validation
+bridge, not yet the authentic terminal or tram request path.
+
+Follow-up trace of the world scene UI found a more authentic entry point:
+`Cmd4_SceneInit` action buttons carry a server-supplied `type` byte, and
+`FUN_00413790` sends client `cmd 5` with that byte through `FUN_0040d2d0`.
+Real-GUI validation on 2026-04-07 corrected one detail: button id `0x100` is
+always intercepted by `FUN_00413790` as the local Help action (`FUN_00404450`),
+so the first Cmd4 option cannot be used for server round-trips. The branch now
+emits a placeholder `Help` option first and puts `Travel` in the second slot
+(`0x101`) with type `4`; that is the earliest option slot expected to send
+client `cmd 5 / action 4` and open the same `Cmd43` Solaris travel map. This
+still does not prove the final terminal/tram trigger, but it uses the client's
+normal scene-action button path instead of chat text.
+
+Real GUI follow-up in the same session confirmed the corrected layout end to
+end: `Help` rendered in the first slot, `Travel` rendered in the second slot,
+manual Travel click emitted client `cmd 5 / action 4`, the server replied with
+`Cmd43` (`context=0xc6`, current room 146), the map selection emitted client
+`cmd 10` with `selection=148` (`selectedRoomId=147`), and the refreshed scene
+displayed `Travel complete: Ishiyama Arena.` plus the room label `Ishiyama
+Arena`.
+
+Adjacent scene location icons take a different path: `FUN_00419390` sends
+client `cmd 23` (`0x38` wire command) with one encoded byte selecting one of
+four location slots. Values `0..3` select slots whose target scene is already
+cached on the client; values `4..7` select the same slots but indicate the
+target scene was not cached locally yet. The branch now parses this as
+`slot = action & 3`, looks up the server-advertised exit for the current room,
+updates `map_room_<roomId>`, and sends the same `Cmd6 -> Cmd4 -> Cmd10 -> Cmd3
+-> Cmd5` scene refresh sequence. The provisional topology currently uses valid
+`SOLARIS.MAP` scene indices and conservative neighboring rooms; the full
+authentic exit graph is still unresolved.
+
+---
+
+## Appendix A — Confirmed Function Reference
+
+Canonical names follow the convention `Module_VerbNoun` for functions and
+`g_module_description` for globals.  Apply them in Ghidra via **Edit → Rename
+Symbol** to make cross-references readable.  The binary address (Ghidra default)
+is listed alongside each canonical name.  The machine-readable dictionary is
+in [`symbols.json`](symbols.json).
+
+### COMMEG32.DLL
+
+| Canonical Name | Binary Address | Role |
+|----------------|---------------|------|
+| `Aries_RecvDispatch` | `FUN_100014e0` | Main recv loop; switch on ARIES packet type |
+| `Aries_SendLoginPacket` | `FUN_10001420` | Builds + sends type-`0x15` LOGIN packet |
+| `Aries_PacketAlloc` | `FUN_10003600` | Allocates outgoing packet; writes type + 12-byte header |
+| `Aries_PacketSetLen` | `FUN_10003680` | Finalises header: fills `payload_length` field at offset 8 |
+| `Aries_PacketParse` | `FUN_100036d0` | Validates 12-byte header; extracts type + payload |
+| `Aries_Connect` | `FUN_100011c0` | Opens new TCP connection; parses "host:port" addr, creates `g_aries_GameWorldConn` |
+| `Aries_OpenSocket` | `FUN_10001d80` | Low-level socket open; `strchr(addr,':')` — returns -1 if ':' absent |
+| `Aries_RawWrite` | `FUN_10002b10` | Sends raw bytes on active socket |
+| `FilterDllMsg` | `FUN_100041d0` | Export: Windows msg handler; vtable[24] dispatch on lobby-conn obj |
+| `ProcessDllIdle` | `FUN_10004260` | Export: Per-frame idle; loops vtable[26] until it returns 0 |
+| `MakeTCPConnection` | `FUN_100043e0` | Export: `Aries_Connect(1, addr)` — opens primary lobby connection |
+| `SetInternet` | `FUN_100048e0` | Export: Stores the "internet" address from REDIRECT payload |
+| `SetUserPassword` | `FUN_10004840` | Export: Stores the session password from REDIRECT payload |
+
+### MPBTWIN.EXE — Frame layer
+
+| Canonical Name | Binary Address | Role |
+|----------------|---------------|------|
+| `Frame_VerifyCRC` | `FUN_00402e30` | 19-bit LFSR CRC validator (server→client frames) |
+| `Frame_EncodeArg` | `FUN_00402be0` | Base-85 arg encoder: `Frame_EncodeArg(n, value)` emits `n+1` bytes |
+| `Frame_DecodeArg` | `FUN_00402b10` | Base-85 arg decoder, symmetric to `Frame_EncodeArg` |
+| `Frame_ReadByte` | `FUN_00402f40` | Read one encoded byte from parse buffer: `*ptr++ - 0x21` |
+| `Frame_WriteCmdByte` | `FUN_00403030` | Write command byte to send buffer: `param + 0x21` |
+| `Frame_ReadString` | `FUN_00403160` | Read length-prefixed string: `[len+0x21][ASCII]` |
+| `Frame_CopyString` | `FUN_0040c0d0` | Calls `Frame_ReadString`, null-terminates destination |
+
+### MPBTWIN.EXE — Lobby layer
+
+| Canonical Name | Binary Address | Role |
+|----------------|---------------|------|
+| `Lobby_RecvDispatch` | `FUN_00402cf0` | Inner frame processor; calls seq pre-handler + `g_lobby_DispatchTable` |
+| `Lobby_SeqHandler` | `FUN_0040C2A0` | Seq-byte pre-handler; ACK path if decoded val > 42 |
+| `Lobby_SendAck` | `FUN_0040c280` | Send 2-byte ACK frame: `[0x22, val+0x2b]` |
+| `Lobby_WelcomeGate` | `FUN_00429a00` | Accumulates recv bytes; strcmp to `g_lobby_WelcomeStrMMW`; unlocks game loop |
+| `Lobby_OnWelcomeA` | `FUN_00433ef0` | Called after welcome gate passes (path A — lobby UI init) |
+| `Lobby_OnWelcomeB` | `FUN_00429580` | Called after welcome gate passes (path B) |
+| `Lobby_OnDirectConnect` | `FUN_00429620` | MMC alternate welcome path (direct-connect mode) |
+
+### MPBTWIN.EXE — Commands
+
+| Canonical Name | Binary Address | Cmd | Role |
+|----------------|---------------|:---:|------|
+| `Cmd3_Thunk` | `FUN_0040C190` | 3 | Dispatch table entry; calls `Cmd3_SendCapabilities` |
+| `Cmd3_SendCapabilities` | `FUN_0040d3c0` | 3 | Client-ready handler; sends capability flags `[1,6,3,0]` |
+| `Cmd7_ParseMenuDialog` | `FUN_004112b0` | 7 | Parses server menu dialog payload; renders numbered choices |
+| `Cmd7_OnMenuPick` | `FUN_00412190` | 7 | User picks menu item; calls `Cmd7_SendReply(listId, item_data[k-1]+1)` |
+| `Cmd7_OnMenuEsc` | `FUN_004122d0` | 7 | User presses ESC in menu; calls `Cmd1d_Send` |
+| `Cmd7_SendReply` | `FUN_0040d2f0` | 7 | Send cmd 7 reply: `startCmd('\a') + type1(listId) + type4(val)` |
+| `Cmd1d_Send` | `FUN_00410cc0` | 0x1d | Send cancel frame: `byte(p1) + type1(p2) + type4(p3)` |
+| `Cmd20_ParseTextDialog` | `FUN_00411D90` | 20 | Parses server text dialog: `type1(id) + byte(mode 0/1/2) + string(text)` |
+| `CombatTick_Mover` | `FUN_00401c90` | — | Combat frame tick mover; called every frame by combat loop (`FUN_00408080`) |
+| `Cmd26_ParseMechList` | `FUN_0043A370` | 26 | Parse mech list payload; populate `g_cmd26_*` arrays |
+| `Cmd26_ReadTypeFlag` | `FUN_0040d4c0` | 26 | Read 2-byte type_flag via `Frame_DecodeArg(1)` |
+
+### MPBTWIN.EXE — Mech Selection Window
+
+| Canonical Name | Binary Address | Role |
+|----------------|---------------|------|
+| `MechWin_Create` | `FUN_00439f70` | Create 640×480 mech selection window; set graphics mode `0x13` |
+| `MechWin_HighlightSlot` | `FUN_004394b0` | Highlight a mech row in selection window |
+| `MechWin_ScrollCallback` | `FUN_00439580` | Repaint callback; highlights `g_mechWin_HighlightIdx` |
+| `MechWin_KeyHandler` | `FUN_0043a990` | Keyboard: S/Enter=select, X=examine, n/p=navigate |
+| `Mech_VariantLookup` | `FUN_00438280` | `FUN_00405840(id + 0x3AE)` — variant typeString from MPBT.MSG; fallback "HBK-4G" |
+| `Mech_ChassisLookup` | `FUN_004382b0` | `FUN_00405840(id + 0x36C)` — chassis name from MPBT.MSG; fallback "HUNCHBACK" |
+
+### MPBTWIN.EXE — World Protocol (confirmed §18)
+
+| Canonical Name | Binary Address | Role |
+|----------------|---------------|------|
+| `WndProc_Main` | `FUN_00428920` | Main window procedure; WM_0x7f0→data, WM_0x7f7→disconnect, WM_0x7f9→fatal error |
+| `Recv_Handler` | `FUN_00429870` | WM_0x7f0 handler; demuxes lobby vs world via `g_welcomeGateOpen`; checks `'\x1b?'` strings |
+| `World_Accumulator` | `FUN_00429510` | Post-welcome ESC accumulator; collects bytes, dispatches frame on ESC |
+| `World_Dispatcher` | `FUN_004294c0` | CRC-verify then call `Lobby_RecvDispatch`; NACK on bad CRC |
+| `World_PostDispatch` | `FUN_00429440` | Seq-counter ACK after successful dispatch; `DAT_004e2ce0` gate check |
+
+### Key Data Labels — MPBTWIN.EXE
+
+| Canonical Name | Binary Label | Value / Role |
+|----------------|-------------|------|
+| `g_lobby_DispatchTable` | `DAT_00470198` | RPS (lobby/world) command fn-pointer table; 77 entries; active when `g_combatMode==0` |
+| `g_combat_DispatchTable` | `DAT_00470408` | Combat command fn-pointer table; 80 entries; active when `g_combatMode!=0` |
+| `g_lobby_SeqHandlerPtr` | `PTR_FUN_00470190` | Points to `Lobby_SeqHandler`; installed as pre-handler |
+| `g_lobby_LastSeq` | `DAT_004e2da4` | Stores last seen seq value from client frame |
+| `g_welcomeGateOpen` | `DAT_004e2de8` | 0=pre-welcome (lobby gate), 1=post-welcome (world active) |
+| `g_combatMode` | `DAT_004e2cd0` | 0=RPS mode (CRC seed `0x0a5c25`), ≠0=Combat mode (CRC seed `0x0a5c45`) |
+| `g_worldActiveFlag` | `DAT_004e2d84` | Set to 1 on world welcome (MMW path); 0 on MMC path |
+| `g_lobbyConnActive` | `DAT_004e2ce0` | Gate for post-dispatch ACK sender in `World_PostDispatch` |
+| `g_frameBuf` | `DAT_004d5b34` | Shared 4096-byte ESC-frame accumulation buffer |
+| `g_frameBufPtr` | `DAT_004d6b44` | Write pointer into `g_frameBuf`; reset to start on ESC |
+| `g_welcomeStrMMW` | `DAT_00474d48` | `"\x1b?MMW Copyright Kesmai Corp. 1991"` — standard welcome |
+| `g_welcomeStrMMC` | `DAT_00474d70` | `"\x1b?MMC Copyright Kesmai Corp. 1991"` — direct-combat welcome |
+| `g_lobby_WelcomeStrMMW` | `DAT_00474d48` | `"\x1b?MMW Copyright Kesmai Corp. 1991"` (normal Windows login) |
+| `g_lobby_WelcomeStrMMC` | `DAT_00474d70` | `"\x1b?MMC ..."` (direct-connect alternate path) |
+| `g_cmd7_ListIdTable` | `DAT_00472c94` | Per-list-id callback/state array; index `[0x512]` for menu dialog |
+| `g_cmd26_TypeFlag` | `DAT_004dc8dc` | Set by `Cmd26_ParseMechList` to received `typeFlag` |
+| `g_cmd26_MechIdArr` | `DAT_004dc560` | mech_id array, indexed by entry i |
+| `g_cmd26_MechTypeArr` | `DAT_004e2dc0` | mech_type array, indexed by entry i |
+| `g_cmd26_SlotArr` | `DAT_004dc510` | slot array (primary copy), indexed by entry i |
+| `g_cmd26_SlotArrAlt` | `DAT_004dbd88` | slot array (alternate copy), indexed by entry i |
+| `g_cmd26_TypeStrArr` | `DAT_004dc5b8` | type_string array (e.g. `"SDR-5V"`), indexed by entry i |
+| `g_cmd26_VariantArr` | `DAT_004dc1d0` | variant string array (e.g. `"Spider"`), indexed by entry i |
+| `g_cmd26_NameArr` | `DAT_004dc028` | pilot name array (empty → `Mech_VariantLookup(mech_id)` fallback at `FUN_00438280`) |
+| `g_mechWin_ShowExtButtons` | `DAT_004dbd84` | Non-zero when typeFlag triggers extended button display |
+| `g_mechWin_HighlightIdx` | `DAT_004dbd80` | Currently highlighted slot index |
+
+### Key Data Labels — COMMEG32.DLL
+
+| Canonical Name | Binary Label | Value / Role |
+|----------------|-------------|------|
+| `g_aries_GameWorldConn` | `DAT_1001a080` | Pointer to secondary/game-world connection object |
+| `g_aries_LoginBuf` | `DAT_1001f888` | Outgoing LOGIN packet data buffer |
+
+---
+
+## Appendix B — Lobby Command Table Raw Dump
+
+92 bytes read from `DAT_00470198` in Ghidra (little-endian 32-bit pointers):
+
+```
+Offset  Ptr (LE32)   Resolved
+──────  ──────────   ─────────────────────────────
+  0     00000000     NULL (crash)
+  4     30C04000     0x0040C030
+  8     60C04000     0x0040C060
+ 12     90C14000     0x0040C190  ← cmd 3: client-ready
+ 16     704B4100     0x00414B70
+ 20     F0C24000     0x0040C2F0
+ 24     00C34000     0x0040C300
+ 28     B0124100     0x004112B0  ← cmd 7: server menu dialog
+ 32     60394100     0x00413960
+ 36     10C34000     0x0040C310
+ 40     70C34000     0x0040C370
+ ...   (entries 11–19 not all confirmed)
+ 80     90 1D 41 00  0x00411D90  ← cmd 20: text-dialog handler (`Cmd20_ParseTextDialog`)
+...
+104     70 A3 43 00  0x0043A370  ← cmd 26: mech list
+```
+
+---
+
 ## 19. Client v1.23 Migration Notes
 
 > **Branch:** `feat/client-1.23` — all RE below is being re-verified against the 1.23 Ghidra project.
@@ -2301,10 +2730,10 @@ Offset  Size  Field
 10      2     field_a        uint16 LE
 12      2     field_c        uint16 LE
 14      2     field_e        uint16 LE
-16      2     name_len       uint16 LE  (byte count including NUL terminator)
-18      name_len  name       char[]     (room name; name_len-1 printable chars + NUL)
-18+name_len  2  desc_len    uint16 LE  (byte count including NUL terminator)
-20+name_len  desc_len  desc char[]     (room description)
+16      1     name_len       uint8      (length of following name string)
+17      name_len  name       char[]     (room name, no NUL terminator)
+17+name_len  1  desc_len    uint8
+18+name_len  desc_len  desc char[]     (room description)
 ```
 Total fixed bytes per record before strings: 18.
 
@@ -2391,432 +2820,130 @@ Key `MPBTWIN.EXE` v1.23 function addresses discovered this RE session:
 
 ---
 
-## 20. MEC File Binary Format
+### §19.9 — v1.23 Cmd62 / Combat-Start Signal (`DAT_0047ef60`) (CONFIRMED)
 
-**Source**: `mechdata/*.MEC` (161 files, 552 bytes each)  
-**Loader**: v1.23 `FUN_00433d10` (`MecFile_Load`) @ `0x00433d10`, MPBTWIN.EXE
-**Confirmed against**: AS7-D (Atlas 100t), BJ-1 (Blackjack 45t), SDR-5V (Spider 30t), plus a full local v1.23 `mechdata/*.MEC` offset spot-check
+**Confirmed by decompiling `FUN_0040d7f0` in `MPBTWIN.EXE` v1.23 via Ghidra (M6 RE, 2026-04-xx).**
 
-### 20.1 Encryption
+#### Cmd62 — "All actors ready / combat start" (wire `0x5F`)
 
-Every `.MEC` file is XOR-encrypted with a deterministic pseudo-random key stream
-derived from the mech's variant name (the filename stem, lowercased).
+| Field | Value |
+|-------|-------|
+| Handler | `FUN_0040d7f0` @ `0x0040d7f0` |
+| Wire byte | `0x5F` (= cmd 62 + `0x21`) |
+| Payload | **None** — zero bytes read from packet buffer |
 
-**Seed derivation** (`FUN_0042f5a0`, "GetSeedID"):
-1. Lowercase the stem (e.g. `"AS7-D.MEC"` → stem `"as7-d"`)
-2. Take the last 4 characters of the stem, in reverse order: `'d', '-', '7', 's'`
-3. Pack them as a little-endian uint32 → seed = `0x73372D64` for AS7-D
-
-**PRNG step** (`FUN_0042f690`):
-```python
-def prng_step(state: int) -> int:          # all arithmetic mod 2^32
-    uvar1    = (state * 0xF0F1 + 1) & 0xFFFFFFFF
-    rotated  = ((uvar1 << 16) | (uvar1 >> 16)) & 0xFFFFFFFF
-    return   (uvar1 + rotated) & 0xFFFFFFFF
-```
-The new state is returned in EAX and stored back to `DAT_00479980`.
-
-**XOR decryption loop** (`FUN_0042f660`):
-```python
-def decrypt_mec(data: bytes, seed: int) -> bytearray:
-    buf   = bytearray(data)
-    state = seed
-    n     = len(buf)          # 552
-    for k in range(n - 3):   # 549 iterations (0 … 548)
-        state = prng_step(state)
-        for j in range(4):   # XOR 4 bytes at 1-byte stride
-            if k + j < n:
-                buf[k + j] ^= (state >> (8 * j)) & 0xFF
-    return buf
-```
-This is an overlapping 4-byte XOR stream: each interior byte is XORed 4 times
-by different PRNG outputs, giving a strong obfuscation.  Inner bytes 3–548 each
-receive 4 XOR contributions; the first 3 and last 3 bytes receive fewer.
-
-**Post-load transform** (inside `MecFile_Load`):
+**Effect on `DAT_0047ef60`:**
 ```c
-struct->speed_raw = (struct->speed_raw * 2) / 3;
-```
-The field at offset `0x2E` is scaled down immediately after decryption; the stored
-file value is the *raw* speed-related parameter.
-
-### 20.2 Struct Layout
-
-All fields are little-endian.  Offsets are from the start of the decrypted buffer.
-
-| Offset | Size | Field | Notes |
-|--------|------|-------|-------|
-| `0x00` | u32  | `unk_combat_rating_a` | Bounded check: must be ≤ 0xAA (170); purpose unknown; correlates with mech capability |
-| `0x04` | u32  | `unk_combat_rating_b` | Companion value to `0x00`; purpose unknown |
-| `0x08` | u32  | `unk_point_value`     | Unknown large value (varies widely by mech) |
-| `0x0C` | u32  | `unk_battle_value`    | Correlates with mech BV (~1800 Atlas, ~800 Spider) |
-| `0x10` | u32  | `unk_modified_bv`     | Slightly lower than `0x0C`; purpose unknown |
-| `0x14` | u16  | *(reserved/zero)*     | Always `0` in all tested files |
-| `0x16` | u16  | `walk_mp`             | Walk hexes-per-turn (tabletop MP) |
-| `0x18` | u16  | `tonnage`             | Mech mass in tons |
-| `0x1A` | u16  | `armor_la`            | Left Arm armor |
-| `0x1C` | u16  | `armor_ra`            | Right Arm armor |
-| `0x1E` | u16  | `armor_ll`            | Left Leg armor |
-| `0x20` | u16  | `armor_rl`            | Right Leg armor |
-| `0x22` | u16  | `armor_ct_front`      | Center Torso front armor |
-| `0x24` | u16  | `armor_lt_front`      | Left Torso front armor |
-| `0x26` | u16  | `armor_rt_front`      | Right Torso front armor |
-| `0x28` | u16  | `armor_ct_rear`       | Center Torso rear armor |
-| `0x2A` | u16  | `armor_lt_rear`       | Left Torso rear armor |
-| `0x2C` | u16  | `armor_rt_rear`       | Right Torso rear armor |
-| `0x2E` | u16  | `speed_raw`           | Speed parameter, scaled to `speed_raw × 2/3` by loader |
-| `0x30` | u16  | *(zero)*              | — |
-| `0x32` | u16  | *(zero)*              | — |
-| `0x34` | u16  | `heat_sinks`          | Total heat sink count |
-| `0x36` | u16  | *(zero)*              | — |
-| `0x38` | u16  | `jump_mp`             | Jump hexes-per-turn (0 if no jump jets) |
-| `0x3A` | u16  | `weapon_count`        | Number of weapon slots |
-| `0x3C` | i16  | `crit_state_extra_count` | v1.23 correction: used by `Combat_ClassifyDamageCode_v123` as the signed bound for a post-weapon class-0 damage-code range; this is **not** `weapon_ids[0]` |
-| `0x3E` | u16[] | `weapon_ids[weapon_count]` | Array of weapon type IDs (see §20.3) |
-| *var*  | …    | *(unknown fields)*    | Critical-hit slot data, ammo tracking; see §20.4 |
-| `0xDE` | u16[45] | `crit_slot_table` | Critical-hit slot assignments; 0xFFFF = empty |
-| `0x1EC` | u16 | `ammo_bin_count`      | Number of ammo bin records that follow |
-| `0x1EE` | u16[] | `ammo_bin_qty[ammo_bin_count]` | Quantity per ammo bin |
-| `0x202` | u16[] | `ammo_bin_type[ammo_bin_count]` | Weapon type ID for each ammo bin |
-
-**Not stored in the file** (computed or hardcoded at runtime):
-- Head armor: hardcoded as `9` for all mechs (`FUN_00438750` case 7)
-- Internal structure per section: computed from `tonnage` via lookup table (`FUN_00438750`)
-- Run MP: not stored; standard BattleTech formula `⌊walk_mp × 5/3⌋` applies
-
-### 20.3 Weapon Type IDs
-
-| ID | Weapon | Evidence |
-|----|--------|---------|
-| `3`  | Medium Laser | Present in Atlas ×4, Blackjack ×3, Spider ×1; most ubiquitous energy weapon in 3025 |
-| `6`  | AC/2 (Autocannon/2) | Appears in BJ-1 weapon list and matched ammo bin type |
-| `8`  | Unconfirmed | Present in ANH-1A ×4 after the v1.23 offset correction; no longer from AS7-D/BJ-1 shifted reads |
-| `9`  | Unconfirmed missile | AS7-D weapon slot and matching ammo-bin type |
-| `12` | Unconfirmed missile | AS7-D weapon slot and matching ammo-bin type; likely the old shifted read hid this slot |
-| `16` | AC/20 (Autocannon/20) | AS7-D weapon index 1; 2 ammo bins of 5 rounds each = 10 total ✓ |
-
-IDs `1`, `2`, `4`, `5`, `7`, `8`, `10`, `11`, `12`, `13`, `14`, and `15` appear in local v1.23 mechdata and remain unresolved without
-cross-referencing the weapon global table at `DAT_00477b58` (stride `0x5C`, 0-indexed).
-Prior notes treated `0x3C+` as the weapon-id array. v1.23 `FUN_00433910` reads weapon ids from `0x3E + slot*2`, and `Combat_ClassifyDamageCode_v123` reads `0x3C` separately as a signed count/bound for damage-state codes. Local decode examples:
-AS7-D `field_0x3c=8`, weapons `[9,16,3,3,3,3,12]`; BJ-1 `field_0x3c=8`, weapons `[6,6,3,3,3,3]`; SDR-5V `field_0x3c=9`, weapons `[3,3]`.
-
-### 20.4 Cross-Validation Table
-
-| Field | AS7-D (Atlas 100t) | BJ-1 (Blackjack 45t) | SDR-5V (Spider 30t) |
-|-------|--------------------|----------------------|---------------------|
-| Seed  | `0x73372D64` | `0x626A2D31` | `0x722D3576` |
-| `tonnage` (0x18) | **100** | **45** | **30** |
-| `walk_mp` (0x16) | **3** | **4** | **8** |
-| `jump_mp` (0x38) | **0** | **4** | **8** |
-| `heat_sinks` (0x34) | **20** | **11** | **10** |
-| `crit_state_extra_count` (0x3C) | 8 | 8 | 9 |
-| `speed_raw` (0x2E) | 27 → 18 | 27 → 18 | 18 → 12 |
-| `armor_la` (0x1A) | **34** | **12** | **5** |
-| `armor_ra` (0x1C) | **34** | **12** | **5** |
-| `armor_ll` (0x1E) | **41** | **17** | **6** |
-| `armor_rl` (0x20) | **41** | **17** | **6** |
-| `armor_ct_front` (0x22) | **47** | **18** | **8** |
-| `armor_lt_front` (0x24) | **32** | **15** | **6** |
-| `armor_rt_front` (0x26) | **32** | **15** | **6** |
-| `armor_ct_rear` (0x28) | **14** | **9** | **4** |
-| `armor_lt_rear` (0x2A) | **10** | **6** | **2** |
-| `armor_rt_rear` (0x2C) | **10** | **6** | **2** |
-| `weapon_count` (0x3A) | 7 | 6 | 2 |
-| `weapon_ids` (0x3E+) | `[9,16,3,3,3,3,12]` | `[6,6,3,3,3,3]` | `[3,3]` |
-| `ammo_bin_count` (0x1EC) | 5 | 1 | 0 |
-
-**Variant name**: sourced from `MechWin_LookupMechName` (§Appendix A) which reads the
-mech string table at `MPBT.MSG` offset `(mech_id + 0x3AE) * 2` (§15).  The loader
-uses this name both to construct the filename `mechdata\<name>.MEC` and as the
-encryption seed source.
-
----
-
-## 21. MAP File Leading Room Table
-
-**Source**: `IS.MAP`, `SOLARIS.MAP` (local licensed installation; not committed)
-**Parser**: `src/data/maps.ts`, runnable via `npm run map:dump -- --rooms`
-**Client loader**: `Map_LoadFile` (`FUN_004100c0`) via `Map_InitSpace` (`FUN_00410340`)
-
-The earlier map-file note that treated the first bytes as a room record was off
-by one field. Both local map files start with a little-endian `u16` record count,
-followed by exactly that many leading room records. The trailing bytes after the
-leading table are still not decoded; they may contain palette, graphics, or
-topology data.
-
-Leading table layout:
-
-```
-[u16 room_record_count]
-repeat room_record_count times:
-  [u16 room_id]
-  [u16 flags]
-  [u16 x1] [u16 y1] [u16 x2] [u16 y2]
-  [u16 aux0] [u16 aux1] [u16 aux2]
-  [u16 name_len_including_nul] [name bytes]
-  [u16 desc_len_including_nul] [description bytes]
+DAT_0047ef60 = (DAT_0047ef60 & 0xffffffdf) | 0x14;
+_DAT_0047ef70 = 0;
 ```
 
-Local parser validation on 2026-04-07:
+- `& 0xffffffdf` = clear bit `0x20` — **unblocks SPACEBAR / weapon fire**
+- `| 0x04` = set "all remote actors joined" flag
+- `| 0x10` = set "combat active" flag
+- `_DAT_0047ef70 = 0` = clear the expected-actor counter
 
-| File | Count | Parsed room IDs | First / last | Room-table end | Trailing bytes |
-|------|------:|-----------------|--------------|---------------:|---------------:|
-| `IS.MAP` | 271 | `1-271` | `1 Luthien` / `271 New Westin` | `0x4F28` | 19771 |
-| `SOLARIS.MAP` | 32 | `146-171`, `1-6` | `146 Solaris Starport` / `6 Black Hills Sector` | `0x2123` | 180826 |
+Cmd62 **must** be sent after all Cmd64 (remote actor add) and initial Cmd65 (position sync)
+packets. Without Cmd62, bit `0x20` of `DAT_0047ef60` remains set (written by `FUN_00445e70`
+at combat init), and the client's weapon-fire input gate in `Combat_InputActionDispatch_v123`
+(case `0x15`) is permanently blocked — SPACEBAR appears to do nothing.
 
-Notable correction: the local `IS.MAP` is not only rooms `1-145`; its leading
-room table covers the full global namespace through `271`, including Solaris
-entries. The local `SOLARIS.MAP` leading table is a 32-row Solaris subset plus
-six sector rows, followed by a much larger undecoded section.
+#### `DAT_0047ef60` — Combat State Guard Flags (fully reconstructed)
 
-The current parser intentionally preserves `flags` and the three auxiliary
-fields as numeric values. Their semantics are not yet confirmed. The next M5
-RE step is to identify where exits and movement topology live: either in the
-trailing map sections or in a separate client-side table.
+| Bit | Mask | Meaning | Set by | Cleared by |
+|-----|------|---------|--------|------------|
+| 0 | `0x01` | Local actor initialized | `Cmd72` handler (`FUN_00445110`) | — |
+| 1 | `0x02` | Arena scene/UI ready | `Cmd63` handler (`FUN_00445870`) | — |
+| 2 | `0x04` | All remote actors joined | `Cmd72` (when `_DAT_0047ef70==0`); also `Cmd62` | — |
+| 3 | `0x08` | Second stage init | `FUN_00445a90` | — |
+| 4 | `0x10` | Combat active | `Cmd62` | `Combat_InitMode_v123` |
+| 5 | `0x20` | **WEAPON FIRE BLOCKED** | `FUN_00445e70` (combat init) | **`Cmd62`** |
+| 6 | `0x40` | — | — | `Combat_InitMode_v123` |
 
-Ghidra follow-up on 2026-04-07 confirms the runtime loader shape:
+#### Secondary Combat Dispatch Table at `0x4784b0` (8 bytes/entry, base = Cmd59)
 
-- `Map_LoadFile` reads the record count, allocates `count * 0x1a` bytes, and
-  converts each variable-length on-disk room row into a fixed 26-byte in-memory
-  record. String pointers are stored at offsets `+0x12` (name) and `+0x16`
-  (description).
-- The first 18 bytes of each in-memory record are copied directly from disk.
-  That matches the parser fields: `room_id`, `flags`, four coordinate words,
-  and three auxiliary words.
-- After the room table, `Map_LoadFile` calls `Picture_ReadFromFile`
-  (`FUN_00428770`) and stores the returned pointer at map object offset `+8`.
-  That means the large trailing section is currently better treated as a map
-  picture/resource blob, not an exit graph, until proven otherwise.
-- `Map_InitSpace` loads `IS.MAP` when `DAT_00472a54 == 0`, filters out room IDs
-  `0x92..0xAB` (`146..171`) while building its sorted list, and sorts the
-  remaining pointers by `*(byte *)(record + 2)` then case-insensitive room name.
-  This supports the observed split: `IS.MAP` carries the global location table,
-  while the Solaris arena subset is handled specially.
+Confirmed by anchoring on `Combat_Cmd64_AddActor_v123` (`0x0040d390`) at index 5, then
+back-computing the table base. Each entry is 8 bytes: 4-byte zero-padding + 4-byte function
+pointer.
 
-### 21.1 Map UI Commands
+**Note:** This secondary table at `0x4784b0` handles the combat bootstrap/status cluster
+(Cmd59–Cmd74) within the broader v1.23 combat dispatch table at `DAT_004782d8` (§19.6).
 
-Two server command handlers now have concrete map semantics:
+| Index | Cmd | Wire byte | Handler |
+|-------|-----|-----------|---------|
+| 0 | 59 | `0x5C` | `FUN_0040ec30` |
+| 1 | 60 | `0x5D` | `FUN_0040ebc0` |
+| 2 | 61 | `0x5E` | `FUN_0040eb50` |
+| 3 | **62** | **`0x5F`** | **`FUN_0040d7f0`** — combat-start; clears `DAT_0047ef60` bit `0x20`; enables SPACEBAR |
+| 4 | 63 | `0x60` | `FUN_00445870` — arena scene init; sets bit `0x02`; reads zero payload bytes |
+| 5 | 64 | `0x61` | `Combat_Cmd64_AddActor_v123` (`0x0040d390`) |
+| 6 | 65 | `0x62` | `Combat_Cmd65_UpdateActorPosition_v123` (`0x0040d830`) |
+| 7 | 66 | `0x63` | `FUN_0040de50` — remote actor damage (see §19.6.1) |
+| 8 | 67 | `0x64` | `FUN_0040de80` — local actor damage |
+| 9 | 68 | `0x65` | `FUN_0040e390` — projectile/effect spawn |
+| 10 | 69 | `0x66` | `FUN_0040e570` — impact effect at coordinate |
+| 11 | 70 | `0x67` | `FUN_0040e700` — actor animation/status transition |
+| 12 | 71 | `0x68` | `FUN_0040eae0` — reset current projectile/effect state |
+| 13 | **72** | **`0x69`** | **`FUN_00445110`** — local actor bootstrap (Cmd72) |
+| 14 | 73 | `0x6A` | `FUN_0040e2f0` — actor rate/bias-field update |
+| 15 | 74 | `0x6B` | `FUN_004459f0` |
 
-| Cmd | Wire | Handler | Semantics |
-|-----|------|---------|-----------|
-| 40 | `0x49` | `MapOpenInnerSphere` (`0x0040ecb0`) | Reads `type1 contextId`, `type1 currentRoomId`, `type4 value/cost`, then opens the Inner Sphere map. |
-| 43 | `0x4c` | `MapOpenSolaris` (`0x0040eed0`) | Reads `type1 contextId`, `type1 currentRoomIdPlusOne`, then 26 `type1` values used to populate Solaris room/sector counters before opening the Solaris map. |
+#### Cmd63 (`FUN_00445870`) — Arena Scene Init (no payload)
 
-The context id controls local button text / behavior. Confirmed cases from the
-handler conditionals and `MPBT.MSG`:
+- Wire byte: `0x60` (cmd 63 + `0x21`)
+- **Reads zero bytes** from the packet buffer
+- Guard: if `DAT_0047ef60 & 0x02 != 0`, returns immediately (runs only once)
+- Effect: sets `DAT_0047ef60 |= 0x02` (arena scene ready flag)
+- Must be received before Cmd62 executes its `| 0x14` write
 
-| Context | Observed UI labels |
-|---------|--------------------|
-| `0x08` | `Travel`, `Planet`, `Cancel`; shows `Wealth`, `Cost`, `Tonnage` |
-| `0x03`, `0x6c`, `0x6f`, `0x78` | `Ship`, `Planet`, `Cancel`; shows cost/wealth fields |
-| `0x67` | `Attack`, `Planet`, `Cancel` |
-| other Inner Sphere contexts | `Info`, `Planet`, `Done` |
-| Solaris context `0xc6` | `Travel`, `Cancel` |
+#### Ally Mode — ENTER Target Cycling
 
-When the user confirms or cancels from either map, the client sends
-`FUN_0040d360(contextId, selection)`, which emits client command `10`:
+ENTER target cycling in combat requires "ally mode" to be active. This is a **client-side
+toggle only** — the server cannot send it directly. The player must press `=` twice after
+entering combat:
 
-```
-cmd 10 args: [type1 contextId] [type4 selection]
-selection == 0: cancel / close
-selection > 0: selected room id + 1
-```
+| Press | Global written | Value |
+|-------|---------------|-------|
+| First `=` | `DAT_00479a48` | `0 → 1` |
+| Second `=` | `DAT_0047a7d4` | `|= 1` (ally mode ON) |
 
-The follow-up branch now uses successful map replies to change server-side room
-state and send a full scene refresh sequence for the destination:
-`Cmd6 -> Cmd4 -> Cmd10 -> Cmd3 -> Cmd5`. The `Cmd4` refresh is important because
-it updates the visible room title, scene location icons, and action buttons
-instead of only changing backend presence.
+With ally mode ON, ENTER cycles available targets using `DAT_004f54d8` (target slot index).
+The remote bot actor added at slot 1 by Cmd64 is cycled into the crosshair on ENTER press.
 
-Engineering follow-up on this branch adds a prototype trigger and state update:
-typing `/map` or `/travel` into the world chat sends `Cmd43` with Solaris
-travel context `0xc6`; a returned `cmd 10` selection moves the session into a
-server-side `map_room_<roomId>` grouping, sends the scene refresh sequence above,
-and notifies occupants in the target room with `Cmd13`. This is a validation
-bridge, not yet the authentic terminal or tram request path.
-
-Follow-up trace of the world scene UI found a more authentic entry point:
-`Cmd4_SceneInit` action buttons carry a server-supplied `type` byte, and
-`FUN_00413790` sends client `cmd 5` with that byte through `FUN_0040d2d0`.
-Real-GUI validation on 2026-04-07 corrected one detail: button id `0x100` is
-always intercepted by `FUN_00413790` as the local Help action (`FUN_00404450`),
-so the first Cmd4 option cannot be used for server round-trips. The branch now
-emits a placeholder `Help` option first and puts `Travel` in the second slot
-(`0x101`) with type `4`; that is the earliest option slot expected to send
-client `cmd 5 / action 4` and open the same `Cmd43` Solaris travel map. This
-still does not prove the final terminal/tram trigger, but it uses the client's
-normal scene-action button path instead of chat text.
-
-Real GUI follow-up in the same session confirmed the corrected layout end to
-end: `Help` rendered in the first slot, `Travel` rendered in the second slot,
-manual Travel click emitted client `cmd 5 / action 4`, the server replied with
-`Cmd43` (`context=0xc6`, current room 146), the map selection emitted client
-`cmd 10` with `selection=148` (`selectedRoomId=147`), and the refreshed scene
-displayed `Travel complete: Ishiyama Arena.` plus the room label `Ishiyama
-Arena`.
-
-Adjacent scene location icons take a different path: `FUN_00419390` sends
-client `cmd 23` (`0x38` wire command) with one encoded byte selecting one of
-four location slots. Values `0..3` select slots whose target scene is already
-cached on the client; values `4..7` select the same slots but indicate the
-target scene was not cached locally yet. The branch now parses this as
-`slot = action & 3`, looks up the server-advertised exit for the current room,
-updates `map_room_<roomId>`, and sends the same `Cmd6 -> Cmd4 -> Cmd10 -> Cmd3
--> Cmd5` scene refresh sequence. The provisional topology currently uses valid
-`SOLARIS.MAP` scene indices and conservative neighboring rooms; the full
-authentic exit graph is still unresolved.
-
----
-
-## Appendix A — Confirmed Function Reference
-
-Canonical names follow the convention `Module_VerbNoun` for functions and
-`g_module_description` for globals.  Apply them in Ghidra via **Edit → Rename
-Symbol** to make cross-references readable.  The binary address (Ghidra default)
-is listed alongside each canonical name.  The machine-readable dictionary is
-in [`symbols.json`](symbols.json).
-
-### COMMEG32.DLL
-
-| Canonical Name | Binary Address | Role |
-|----------------|---------------|------|
-| `Aries_RecvDispatch` | `FUN_100014e0` | Main recv loop; switch on ARIES packet type |
-| `Aries_SendLoginPacket` | `FUN_10001420` | Builds + sends type-`0x15` LOGIN packet |
-| `Aries_PacketAlloc` | `FUN_10003600` | Allocates outgoing packet; writes type + 12-byte header |
-| `Aries_PacketSetLen` | `FUN_10003680` | Finalises header: fills `payload_length` field at offset 8 |
-| `Aries_PacketParse` | `FUN_100036d0` | Validates 12-byte header; extracts type + payload |
-| `Aries_Connect` | `FUN_100011c0` | Opens new TCP connection; parses "host:port" addr, creates `g_aries_GameWorldConn` |
-| `Aries_OpenSocket` | `FUN_10001d80` | Low-level socket open; `strchr(addr,':')` — returns -1 if ':' absent |
-| `Aries_RawWrite` | `FUN_10002b10` | Sends raw bytes on active socket |
-| `FilterDllMsg` | `FUN_100041d0` | Export: Windows msg handler; vtable[24] dispatch on lobby-conn obj |
-| `ProcessDllIdle` | `FUN_10004260` | Export: Per-frame idle; loops vtable[26] until it returns 0 |
-| `MakeTCPConnection` | `FUN_100043e0` | Export: `Aries_Connect(1, addr)` — opens primary lobby connection |
-| `SetInternet` | `FUN_100048e0` | Export: Stores the "internet" address from REDIRECT payload |
-| `SetUserPassword` | `FUN_10004840` | Export: Stores the session password from REDIRECT payload |
-
-### MPBTWIN.EXE — Frame layer
-
-| Canonical Name | Binary Address | Role |
-|----------------|---------------|------|
-| `Frame_VerifyCRC` | `FUN_00402e30` | 19-bit LFSR CRC validator (server→client frames) |
-| `Frame_EncodeArg` | `FUN_00402be0` | Base-85 arg encoder: `Frame_EncodeArg(n, value)` emits `n+1` bytes |
-| `Frame_DecodeArg` | `FUN_00402b10` | Base-85 arg decoder, symmetric to `Frame_EncodeArg` |
-| `Frame_ReadByte` | `FUN_00402f40` | Read one encoded byte from parse buffer: `*ptr++ - 0x21` |
-| `Frame_WriteCmdByte` | `FUN_00403030` | Write command byte to send buffer: `param + 0x21` |
-| `Frame_ReadString` | `FUN_00403160` | Read length-prefixed string: `[len+0x21][ASCII]` |
-| `Frame_CopyString` | `FUN_0040c0d0` | Calls `Frame_ReadString`, null-terminates destination |
-
-### MPBTWIN.EXE — Lobby layer
-
-| Canonical Name | Binary Address | Role |
-|----------------|---------------|------|
-| `Lobby_RecvDispatch` | `FUN_00402cf0` | Inner frame processor; calls seq pre-handler + `g_lobby_DispatchTable` |
-| `Lobby_SeqHandler` | `FUN_0040C2A0` | Seq-byte pre-handler; ACK path if decoded val > 42 |
-| `Lobby_SendAck` | `FUN_0040c280` | Send 2-byte ACK frame: `[0x22, val+0x2b]` |
-| `Lobby_WelcomeGate` | `FUN_00429a00` | Accumulates recv bytes; strcmp to `g_lobby_WelcomeStrMMW`; unlocks game loop |
-| `Lobby_OnWelcomeA` | `FUN_00433ef0` | Called after welcome gate passes (path A — lobby UI init) |
-| `Lobby_OnWelcomeB` | `FUN_00429580` | Called after welcome gate passes (path B) |
-| `Lobby_OnDirectConnect` | `FUN_00429620` | MMC alternate welcome path (direct-connect mode) |
-
-### MPBTWIN.EXE — Commands
-
-| Canonical Name | Binary Address | Cmd | Role |
-|----------------|---------------|:---:|------|
-| `Cmd3_Thunk` | `FUN_0040C190` | 3 | Dispatch table entry; calls `Cmd3_SendCapabilities` |
-| `Cmd3_SendCapabilities` | `FUN_0040d3c0` | 3 | Client-ready handler; sends capability flags `[1,6,3,0]` |
-| `Cmd7_ParseMenuDialog` | `FUN_004112b0` | 7 | Parses server menu dialog payload; renders numbered choices |
-| `Cmd7_OnMenuPick` | `FUN_00412190` | 7 | User picks menu item; calls `Cmd7_SendReply(listId, item_data[k-1]+1)` |
-| `Cmd7_OnMenuEsc` | `FUN_004122d0` | 7 | User presses ESC in menu; calls `Cmd1d_Send` |
-| `Cmd7_SendReply` | `FUN_0040d2f0` | 7 | Send cmd 7 reply: `startCmd('\a') + type1(listId) + type4(val)` |
-| `Cmd1d_Send` | `FUN_00410cc0` | 0x1d | Send cancel frame: `byte(p1) + type1(p2) + type4(p3)` |
-| `Cmd20_ParseTextDialog` | `FUN_00411D90` | 20 | Parses server text dialog: `type1(id) + byte(mode 0/1/2) + string(text)` |
-| `CombatTick_Mover` | `FUN_00401c90` | — | Combat frame tick mover; called every frame by combat loop (`FUN_00408080`) |
-| `Cmd26_ParseMechList` | `FUN_0043A370` | 26 | Parse mech list payload; populate `g_cmd26_*` arrays |
-| `Cmd26_ReadTypeFlag` | `FUN_0040d4c0` | 26 | Read 2-byte type_flag via `Frame_DecodeArg(1)` |
-
-### MPBTWIN.EXE — Mech Selection Window
-
-| Canonical Name | Binary Address | Role |
-|----------------|---------------|------|
-| `MechWin_Create` | `FUN_00439f70` | Create 640×480 mech selection window; set graphics mode `0x13` |
-| `MechWin_HighlightSlot` | `FUN_004394b0` | Highlight a mech row in selection window |
-| `MechWin_ScrollCallback` | `FUN_00439580` | Repaint callback; highlights `g_mechWin_HighlightIdx` |
-| `MechWin_KeyHandler` | `FUN_0043a990` | Keyboard: S/Enter=select, X=examine, n/p=navigate |
-| `Mech_VariantLookup` | `FUN_00438280` | `FUN_00405840(id + 0x3AE)` — variant typeString from MPBT.MSG; fallback "HBK-4G" |
-| `Mech_ChassisLookup` | `FUN_004382b0` | `FUN_00405840(id + 0x36C)` — chassis name from MPBT.MSG; fallback "HUNCHBACK" |
-
-### MPBTWIN.EXE — World Protocol (confirmed §18)
-
-| Canonical Name | Binary Address | Role |
-|----------------|---------------|------|
-| `WndProc_Main` | `FUN_00428920` | Main window procedure; WM_0x7f0→data, WM_0x7f7→disconnect, WM_0x7f9→fatal error |
-| `Recv_Handler` | `FUN_00429870` | WM_0x7f0 handler; demuxes lobby vs world via `g_welcomeGateOpen`; checks `'\x1b?'` strings |
-| `World_Accumulator` | `FUN_00429510` | Post-welcome ESC accumulator; collects bytes, dispatches frame on ESC |
-| `World_Dispatcher` | `FUN_004294c0` | CRC-verify then call `Lobby_RecvDispatch`; NACK on bad CRC |
-| `World_PostDispatch` | `FUN_00429440` | Seq-counter ACK after successful dispatch; `DAT_004e2ce0` gate check |
-
-### Key Data Labels — MPBTWIN.EXE
-
-| Canonical Name | Binary Label | Value / Role |
-|----------------|-------------|------|
-| `g_lobby_DispatchTable` | `DAT_00470198` | RPS (lobby/world) command fn-pointer table; 77 entries; active when `g_combatMode==0` |
-| `g_combat_DispatchTable` | `DAT_00470408` | Combat command fn-pointer table; 80 entries; active when `g_combatMode!=0` |
-| `g_lobby_SeqHandlerPtr` | `PTR_FUN_00470190` | Points to `Lobby_SeqHandler`; installed as pre-handler |
-| `g_lobby_LastSeq` | `DAT_004e2da4` | Stores last seen seq value from client frame |
-| `g_welcomeGateOpen` | `DAT_004e2de8` | 0=pre-welcome (lobby gate), 1=post-welcome (world active) |
-| `g_combatMode` | `DAT_004e2cd0` | 0=RPS mode (CRC seed `0x0a5c25`), ≠0=Combat mode (CRC seed `0x0a5c45`) |
-| `g_worldActiveFlag` | `DAT_004e2d84` | Set to 1 on world welcome (MMW path); 0 on MMC path |
-| `g_lobbyConnActive` | `DAT_004e2ce0` | Gate for post-dispatch ACK sender in `World_PostDispatch` |
-| `g_frameBuf` | `DAT_004d5b34` | Shared 4096-byte ESC-frame accumulation buffer |
-| `g_frameBufPtr` | `DAT_004d6b44` | Write pointer into `g_frameBuf`; reset to start on ESC |
-| `g_welcomeStrMMW` | `DAT_00474d48` | `"\x1b?MMW Copyright Kesmai Corp. 1991"` — standard welcome |
-| `g_welcomeStrMMC` | `DAT_00474d70` | `"\x1b?MMC Copyright Kesmai Corp. 1991"` — direct-combat welcome |
-| `g_lobby_WelcomeStrMMW` | `DAT_00474d48` | `"\x1b?MMW Copyright Kesmai Corp. 1991"` (normal Windows login) |
-| `g_lobby_WelcomeStrMMC` | `DAT_00474d70` | `"\x1b?MMC ..."` (direct-connect alternate path) |
-| `g_cmd7_ListIdTable` | `DAT_00472c94` | Per-list-id callback/state array; index `[0x512]` for menu dialog |
-| `g_cmd26_TypeFlag` | `DAT_004dc8dc` | Set by `Cmd26_ParseMechList` to received `typeFlag` |
-| `g_cmd26_MechIdArr` | `DAT_004dc560` | mech_id array, indexed by entry i |
-| `g_cmd26_MechTypeArr` | `DAT_004e2dc0` | mech_type array, indexed by entry i |
-| `g_cmd26_SlotArr` | `DAT_004dc510` | slot array (primary copy), indexed by entry i |
-| `g_cmd26_SlotArrAlt` | `DAT_004dbd88` | slot array (alternate copy), indexed by entry i |
-| `g_cmd26_TypeStrArr` | `DAT_004dc5b8` | type_string array (e.g. `"SDR-5V"`), indexed by entry i |
-| `g_cmd26_VariantArr` | `DAT_004dc1d0` | variant string array (e.g. `"Spider"`), indexed by entry i |
-| `g_cmd26_NameArr` | `DAT_004dc028` | pilot name array (empty → `Mech_VariantLookup(mech_id)` fallback at `FUN_00438280`) |
-| `g_mechWin_ShowExtButtons` | `DAT_004dbd84` | Non-zero when typeFlag triggers extended button display |
-| `g_mechWin_HighlightIdx` | `DAT_004dbd80` | Currently highlighted slot index |
-
-### Key Data Labels — COMMEG32.DLL
-
-| Canonical Name | Binary Label | Value / Role |
-|----------------|-------------|------|
-| `g_aries_GameWorldConn` | `DAT_1001a080` | Pointer to secondary/game-world connection object |
-| `g_aries_LoginBuf` | `DAT_1001f888` | Outgoing LOGIN packet data buffer |
-
----
-
-## Appendix B — Lobby Command Table Raw Dump
-
-92 bytes read from `DAT_00470198` in Ghidra (little-endian 32-bit pointers):
+#### Complete Confirmed Combat Bootstrap Sequence
 
 ```
-Offset  Ptr (LE32)   Resolved
-──────  ──────────   ─────────────────────────────
-  0     00000000     NULL (crash)
-  4     30C04000     0x0040C030
-  8     60C04000     0x0040C060
- 12     90C14000     0x0040C190  ← cmd 3: client-ready
- 16     704B4100     0x00414B70
- 20     F0C24000     0x0040C2F0
- 24     00C34000     0x0040C300
- 28     B0124100     0x004112B0  ← cmd 7: server menu dialog
- 32     60394100     0x00413960
- 36     10C34000     0x0040C310
- 40     70C34000     0x0040C370
- ...   (entries 11–19 not all confirmed)
- 80     90 1D 41 00  0x00411D90  ← cmd 20: text-dialog handler (`Cmd20_ParseTextDialog`)
-...
-104     70 A3 43 00  0x0043A370  ← cmd 26: mech list
+Step 1: Cmd72 (wire 0x69) — local mech init
+        Slot 0 = player identity + selected mech
+        Payload: scenario/title, terrain point lists, identity strings,
+                 initial coordinates, mech id, initial local damage-state blocks
+        Effect: DAT_0047ef60 |= 0x01 (local actor initialized)
+
+Step 2: Cmd64 (wire 0x61) — add remote bot actor
+        Slot 1 = "Opponent/Opponent"
+        Loads bot mech .MEC data and identity strings
+
+Step 3: Cmd65 (wire 0x62) — player initial position
+        Slot 0 at world coords x=0, y=0, z=0 (origin)
+
+Step 4: Cmd65 (wire 0x62) — bot initial position
+        Slot 1 at x=0, y=0, z=300000
+        (~300 m out from origin, clear of the center arena building)
+
+Step 5: Cmd62 (wire 0x5F) — combat start (NO PAYLOAD)
+        Clears DAT_0047ef60 bit 0x20 → enables SPACEBAR weapon fire
+        Sets bits 0x04 and 0x10; resets _DAT_0047ef70
+
+Step 6: Cmd65 timer (every 1000 ms) — keep bot position fresh
+        Slot 1, same coordinates, prevents client interpolation drift
 ```
+
+#### Coordinate Encoding
+
+- `COORD_BIAS = 0x18e4258` is added to all type3 world coordinates in Cmd65/Cmd72 payloads
+- Bot at `x=5000, z=0`: within ~100 m of origin, lands on the center arena building (avoid this)
+- Bot at `x=0, z=300000`: ~300 m out in open arena space, clear of obstacles — confirmed working
+- `z` maps to depth/forward in the arena coordinate system; `y` maps to altitude
 
 ---
 

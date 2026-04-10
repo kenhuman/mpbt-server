@@ -612,6 +612,9 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     if (keepaliveTimer !== undefined) {
       clearInterval(keepaliveTimer);
     }
+    if (session.botPositionTimer !== undefined) {
+      clearInterval(session.botPositionTimer);
+    }
     capture.close();
   });
 
