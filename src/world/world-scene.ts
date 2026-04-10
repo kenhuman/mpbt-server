@@ -443,6 +443,7 @@ export function sendMechClassPicker(
     typeString: '',
     variant:    '',
     name:       label,
+    walkSpeedMag: 0,
     maxSpeedMag: 0,
     extraCritCount: 0,
   }));
@@ -482,6 +483,7 @@ export function sendMechChassisPicker(
     typeString: '',
     variant:    '',
     name:       chassis,
+    walkSpeedMag: 0,
     maxSpeedMag: 0,
     extraCritCount: 0,
   }));
@@ -493,6 +495,7 @@ export function sendMechChassisPicker(
       typeString: '',
       variant:    '',
       name:       'More...',
+      walkSpeedMag: 0,
       maxSpeedMag: 0,
       extraCritCount: 0,
     });
@@ -527,6 +530,7 @@ export function sendMechVariantPicker(
     typeString: mech.typeString,
     variant:    `${mechKph(mech.maxSpeedMag)} kph`,
     name:       mech.typeString,
+    walkSpeedMag: mech.walkSpeedMag,
     maxSpeedMag: mech.maxSpeedMag,
     extraCritCount: mech.extraCritCount,
   }));

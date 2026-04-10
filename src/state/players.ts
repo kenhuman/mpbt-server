@@ -132,7 +132,9 @@ export interface ClientSession {
   combatLegVel?: number;
   /** Current max-latched speedMag echoed in Cmd65 Cmd9 responses. */
   combatSpeedMag?: number;
-  /** Per-mech speedMag cap (mec_speed * 450), set at combat bootstrap. */
+  /** Per-mech walk-speed magnitude (mec_speed * 300), set at combat bootstrap. */
+  combatWalkSpeedMag?: number;
+  /** Per-mech run/max speedMag cap (round(mec_speed * 1.5) * 300), set at combat bootstrap. */
   combatMaxSpeedMag?: number;
 
   // ── 3-step mech picker state ──────────────────────────────────────────────

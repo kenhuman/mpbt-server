@@ -2954,11 +2954,13 @@ Step 6: Cmd65 timer (every 1000 ms) — keep bot position fresh
 
 #### maxSpeedMag derivation
 
-The mech's maximum combat speed magnitude is derived directly from the `walk_mp` field
-at `.MEC` offset `0x16` (no post-load transform; see §20.2):
+The mech's walk and run speed magnitudes are derived directly from the `walk_mp`
+field at `.MEC` offset `0x16` (see §20.2 and
+`Combat_InitActorRuntimeFromMec_v123 @ 0x00433910`):
 
 ```
-maxSpeedMag = walk_mp × 450
+walkSpeedMag = walk_mp × 300
+maxSpeedMag  = round(walk_mp × 1.5) × 300
 ```
 
 The server must read this from the decrypted `.MEC` buffer as `int16LE` at offset `0x16`.
@@ -2966,16 +2968,16 @@ The server must read this from the decrypted `.MEC` buffer as `int16LE` at offse
 **Approximate in-game kph** (informational; displayed in the Mech Bay variant picker):
 ```
 mechKph = round(maxSpeedMag × 16.2 / 450)
-        = round(walk_mp × 16.2)
 ```
 
 Cross-validation against `mech-stats.ts` and BT-MAN:
 
-| Mech | walk_mp | maxSpeedMag | mechKph (calc) | BT-MAN max kph |
-|------|:-------:|:-----------:|:--------------:|:--------------:|
-| Spider SDR-5V | 8 | 3600 | ~130 | 129.6 |
-| Blackjack BJ-1 | 4 | 1800 | ~65 | 64.8 |
-| Atlas AS7-D | 3 | 1350 | ~49 | 54 |
+| Mech | walk_mp | walkSpeedMag | maxSpeedMag | mechKph (calc) | BT-MAN max kph |
+|------|:-------:|:------------:|:-----------:|:--------------:|:--------------:|
+| Spider SDR-5V | 8 | 2400 | 3600 | ~130 | 129.6 |
+| Blackjack BJ-1 | 4 | 1200 | 1800 | ~65 | 64.8 |
+| Atlas AS7-D | 3 | 900 | 1500 | ~54 | 54 |
+| Annihilator ANH-1A | 2 | 600 | 900 | ~32 | 32.4 |
 
 #### Throttle → speedMag encoding
 
@@ -2990,25 +2992,26 @@ throttlePct = raw_throttle - MOTION_NEUTRAL   // range: [-45 .. +45]
 
 Server-side conversion (echo in Cmd65, field `speedMag`):
 ```
-signedSpeedMag = round(-throttlePct × maxSpeedMag / 45)
+signedSpeedMag = clamp(round(-throttlePct × maxSpeedMag / 30), -maxSpeedMag, maxSpeedMag)
                // negate because client forward < 0, but Cmd65 speedMag forward > 0
+               // live KP8 samples peak around -28..-30; clamp protects larger impulses
 ```
 
-At full forward (`throttlePct = -45`): `signedSpeedMag = +maxSpeedMag`
-At full reverse (`throttlePct = +45`): `signedSpeedMag = -maxSpeedMag`
+At full forward KP8 samples (`throttlePct ≈ -30`): `signedSpeedMag = +maxSpeedMag`
+At full reverse samples (`throttlePct ≈ +30`): `signedSpeedMag = -maxSpeedMag`
 
 #### Cmd65 echo policy
 
 | Client command | Server action | Rationale |
 |---|---|---|
 | Cmd9 (moving: `sVar1 ≠ 0 OR sVar2 ≠ 0`) | Echo Cmd65 with `speedMag=signedSpeedMag`, `throttle=MOTION_NEUTRAL`, `legVel=MOTION_NEUTRAL` | Drives client HUD speed gauge and interpolation state |
-| Cmd8 (coasting: `sVar1 == 0 AND sVar2 == 0`) | **Do NOT echo Cmd65** | A zero Cmd65 resets `legVelY` (`DAT_004f1f7a`) to MOTION_NEUTRAL inside `FUN_0040d2d0`; without local keyboard input the accumulator never rebuilds → physics deadlock (mech cannot re-accelerate) |
+| Cmd8 (coasting: `sVar1 == 0 AND sVar2 == 0`) | Do not continuously echo Cmd65; only send a one-shot positive `speedMag=maxSpeedMag` if the client has reached the walk plateau (`clientSpeed >= walkSpeedMag - tolerance`) and has no run target latched | A zero Cmd65 resets `legVelY` (`DAT_004f1f7a`) to MOTION_NEUTRAL inside `FUN_0040d2d0`; without local keyboard input the accumulator never rebuilds. The one-shot run latch only touches `DAT_004f20a2` after the coasting packet already reports zero throttle/leg velocity. |
 
 #### Implementation reference
 
-- `src/data/mechs.ts` → `readMecFields()` reads `walk_mp` at offset `0x16`, returns `{mecSpeed, extraCritCount}`.
+- `src/data/mechs.ts` → `readMecFields()` reads `walk_mp` at offset `0x16`; the loader derives `walkSpeedMag` and `maxSpeedMag`.
 - `src/world/world-data.ts` → `mechKph(maxSpeedMag)` converts for display.
-- `src/world/world-handlers.ts` → `handleCombatMovementFrame()` applies the formula and echoes Cmd65 on Cmd9 only.
+- `src/world/world-handlers.ts` → `handleCombatMovementFrame()` applies the Cmd9 formula and the one-shot Cmd8 run-speed latch.
 
 ---
 

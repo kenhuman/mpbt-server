@@ -75,6 +75,9 @@ import {
   sendMechVariantPicker,
 } from './world-scene.js';
 
+const RUN_SPEED_LATCH_TOLERANCE = 15;
+const THROTTLE_RUN_SCALE = 30;
+
 /** Server-side HP counter for the scripted single-client bot opponent. */
 const BOT_INITIAL_HEALTH = 100;
 /** Prototype damage applied to the scripted bot for each cmd10 fire frame. */
@@ -319,8 +322,10 @@ export function sendCombatBootstrapSequence(
   const extraCritCount  = mechEntry?.extraCritCount ?? 0;
   const critBytes       = Math.max(0, extraCritCount + 21);
 
-  // Store per-mech speedMag cap so Cmd8/9 handlers can apply it.
+  // Store per-mech speedMag caps so Cmd8/9 handlers can apply client-compatible walk/run targets.
+  session.combatWalkSpeedMag = mechEntry?.walkSpeedMag ?? 0;
   session.combatMaxSpeedMag = mechEntry?.maxSpeedMag ?? 0;
+  session.combatSpeedMag = 0;
   session.botHealth = BOT_INITIAL_HEALTH;
 
   // 1. MMC SYNC — plain ARIES packet; no game-frame CRC.
@@ -717,8 +722,12 @@ export function handleCombatMovementFrame(
     session.combatHeadingRaw = frame.headingRaw;
     const throttle = session.combatThrottle ?? 0;
     const legVel = session.combatLegVel ?? 0;
-    const speedMag = session.combatSpeedMag ?? 0;
+    let speedMag = session.combatSpeedMag ?? 0;
     const clientSpeed = frame.rotationRaw - MOTION_NEUTRAL;
+    if (clientSpeed === 0 && speedMag !== 0) {
+      session.combatSpeedMag = 0;
+      speedMag = 0;
+    }
     connLog.debug(
       '[world/combat] cmd8 coasting: x=%d y=%d heading=%d clientSpeed=%d latchedThrottle=%d latchedLegVel=%d latchedSpeedMag=%d; suppressing Cmd65 echo',
       session.combatX, session.combatY, frame.headingRaw, clientSpeed, throttle, legVel, speedMag,
@@ -727,8 +736,43 @@ export function handleCombatMovementFrame(
     // Ghidra: the client movement builder emits Cmd8 when DAT_004f1f7a/7c
     // are both zero, and Cmd65 writes those registers directly. Echoing Cmd65
     // during Cmd8 can keep the client trapped in zero-throttle Cmd8 frames.
-    // Keep the server-side position state, but do not touch client motion
-    // registers until the next Cmd9 moving frame.
+    const walkSpeedMag = session.combatWalkSpeedMag ?? 0;
+    const maxSpeedMag = session.combatMaxSpeedMag ?? 0;
+    const shouldLatchRunSpeed =
+      clientSpeed > 0 &&
+      walkSpeedMag > 0 &&
+      maxSpeedMag > walkSpeedMag &&
+      clientSpeed >= walkSpeedMag - RUN_SPEED_LATCH_TOLERANCE &&
+      speedMag < maxSpeedMag - RUN_SPEED_LATCH_TOLERANCE;
+
+    if (shouldLatchRunSpeed) {
+      session.combatSpeedMag = maxSpeedMag;
+      connLog.info(
+        '[world/combat] cmd8 run-speed latch: clientSpeed=%d walkSpeedMag=%d maxSpeedMag=%d',
+        clientSpeed, walkSpeedMag, maxSpeedMag,
+      );
+      send(
+        session.socket,
+        buildCmd65PositionSyncPacket(
+          {
+            slot:     0,
+            x:        session.combatX,
+            y:        session.combatY,
+            z:        0,
+            facing:   (frame.headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
+            throttle: 0,
+            legVel:   0,
+            speedMag: maxSpeedMag,
+          },
+          nextSeq(session),
+        ),
+        capture,
+        'CMD65_RUN_SPEED_LATCH',
+      );
+    }
+
+    // Keep the server-side position state, but do not continuously touch client
+    // throttle/leg velocity registers until the next Cmd9 moving frame.
     return;
   }
 
@@ -742,7 +786,10 @@ export function handleCombatMovementFrame(
     const maxSpeedMag = session.combatMaxSpeedMag ?? 0;
     const throttlePct = frame.throttleRaw - MOTION_NEUTRAL; // negative = forward
     const nextSpeedMag = maxSpeedMag > 0
-      ? Math.round(-throttlePct * maxSpeedMag / 45)
+      ? Math.max(
+          -maxSpeedMag,
+          Math.min(maxSpeedMag, Math.round(-throttlePct * maxSpeedMag / THROTTLE_RUN_SCALE)),
+        )
       : 0;
     const throttle = (frame.throttleRaw - MOTION_NEUTRAL) * MOTION_DIV;
     const legVel = (frame.legVelRaw - MOTION_NEUTRAL) * MOTION_DIV;
