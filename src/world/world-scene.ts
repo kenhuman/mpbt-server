@@ -526,10 +526,14 @@ export function sendMechVariantPicker(
   session.mechPickerChassis = chassis;
 
   const variants = WORLD_MECHS.filter(mech => getMechChassis(mech.typeString) === chassis);
-  const entries = variants.map(mech => ({
+  // slot must be the 0-based positional index so the client echoes back (slot+1)
+  // as the selection, which the handler converts back to variants[selection-1].
+  // Using mech.slot (the raw DB slot) causes out-of-range lookups for any mech
+  // whose DB slot is not equal to its position in this filtered list.
+  const entries = variants.map((mech, i) => ({
     id:         mech.id,
     mechType:   mech.mechType,
-    slot:       mech.slot,
+    slot:       i,
     typeString: mech.typeString,
     variant:    `${mechKph(mech.walkSpeedMag)}/${mechKph(mech.maxSpeedMag)} kph`,
     name:       mech.typeString,
