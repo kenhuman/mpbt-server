@@ -76,44 +76,25 @@ import {
   sendMechChassisPicker,
   sendMechVariantPicker,
 } from './world-scene.js';
-
-/** Server-side HP counter for the scripted single-client bot opponent. */
-const BOT_INITIAL_HEALTH = 100;
-/** Prototype damage applied to the scripted bot for each cmd10 fire frame. */
-const BOT_DAMAGE_PER_HIT = 20;
-/** Prototype jump-jet altitude echoed through Cmd65 after cmd12/action 4. */
-const JUMP_JET_ALTITUDE = 1200;
-/** Altitude step per jump-jet tick for the prototype ascent/descent arc. */
-const JUMP_JET_STEP = 240;
-/** Tick interval (ms) for prototype jump-jet altitude updates. */
-const JUMP_JET_TICK_MS = 120;
-/** Jump-jet fuel max value (percentage-like integer scale). */
-const JUMP_JET_FUEL_MAX = 100;
-/** Jump-jet fuel drained on each ascent/descent tick. */
-const JUMP_JET_FUEL_DRAIN_PER_TICK = 8;
-/** Grounded jump-jet fuel regen applied on each movement frame. */
-const JUMP_JET_FUEL_REGEN_PER_FRAME = 2;
-/** Passive grounded jump-jet fuel regen interval (ms). */
-const JUMP_JET_FUEL_REGEN_INTERVAL_MS = 500;
-/** Passive grounded jump-jet fuel regen amount per interval tick. */
-const JUMP_JET_FUEL_REGEN_PER_TICK = 4;
-/** Max age for correlating cmd12/action0 to the following cmd10 shot frame. */
-const FIRE_ACTION_WINDOW_MS = 1_000;
-/** Interval (ms) at which the scripted bot fires back at the player. */
-const BOT_FIRE_INTERVAL_MS = 3_000;
-/** Prototype damage per bot retaliatory shot (Cmd67 damageCode=1, value=10). */
-const BOT_RETALIATION_DAMAGE = 10;
-/** Delay before scripted verification actions run after bootstrap. */
-const VERIFY_DELAY_MS = 1200;
-/** Delay between scripted damage sweep packets (ms). */
-const VERIFY_SWEEP_STEP_MS = 700;
-/** Damage codes used for quick client-side classifier probing. */
-const VERIFY_DAMAGE_CODES = [1, 2, 8, 16, 32, 64] as const;
-
-// KP8 full-forward produces sVar2 ≈ 20 in the client's throttle accumulator.
-// Using 20 as the scale means sVar2=20 → maxSpeedMag (run speed), rather than
-// the upstream assumption of 45 which capped movement at walk speed.
-const THROTTLE_RUN_SCALE = 20;
+import {
+  BOT_INITIAL_HEALTH,
+  BOT_DAMAGE_PER_HIT,
+  JUMP_JET_ALTITUDE,
+  JUMP_JET_STEP,
+  JUMP_JET_TICK_MS,
+  JUMP_JET_FUEL_MAX,
+  JUMP_JET_FUEL_DRAIN_PER_TICK,
+  JUMP_JET_FUEL_REGEN_PER_FRAME,
+  JUMP_JET_FUEL_REGEN_INTERVAL_MS,
+  JUMP_JET_FUEL_REGEN_PER_TICK,
+  FIRE_ACTION_WINDOW_MS,
+  BOT_FIRE_INTERVAL_MS,
+  BOT_RETALIATION_DAMAGE,
+  VERIFY_DELAY_MS,
+  VERIFY_SWEEP_STEP_MS,
+  VERIFY_DAMAGE_CODES,
+  THROTTLE_RUN_SCALE,
+} from './combat-config.js';
 
 function regenJumpFuelIfGrounded(session: ClientSession): void {
   if (session.combatJumpTimer !== undefined) return;
@@ -367,9 +348,10 @@ export function handleRoomMenuSelection(
  *
  * Unresolved assumptions (safe defaults used):
  *   • terrainId / terrainResourceId — 1/0 chosen; live capture needed.
- *   • identity2..4 — empty; purpose in client UI unconfirmed.
  *   • headingBias  — 0 (MOTION_NEUTRAL added by encoder); live capture needed.
  *   • globalA/B/C  — globalA=2800 confirmed (D²=7840000 → eq. v = speed_target); B/C = 0.
+ *   • identity2/3  — populated with mech typeString and house allegiance (assumption; live capture needed).
+ *   • identity4    — empty; unknown purpose.
  */
 export function sendCombatBootstrapSequence(
   session: ClientSession,
@@ -427,8 +409,8 @@ export function sendCombatBootstrapSequence(
       headingBias:        0,      // ASSUMPTION: 0 → MOTION_NEUTRAL after encode
       identity0:          callsign.substring(0, 11),
       identity1:          callsign.substring(0, 31),
-      identity2:          '',     // ASSUMPTION: mech type or empty
-      identity3:          '',     // ASSUMPTION: house or empty
+      identity2:          mechEntry?.typeString ?? '',   // mech variant string (e.g. "SDR-5V")
+      identity3:          session.allegiance   ?? '',   // house allegiance (e.g. "Davion")
       identity4:          '',     // ASSUMPTION: unknown; empty safe
       statusByte:         0,
       initialX:           0,
@@ -457,8 +439,10 @@ export function sendCombatBootstrapSequence(
     nextSeq(session),
   );
 
-  connLog.info('[world] sending Cmd72 combat bootstrap (mech_id=%d callsign="%s")', mechId, callsign);
+  connLog.info('[world] sending Cmd72 combat bootstrap (mech_id=%d callsign="%s" type=%s allegiance=%s)',
+    mechId, callsign, mechEntry?.typeString ?? '?', session.allegiance ?? '?');
   send(socket, cmd72, capture, 'CMD72_COMBAT_BOOTSTRAP');
+  session.combatStartAt = Date.now();
 
   // 3. Cmd64 — add remote bot actor at slot 1.
   const botMechId   = session.combatBotMechId ?? mechId;
@@ -469,7 +453,7 @@ export function sendCombatBootstrapSequence(
       actorTypeByte: 0,
       identity0:     'Opponent',
       identity1:     'Opponent',
-      identity2:     '',
+      identity2:     botMechEntry?.typeString ?? '',  // bot mech variant string
       identity3:     '',
       identity4:     '',
       statusByte:    0,

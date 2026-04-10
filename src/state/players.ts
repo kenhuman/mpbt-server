@@ -169,6 +169,8 @@ export interface ClientSession {
    * used instead of the player's own mech when bootstrapping combat.
    */
   combatBotMechId?: number;
+  /** Wall-clock timestamp (Date.now()) when the current combat bootstrap was sent. */
+  combatStartAt?: number;
   /** Per-mech run/max speedMag cap (round(mec_speed * 1.5) * 300), set at combat bootstrap. */
   combatMaxSpeedMag?: number;
   /** Per-mech walk speedMag (mec_speed * 300), set at combat bootstrap. */
