@@ -907,7 +907,7 @@ export function handleMechPickerCmd7(
     const chassisList: string[] = [];
     for (const mech of WORLD_MECHS) {
       const stat = MECH_STATS.get(mech.typeString);
-      if (classKey && stat && !stat.disabled && stat.weightClass.toUpperCase() !== classKey) continue;
+      if (classKey && stat?.weightClass.toUpperCase() !== classKey) continue;
       const chassis = getMechChassis(mech.typeString);
       if (!seenChassis.has(chassis)) {
         seenChassis.add(chassis);
