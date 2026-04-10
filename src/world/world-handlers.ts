@@ -83,6 +83,10 @@ const BOT_INITIAL_HEALTH = 100;
 const BOT_DAMAGE_PER_HIT = 20;
 /** Prototype jump-jet altitude echoed through Cmd65 after cmd12/action 4. */
 const JUMP_JET_ALTITUDE = 1200;
+/** Altitude step per jump-jet tick for the prototype ascent/descent arc. */
+const JUMP_JET_STEP = 240;
+/** Tick interval (ms) for prototype jump-jet altitude updates. */
+const JUMP_JET_TICK_MS = 120;
 /** Max age for correlating cmd12/action0 to the following cmd10 shot frame. */
 const FIRE_ACTION_WINDOW_MS = 1_000;
 /** Interval (ms) at which the scripted bot fires back at the player. */
@@ -337,6 +341,10 @@ export function sendCombatBootstrapSequence(
   // Store per-mech speedMag caps so Cmd8/9 handlers can apply them.
   session.combatMaxSpeedMag  = mechEntry?.maxSpeedMag  ?? 0;
   session.combatWalkSpeedMag = mechEntry?.walkSpeedMag ?? 0;
+  if (session.combatJumpTimer !== undefined) {
+    clearInterval(session.combatJumpTimer);
+    session.combatJumpTimer = undefined;
+  }
   session.combatJumpAltitude = 0;
   session.botHealth    = BOT_INITIAL_HEALTH;
   session.playerHealth = BOT_INITIAL_HEALTH; // simplified IS counter (stops Cmd67 when ≤ 0)
@@ -982,8 +990,80 @@ export function handleCombatActionFrame(
     return;
   }
 
-  if (action.action === 4 || action.action === 6) {
-    session.combatJumpAltitude = action.action === 4 ? JUMP_JET_ALTITUDE : 0;
+  if (action.action === 4) {
+    if (session.combatJumpTimer !== undefined) {
+      clearInterval(session.combatJumpTimer);
+      session.combatJumpTimer = undefined;
+    }
+
+    let jumpDirection = 1;
+    session.combatJumpAltitude = Math.max(0, session.combatJumpAltitude ?? 0);
+
+    const sendJumpUpdate = (tag: string): void => {
+      const x = session.combatX ?? 0;
+      const y = session.combatY ?? 0;
+      const headingRaw = session.combatHeadingRaw ?? MOTION_NEUTRAL;
+      const throttle = session.combatThrottle ?? 0;
+      const legVel = session.combatLegVel ?? 0;
+      const speedMag = session.combatSpeedMag ?? 0;
+      send(
+        session.socket,
+        buildCmd65PositionSyncPacket(
+          {
+            slot:     0,
+            x,
+            y,
+            z:        session.combatJumpAltitude ?? 0,
+            facing:   (headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
+            throttle,
+            legVel,
+            speedMag,
+          },
+          nextSeq(session),
+        ),
+        capture,
+        tag,
+      );
+    };
+
+    // Emit the first ascent step immediately so jump feedback is visible without delay.
+    session.combatJumpAltitude = Math.min(JUMP_JET_ALTITUDE, (session.combatJumpAltitude ?? 0) + JUMP_JET_STEP);
+    connLog.info('[world/combat] cmd-12 jump action=4 altitude=%d (ascent start)', session.combatJumpAltitude);
+    sendJumpUpdate('CMD65_JUMP_ASCENT');
+
+    session.combatJumpTimer = setInterval(() => {
+      if (session.socket.destroyed || !session.socket.writable) return;
+
+      const currentAltitude = session.combatJumpAltitude ?? 0;
+      if (jumpDirection > 0) {
+        const nextAltitude = Math.min(JUMP_JET_ALTITUDE, currentAltitude + JUMP_JET_STEP);
+        session.combatJumpAltitude = nextAltitude;
+        sendJumpUpdate('CMD65_JUMP_ASCENT');
+        if (nextAltitude >= JUMP_JET_ALTITUDE) {
+          jumpDirection = -1;
+        }
+        return;
+      }
+
+      const nextAltitude = Math.max(0, currentAltitude - JUMP_JET_STEP);
+      session.combatJumpAltitude = nextAltitude;
+      sendJumpUpdate('CMD65_JUMP_DESCENT');
+      if (nextAltitude <= 0) {
+        clearInterval(session.combatJumpTimer);
+        session.combatJumpTimer = undefined;
+        connLog.info('[world/combat] jump arc complete');
+      }
+    }, JUMP_JET_TICK_MS);
+    session.combatJumpTimer.unref();
+    return;
+  }
+
+  if (action.action === 6) {
+    if (session.combatJumpTimer !== undefined) {
+      clearInterval(session.combatJumpTimer);
+      session.combatJumpTimer = undefined;
+    }
+    session.combatJumpAltitude = 0;
 
     const x = session.combatX ?? 0;
     const y = session.combatY ?? 0;
@@ -992,12 +1072,7 @@ export function handleCombatActionFrame(
     const legVel = session.combatLegVel ?? 0;
     const speedMag = session.combatSpeedMag ?? 0;
 
-    connLog.info(
-      '[world/combat] cmd-12 jump action=%d altitude=%d',
-      action.action,
-      session.combatJumpAltitude,
-    );
-
+    connLog.info('[world/combat] cmd-12 jump action=6 altitude=0 (forced land)');
     send(
       session.socket,
       buildCmd65PositionSyncPacket(
@@ -1005,7 +1080,7 @@ export function handleCombatActionFrame(
           slot:     0,
           x,
           y,
-          z:        session.combatJumpAltitude,
+          z:        0,
           facing:   (headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
           throttle,
           legVel,
@@ -1014,7 +1089,7 @@ export function handleCombatActionFrame(
         nextSeq(session),
       ),
       capture,
-      action.action === 4 ? 'CMD65_JUMP_ASCENT' : 'CMD65_JUMP_LAND',
+      'CMD65_JUMP_LAND',
     );
     return;
   }

@@ -60,6 +60,8 @@ export interface ClientSession {
   botPositionTimer?: ReturnType<typeof setInterval>;
   /** Repeating setInterval that sends Cmd67 retaliatory damage to the player during combat. */
   botFireTimer?: ReturnType<typeof setInterval>;
+  /** Repeating setInterval that drives prototype jump-jet ascent/descent updates. */
+  combatJumpTimer?: ReturnType<typeof setInterval>;
   /** Scripted bot hit points for the current single-client combat prototype. */
   botHealth?: number;
   /**
