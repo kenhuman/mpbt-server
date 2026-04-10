@@ -275,8 +275,14 @@ export interface MechEntry {
    */
   extraCritCount: number;
   /**
+   * Walk speed magnitude derived from mec_speed at offset 0x16:
+   *   walkSpeedMag = mec_speed * 300
+   * CONFIRMED by RE of Combat_InitActorRuntimeFromMec_v123 @ 0x00433910.
+   */
+  walkSpeedMag: number;
+  /**
    * Maximum forward speed magnitude derived from mec_speed at offset 0x16:
-   *   maxSpeedMag = mec_speed * 450
+   *   maxSpeedMag = round(mec_speed * 1.5) * 300
    * CONFIRMED by RE of Combat_InitActorRuntimeFromMec_v123 @ 0x00433910.
    */
   maxSpeedMag: number;

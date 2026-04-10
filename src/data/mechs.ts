@@ -80,7 +80,9 @@ function decryptMec(buf: Buffer, nameLower: string): void {
  * Decrypt a .MEC file and return combat bootstrap/runtime fields in one pass.
  *
  * mec_speed is confirmed by RE of Combat_InitActorRuntimeFromMec_v123 @
- * 0x00433910: max forward speed register = mec_speed * 450.
+ * 0x00433910:
+ *   walk speed register     = mec_speed * 300
+ *   run/max forward speed   = round(mec_speed * 1.5) * 300
  * extraCritCount is confirmed by RE of Combat_ReadLocalActorMechState_v123 @
  * 0x004456c0.
  *
@@ -99,6 +101,16 @@ function readMecFields(mecPath: string, nameLower: string): { mecSpeed: number; 
     tonnage:        buf.readUInt16LE(0x18),
     extraCritCount: buf.readInt16LE(0x3c),
   };
+}
+
+function walkSpeedMagFromMecSpeed(mecSpeed: number): number {
+  return mecSpeed * 300;
+}
+
+function maxSpeedMagFromMecSpeed(mecSpeed: number): number {
+  const runMpTimes10 = mecSpeed * 15;
+  const runMp = Math.floor(runMpTimes10 / 10) + (runMpTimes10 % 10 < 5 ? 0 : 1);
+  return runMp * 300;
 }
 
 // ── Internal Structure lookup table ──────────────────────────────────────────
@@ -231,7 +243,8 @@ export function loadMechs(): MechEntry[] {
         typeString,
         variant: '', // empty → client uses its own display logic
         name:    '', // empty → client calls MechWin_LookupMechName(id)
-        maxSpeedMag: mecSpeed * 450,
+        walkSpeedMag: walkSpeedMagFromMecSpeed(mecSpeed),
+        maxSpeedMag:  maxSpeedMagFromMecSpeed(mecSpeed),
         extraCritCount,
         tonnage,
       };

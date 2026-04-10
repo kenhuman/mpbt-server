@@ -22,7 +22,6 @@ import { buildMenuDialogPacket, buildMechListPacket } from '../protocol/game.js'
 import { PlayerRegistry, ClientSession } from '../state/players.js';
 import { Logger }         from '../util/logger.js';
 import { CaptureLogger }  from '../util/capture.js';
-import { MECH_STATS }     from '../data/mech-stats.js';
 
 import {
   worldCaptures,
@@ -39,10 +38,12 @@ import {
   getSolarisRoomIcon,
   WORLD_MECHS,
   getMechChassis,
+  getMechChassisListForClass,
   CLASS_LABELS,
   CLASS_KEYS,
   MECH_CLASS_LIST_ID,
   MECH_CHASSIS_LIST_ID,
+  MECH_CHASSIS_PAGE_SIZE,
   mechKph,
 } from './world-data.js';
 
@@ -431,7 +432,10 @@ export function sendMechClassPicker(
   connLog: Logger,
   capture: CaptureLogger,
 ): void {
-  session.mechPickerStep = 'class';
+  session.mechPickerStep        = 'class';
+  session.mechPickerClass       = undefined;
+  session.mechPickerChassis     = undefined;
+  session.mechPickerChassisPage = undefined;
   const entries = CLASS_LABELS.map((label, slot) => ({
     id:         0,
     mechType:   0,
@@ -439,6 +443,7 @@ export function sendMechClassPicker(
     typeString: '',
     variant:    '',
     name:       label,
+    walkSpeedMag: 0,
     maxSpeedMag: 0,
     extraCritCount: 0,
     tonnage:    0,
@@ -453,43 +458,54 @@ export function sendMechClassPicker(
   send(session.socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
 }
 
-/** Step 2 — send the chassis picker for the chosen weight class. */
+/** Step 2 — send the chassis picker for the chosen weight class (with pagination). */
 export function sendMechChassisPicker(
   session: ClientSession,
   classIndex: number,
   connLog: Logger,
   capture: CaptureLogger,
+  page = 0,
 ): void {
-  session.mechPickerStep   = 'chassis';
-  session.mechPickerClass  = classIndex;
+  session.mechPickerStep        = 'chassis';
+  session.mechPickerClass       = classIndex;
+  session.mechPickerChassisPage = page;
 
-  const classKey = CLASS_KEYS[classIndex] as string | undefined;
-  const seenChassis = new Set<string>();
-  const rawEntries: Array<{ chassis: string }> = [];
-  for (const mech of WORLD_MECHS) {
-    const stat = MECH_STATS.get(mech.typeString);
-    if (classKey && stat && !stat.disabled && stat.weightClass.toUpperCase() !== classKey) continue;
-    const chassis = getMechChassis(mech.typeString);
-    if (!seenChassis.has(chassis)) {
-      seenChassis.add(chassis);
-      rawEntries.push({ chassis });
-    }
-  }
-  rawEntries.sort((a, b) => a.chassis.localeCompare(b.chassis));
+  const classKey    = CLASS_KEYS[classIndex] as string | undefined;
+  const chassisList = getMechChassisListForClass(classIndex);
+  const start       = page * MECH_CHASSIS_PAGE_SIZE;
+  const visible     = chassisList.slice(start, start + MECH_CHASSIS_PAGE_SIZE);
+  const hasMore     = start + MECH_CHASSIS_PAGE_SIZE < chassisList.length;
 
-  const entries = rawEntries.map(({ chassis }, slot) => ({
+  const entries = visible.map((chassis, slot) => ({
     id:         0,
     mechType:   0,
     slot,
     typeString: '',
     variant:    '',
     name:       chassis,
+    walkSpeedMag: 0,
     maxSpeedMag: 0,
     extraCritCount: 0,
     tonnage:    0,
   }));
 
-  connLog.info('[world] sending mech chassis picker: class=%s entries=%d', classKey ?? classIndex, entries.length);
+  if (hasMore) {
+    entries.push({
+      id:         0,
+      mechType:   0,
+      slot:       visible.length,
+      typeString: '',
+      variant:    '',
+      name:       'More...',
+      walkSpeedMag: 0,
+      maxSpeedMag: 0,
+      extraCritCount: 0,
+      tonnage:    0,
+    });
+  }
+
+  connLog.info('[world] sending mech chassis picker: class=%s page=%d entries=%d total=%d',
+    classKey ?? classIndex, page, entries.length, chassisList.length);
   send(
     session.socket,
     buildMechListPacket(entries, MECH_CHASSIS_LIST_ID, '', nextSeq(session)),
@@ -515,8 +531,9 @@ export function sendMechVariantPicker(
     mechType:   mech.mechType,
     slot:       mech.slot,
     typeString: mech.typeString,
-    variant:    `${mechKph(mech.maxSpeedMag)} kph`,
+    variant:    `${mechKph(mech.walkSpeedMag)}/${mechKph(mech.maxSpeedMag)} kph`,
     name:       mech.typeString,
+    walkSpeedMag: mech.walkSpeedMag,
     maxSpeedMag: mech.maxSpeedMag,
     extraCritCount: mech.extraCritCount,
     tonnage:    mech.tonnage,

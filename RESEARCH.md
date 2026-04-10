@@ -3434,3 +3434,90 @@ Live packet capture is needed to confirm the exact IS component threshold and de
 | `Combat_ISBarRender` | `0x00449330` | Renders IS component bars on results screen |
 | `Combat_ActiveRound` | `0x004466c0` | Per-tick render: radar blips, range text, heading lines |
 | `Combat_Init` | `0x00446060` | Combat init: sets `g_combatMode = 3`, `g_roundState = 1` |
+
+---
+
+## 24. In-Arena Movement Physics — Walk/Run Speed and Physics Equilibrium
+
+### §24.1 — Walk vs Run Speed Split
+
+The mech `mec_speed` value (uint16 at .MEC offset 0x16) maps to two separate
+in-arena speed registers in `Combat_InitActorRuntimeFromMec_v123` (0x00433910):
+
+| Register | Formula | Notes |
+|----------|---------|-------|
+| Walk speed | `mec_speed × 300` | Confirmed by RE of `0x00433910` |
+| Run/max speed | `round(mec_speed × 1.5) × 300` | Confirmed by RE of `0x00433910` |
+
+Example — ANH-1A (`mec_speed = 2`):
+- Walk: `2 × 300 = 600` → **21.6 kph**
+- Run:  `round(3) × 300 = 900` → **32.4 kph**
+
+Example — AS7-D Atlas (`mec_speed = 3`):
+- Walk: `3 × 300 = 900` → **32.4 kph**
+- Run:  `round(4.5) × 300 = 1500` → **54 kph**
+
+> **NOTE:** The prior server-side formula `mec_speed × 450` was incorrect for
+> odd `mec_speed` values (e.g., Atlas: 1350 vs correct 1500).
+
+### §24.2 — Throttle Accumulator Scale (Cmd9 THROTTLE_RUN_SCALE)
+
+The client's KP8 (throttle up) key sends Cmd9 frames with a `sVar2` throttle
+accumulator that peaks at approximately **20** at full-forward input.  The
+server must divide `throttleRaw - MOTION_NEUTRAL` by 20 (`THROTTLE_RUN_SCALE`)
+to map full-throttle input to `maxSpeedMag`.
+
+Using a divisor of 45 (the prior value) capped forward movement at approximately
+walk speed (~21 kph for ANH-1A) because `20 × maxSpeedMag / 45 ≈ walkSpeedMag`.
+
+### §24.3 — Physics Equilibrium and the `globalA` Constant (DAT_004f56b4)
+
+**RE source:** Static analysis of `MPBTWIN.EXE` v1.23.
+
+The Cmd72 bootstrap packet includes a constant `globalA` (wire field name) which
+the client stores in `DAT_004f56b4`.  Ghidra analysis identified two functions
+that use this constant at every physics tick:
+
+**`FUN_0042c830` — velocity integrator (impulse source):**
+```
+  applied_accel = speed_target × 980 / D
+  governor_factor = (100 - throttle_pct / 5) / 100   → 0.80 at 100% throttle
+  net_impulse  = applied_accel × governor_factor
+```
+
+**`FUN_0042cd20` — ground drag (always active, proportional to speed):**
+```
+  decel = |v| × D / 10000
+```
+
+**Equilibrium condition** (net_impulse = decel):
+```
+  0.80 × speed_target × 980 / D = |v_eq| × D / 10000
+  ↓ (at equilibrium |v_eq| = speed_target)
+  0.80 × 980 / D = D / 10000
+  D² = 0.80 × 980 × 10000 = 7,840,000
+  D  = 2800
+```
+
+**Confirmation table:**
+
+| D value | Forward eq speed | Observed limit |
+|---------|-----------------|----------------|
+| 3612 (prior) | `900 × 0.80 × 980 / 3612 × 10000 / 3612 ≈ 552` | ~21 kph ✓ |
+| 2800 (fixed) | `900 × 0.80 × 980 / 2800 × 10000 / 2800 = 900` | ~32 kph ✓ |
+
+The value `D = 3612 = 0x0E1C = MOTION_NEUTRAL` was a copy/paste mistake — the
+field was initialised from the motion-bias constant rather than the physics
+parameter.  Setting `globalA = 2800` in the Cmd72 payload makes equilibrium
+speed exactly equal `speed_target` for any throttle setting.
+
+**Function cross-reference:**
+
+| Function | Address | Role |
+|----------|---------|------|
+| `Combat_InitActorRuntimeFromMec_v123` | `0x00433910` | Reads .MEC fields; sets walk/run speed registers |
+| `FUN_0042c830` | `0x0042c830` | Velocity integrator; uses `DAT_004f56b4` (globalA) |
+| `FUN_0042cd20` | `0x0042cd20` | Ground drag; uses `DAT_004f56b4` (globalA) |
+| `FUN_004229a0` | `0x004229a0` | Client-local throttle target update (KP8/KP2 path) |
+
+
