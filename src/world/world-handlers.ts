@@ -9,16 +9,29 @@
 import {
   buildCmd3BroadcastPacket,
   buildCmd4SceneInitPacket,
+  buildCmd5CursorNormalPacket,
   buildCmd11PlayerEventPacket,
   buildCmd13PlayerArrivalPacket,
 } from '../protocol/world.js';
-import { buildCmd36MessageViewPacket } from '../protocol/game.js';
+import {
+  buildCmd36MessageViewPacket,
+  parseClientCmd10WeaponFire,
+  parseClientCmd12Action,
+  parseClientCmd8Coasting,
+  parseClientCmd9Moving,
+} from '../protocol/game.js';
 import { buildCombatWelcomePacket }    from '../protocol/auth.js';
 import {
   buildCmd62CombatStartPacket,
   buildCmd64RemoteActorPacket,
   buildCmd72LocalBootstrapPacket,
   buildCmd65PositionSyncPacket,
+  buildCmd66ActorDamagePacket,
+  buildCmd68ProjectileSpawnPacket,
+  buildCmd70ActorTransitionPacket,
+  buildCmd71ResetEffectStatePacket,
+  COORD_BIAS,
+  MOTION_DIV,
   MOTION_NEUTRAL,
 } from '../protocol/combat.js';
 import { PlayerRegistry, ClientSession } from '../state/players.js';
@@ -29,6 +42,7 @@ import { CaptureLogger } from '../util/capture.js';
 import {
   FALLBACK_MECH_ID,
   WORLD_MECH_BY_ID,
+  WORLD_MECHS,
   DEFAULT_MAP_ROOM_ID,
   DEFAULT_SCENE_NAME,
   SOLARIS_ROOM_BY_ID,
@@ -36,6 +50,10 @@ import {
   getSolarisRoomExits,
   getSolarisRoomName,
   setSessionRoomPosition,
+  CLASS_KEYS,
+  getMechChassis,
+  MECH_CLASS_LIST_ID,
+  MECH_CHASSIS_LIST_ID,
 } from './world-data.js';
 import {
   send,
@@ -50,7 +68,15 @@ import {
   sendSceneRefresh,
   sendAllRosterList,
   sendSolarisTravelMap,
+  sendMechClassPicker,
+  sendMechChassisPicker,
+  sendMechVariantPicker,
 } from './world-scene.js';
+
+/** Server-side HP counter for the scripted single-client bot opponent. */
+const BOT_INITIAL_HEALTH = 100;
+/** Prototype damage applied to the scripted bot for each cmd10 fire frame. */
+const BOT_DAMAGE_PER_HIT = 20;
 
 // ── ComStar messaging ─────────────────────────────────────────────────────────
 
@@ -291,6 +317,10 @@ export function sendCombatBootstrapSequence(
   const extraCritCount  = mechEntry?.extraCritCount ?? 0;
   const critBytes       = Math.max(0, extraCritCount + 21);
 
+  // Store per-mech speedMag cap so Cmd8/9 handlers can apply it.
+  session.combatMaxSpeedMag = mechEntry?.maxSpeedMag ?? 0;
+  session.botHealth = BOT_INITIAL_HEALTH;
+
   // 1. MMC SYNC — plain ARIES packet; no game-frame CRC.
   send(socket, buildCombatWelcomePacket(), capture, 'COMBAT_WELCOME_MMC');
 
@@ -420,6 +450,11 @@ export function handleWorldTextCommand(
 
   if (clean.toLowerCase() === '/map' || clean.toLowerCase() === '/travel') {
     sendSolarisTravelMap(session, connLog, capture);
+    return;
+  }
+
+  if (clean.toLowerCase() === '/mechbay' || clean.toLowerCase() === '/mechs') {
+    sendMechClassPicker(session, connLog, capture);
     return;
   }
 
@@ -660,4 +695,237 @@ export function notifyRoomDeparture(
     );
   }
   connLog.info('[world] notified room of departure: rosterId=%d callsign="%s"', session.worldRosterId, callsign);
+}
+
+// ── Combat movement / action frames ───────────────────────────────────────────
+
+export function handleCombatMovementFrame(
+  session: ClientSession,
+  payload: Buffer,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const cmd = payload[2] - 0x21;
+
+  if (cmd === 8) {
+    const frame = parseClientCmd8Coasting(payload);
+    if (!frame) return;
+    session.combatX          = frame.xRaw - COORD_BIAS;
+    session.combatY          = frame.yRaw - COORD_BIAS;
+    session.combatHeadingRaw = frame.headingRaw;
+    connLog.debug('[world/combat] cmd8 coasting: x=%d y=%d heading=%d', session.combatX, session.combatY, frame.headingRaw);
+    return;
+  }
+
+  if (cmd === 9) {
+    const frame = parseClientCmd9Moving(payload);
+    if (!frame) return;
+    session.combatX          = frame.xRaw - COORD_BIAS;
+    session.combatY          = frame.yRaw - COORD_BIAS;
+    session.combatHeadingRaw = frame.headingRaw;
+
+    const maxSpeedMag = session.combatMaxSpeedMag ?? 0;
+    const throttlePct = frame.throttleRaw - MOTION_NEUTRAL; // negative = forward
+    const signedSpeedMag = maxSpeedMag > 0
+      ? Math.round(-throttlePct * maxSpeedMag / 45)
+      : 0;
+    session.combatSpeedMag = signedSpeedMag;
+
+    connLog.debug(
+      '[world/combat] cmd9 moving: throttlePct=%d maxSpeedMag=%d signedSpeedMag=%d',
+      throttlePct, maxSpeedMag, signedSpeedMag,
+    );
+
+    send(
+      session.socket,
+      buildCmd65PositionSyncPacket(
+        {
+          slot:     0,
+          x:        session.combatX,
+          y:        session.combatY,
+          z:        0,
+          facing:   (frame.headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
+          throttle: 0,
+          legVel:   0,
+          speedMag: signedSpeedMag,
+        },
+        nextSeq(session),
+      ),
+      capture,
+      'CMD65_MOVEMENT',
+    );
+  }
+}
+
+export function handleCombatWeaponFireFrame(
+  session: ClientSession,
+  payload: Buffer,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const shot = parseClientCmd10WeaponFire(payload);
+  if (!shot) {
+    connLog.warn('[world/combat] cmd-10 weapon fire parse failed (len=%d)', payload.length);
+    return;
+  }
+
+  if (session.botHealth === undefined) {
+    session.botHealth = BOT_INITIAL_HEALTH;
+  }
+  if (session.botHealth <= 0) {
+    connLog.debug('[world/combat] cmd-10 shot ignored — bot already destroyed');
+    return;
+  }
+
+  session.botHealth = Math.max(0, session.botHealth - BOT_DAMAGE_PER_HIT);
+  connLog.info(
+    '[world/combat] cmd-10 weapon fire: targetRaw=%d weaponSlot=%d flag=%d botHealth=%d',
+    shot.targetRaw,
+    shot.weaponSlot,
+    shot.flag,
+    session.botHealth,
+  );
+
+  send(session.socket, buildCmd71ResetEffectStatePacket(nextSeq(session)), capture, 'CMD71_RESET');
+  send(
+    session.socket,
+    buildCmd68ProjectileSpawnPacket(
+      {
+        sourceSlot:   0,
+        weaponSlot:   shot.weaponSlot,
+        targetRaw:    2, // bot actor slot 1 encoded as slot + 1
+        targetAttach: 0,
+        angleSeedA:   shot.angleSeedA,
+        angleSeedB:   shot.angleSeedB,
+        impactX:      shot.impactXRaw - COORD_BIAS,
+        impactY:      shot.impactYRaw - COORD_BIAS,
+        impactZ:      shot.impactZ,
+      },
+      nextSeq(session),
+    ),
+    capture,
+    'CMD68_PROJECTILE',
+  );
+  send(
+    session.socket,
+    buildCmd66ActorDamagePacket(1, 1, BOT_DAMAGE_PER_HIT, nextSeq(session)),
+    capture,
+    'CMD66_BOT_DAMAGE',
+  );
+  send(session.socket, buildCmd71ResetEffectStatePacket(nextSeq(session)), capture, 'CMD71_CLOSE');
+
+  if (session.botHealth <= 0) {
+    connLog.info('[world/combat] bot destroyed — sending Cmd70 death animation');
+    send(
+      session.socket,
+      buildCmd70ActorTransitionPacket(1, 4, nextSeq(session)),
+      capture,
+      'CMD70_BOT_DEATH',
+    );
+    if (session.botPositionTimer !== undefined) {
+      clearInterval(session.botPositionTimer);
+      session.botPositionTimer = undefined;
+    }
+  }
+}
+
+export function handleCombatActionFrame(
+  session: ClientSession,
+  payload: Buffer,
+  connLog: Logger,
+  _capture: CaptureLogger,
+): void {
+  const action = parseClientCmd12Action(payload);
+  if (!action) {
+    connLog.warn('[world/combat] cmd-12 action parse failed (len=%d)', payload.length);
+    return;
+  }
+  connLog.debug('[world/combat] cmd-12 combat action=%d — no response', action.action);
+}
+
+// ── 3-step mech picker — Cmd7 routing ─────────────────────────────────────────
+
+export function handleMechPickerCmd7(
+  players: PlayerRegistry,
+  session: ClientSession,
+  listId: number,
+  selection: number,
+  connLog: Logger,
+  capture: CaptureLogger,
+): boolean {
+  const step = session.mechPickerStep;
+
+  if (step === 'class' && listId === MECH_CLASS_LIST_ID) {
+    if (selection === 0) {
+      session.mechPickerStep = undefined;
+      return true;
+    }
+    const classIndex = selection - 1;
+    if (classIndex < 0 || classIndex >= CLASS_KEYS.length) return true;
+    sendMechChassisPicker(session, classIndex, connLog, capture);
+    return true;
+  }
+
+  if (step === 'chassis' && listId === MECH_CHASSIS_LIST_ID) {
+    if (selection === 0) {
+      sendMechClassPicker(session, connLog, capture);
+      return true;
+    }
+    const seenChassis = new Set<string>();
+    const chassisList: string[] = [];
+    for (const mech of WORLD_MECHS) {
+      const chassis = getMechChassis(mech.typeString);
+      if (!seenChassis.has(chassis)) {
+        seenChassis.add(chassis);
+        chassisList.push(chassis);
+      }
+    }
+    chassisList.sort((a, b) => a.localeCompare(b));
+    const chassis = chassisList[selection - 1];
+    if (!chassis) {
+      sendMechClassPicker(session, connLog, capture);
+      return true;
+    }
+    sendMechVariantPicker(session, chassis, connLog, capture);
+    return true;
+  }
+
+  if (step === 'variant' && listId === MECH_CLASS_LIST_ID) {
+    if (selection === 0) {
+      sendMechChassisPicker(session, session.mechPickerClass ?? 0, connLog, capture);
+      return true;
+    }
+    const chassis = session.mechPickerChassis ?? '';
+    const variants = WORLD_MECHS.filter(mech => getMechChassis(mech.typeString) === chassis);
+    const chosen = variants[selection - 1];
+    if (!chosen) {
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket('Mech selection invalid. Please try again.', nextSeq(session)),
+        capture,
+        'CMD3_MECH_SELECT_ERR',
+      );
+      sendMechClassPicker(session, connLog, capture);
+      return true;
+    }
+
+    session.selectedMechSlot  = chosen.slot;
+    session.selectedMechId    = chosen.id;
+    session.mechPickerStep    = undefined;
+    session.mechPickerClass   = undefined;
+    session.mechPickerChassis = undefined;
+
+    connLog.info('[world] mech selected: callsign="%s" slot=%d id=%d typeString=%s',
+      getDisplayName(session), chosen.slot, chosen.id, chosen.typeString);
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket(`Mech selected: ${chosen.typeString}`, nextSeq(session)),
+      capture,
+      'CMD3_MECH_SELECTED',
+    );
+    send(session.socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
+    return true;
+  }
+
+  return false;
 }

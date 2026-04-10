@@ -58,6 +58,8 @@ export interface ClientSession {
   combatInitialized?: boolean;
   /** Repeating setInterval that sends bot position updates during combat. */
   botPositionTimer?: ReturnType<typeof setInterval>;
+  /** Scripted bot hit points for the current single-client combat prototype. */
+  botHealth?: number;
   /**
    * Stable per-connection roster identifier used by world presence packets
    * (Cmd10/Cmd11/Cmd12/Cmd13). This is distinct from accountId and only needs to be
@@ -115,6 +117,28 @@ export interface ClientSession {
    * player confirms their selection (cmd-7 confirm reply).
    */
   pendingMechSlot?: number;
+
+  // ── Combat positional state (updated by Cmd8/9 movement frames) ──────────
+
+  /** Last decoded world X coordinate from client Cmd8/9. */
+  combatX?: number;
+  /** Last decoded world Y coordinate from client Cmd8/9. */
+  combatY?: number;
+  /** Last raw heading value from client Cmd8/9. */
+  combatHeadingRaw?: number;
+  /** Current speedMag echoed in Cmd65 responses. */
+  combatSpeedMag?: number;
+  /** Per-mech speedMag cap (mec_speed * 450), set at combat bootstrap. */
+  combatMaxSpeedMag?: number;
+
+  // ── 3-step mech picker state ──────────────────────────────────────────────
+
+  /** Which step of the mech-picker dialog the player is on. */
+  mechPickerStep?: 'class' | 'chassis' | 'variant';
+  /** Weight-class index (0=Light, 1=Medium, 2=Heavy, 3=Assault) chosen in step 1. */
+  mechPickerClass?: number;
+  /** Chassis name (e.g. "Jenner") chosen in step 2. */
+  mechPickerChassis?: string;
 
   // ── Persistence fields (set after DB lookup / character creation) ─────────
 

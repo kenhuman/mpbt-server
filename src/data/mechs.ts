@@ -77,21 +77,27 @@ function decryptMec(buf: Buffer, nameLower: string): void {
 }
 
 /**
- * Read and decrypt a .MEC file, returning the signed 16-bit extraCritCount
- * at offset 0x3c.
+ * Decrypt a .MEC file and return combat bootstrap/runtime fields in one pass.
+ *
+ * mec_speed is confirmed by RE of Combat_InitActorRuntimeFromMec_v123 @
+ * 0x00433910: max forward speed register = mec_speed * 450.
+ * extraCritCount is confirmed by RE of Combat_ReadLocalActorMechState_v123 @
+ * 0x004456c0.
  *
  * @param mecPath   Absolute path to the .MEC file.
  * @param nameLower Lowercase mech name WITHOUT extension (e.g. "anh-1a").
- * @returns Signed 16-bit extraCritCount (can be negative).
  */
-function readMecExtraCritCount(mecPath: string, nameLower: string): number {
+function readMecFields(mecPath: string, nameLower: string): { mecSpeed: number; extraCritCount: number } {
   const raw = fs.readFileSync(mecPath);
   if (raw.length < 0x3e) {
-    throw new Error(`${mecPath}: too short for extraCritCount (${raw.length} < 0x3e)`);
+    throw new Error(`${mecPath}: too short for mec fields (${raw.length} < 0x3e)`);
   }
   const buf = Buffer.from(raw); // mutable copy
   decryptMec(buf, nameLower);
-  return buf.readInt16LE(0x3c);
+  return {
+    mecSpeed:       buf.readInt16LE(0x16),
+    extraCritCount: buf.readInt16LE(0x3c),
+  };
 }
 
 // ── MPBT.MSG variant table ────────────────────────────────────────────────────
@@ -166,6 +172,8 @@ export function loadMechs(): MechEntry[] {
           'verify MPBT.MSG matches the mechdata/ installation.',
         );
       }
+      const mecPath = path.join(mechDir, filename);
+      const { mecSpeed, extraCritCount } = readMecFields(mecPath, typeString.toLowerCase());
       return {
         id,
         mechType: 0,
@@ -173,10 +181,8 @@ export function loadMechs(): MechEntry[] {
         typeString,
         variant: '', // empty → client uses its own display logic
         name:    '', // empty → client calls MechWin_LookupMechName(id)
-        extraCritCount: readMecExtraCritCount(
-          path.join(mechDir, filename),
-          typeString.toLowerCase(),
-        ),
+        maxSpeedMag: mecSpeed * 450,
+        extraCritCount,
       };
     });
 

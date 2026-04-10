@@ -18,10 +18,11 @@ import {
   buildCmd43SolarisMapPacket,
   buildCmd48KeyedTripleStringListPacket,
 } from '../protocol/world.js';
-import { buildMenuDialogPacket } from '../protocol/game.js';
+import { buildMenuDialogPacket, buildMechListPacket } from '../protocol/game.js';
 import { PlayerRegistry, ClientSession } from '../state/players.js';
 import { Logger }         from '../util/logger.js';
 import { CaptureLogger }  from '../util/capture.js';
+import { MECH_STATS }     from '../data/mech-stats.js';
 
 import {
   worldCaptures,
@@ -36,6 +37,13 @@ import {
   getSolarisSceneIndex,
   getSolarisRoomName,
   getSolarisRoomIcon,
+  WORLD_MECHS,
+  getMechChassis,
+  CLASS_LABELS,
+  CLASS_KEYS,
+  MECH_CLASS_LIST_ID,
+  MECH_CHASSIS_LIST_ID,
+  mechKph,
 } from './world-data.js';
 
 // ── Low-level send helpers ────────────────────────────────────────────────────
@@ -412,3 +420,109 @@ export function sendPersonnelRecord(
 // Re-export PERSONNEL_LIST_ID so the dispatch handler can reference it without
 // importing from world-data directly (it already imports this module wholesale).
 export { PERSONNEL_LIST_ID };
+
+// ── 3-step mech picker ────────────────────────────────────────────────────────
+
+/** Step 1 — send the weight-class picker (Light / Medium / Heavy / Assault). */
+export function sendMechClassPicker(
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  session.mechPickerStep = 'class';
+  const entries = CLASS_LABELS.map((label, slot) => ({
+    id:         0,
+    mechType:   0,
+    slot,
+    typeString: '',
+    variant:    '',
+    name:       label,
+    maxSpeedMag: 0,
+    extraCritCount: 0,
+  }));
+  connLog.info('[world] sending mech class picker');
+  send(
+    session.socket,
+    buildMechListPacket(entries, MECH_CLASS_LIST_ID, '', nextSeq(session)),
+    capture,
+    'CMD26_MECH_CLASS_PICKER',
+  );
+  send(session.socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
+}
+
+/** Step 2 — send the chassis picker for the chosen weight class. */
+export function sendMechChassisPicker(
+  session: ClientSession,
+  classIndex: number,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  session.mechPickerStep   = 'chassis';
+  session.mechPickerClass  = classIndex;
+
+  const classKey = CLASS_KEYS[classIndex] as string | undefined;
+  const seenChassis = new Set<string>();
+  const rawEntries: Array<{ chassis: string }> = [];
+  for (const mech of WORLD_MECHS) {
+    const stat = MECH_STATS.get(mech.typeString);
+    if (classKey && stat && !stat.disabled && stat.weightClass.toUpperCase() !== classKey) continue;
+    const chassis = getMechChassis(mech.typeString);
+    if (!seenChassis.has(chassis)) {
+      seenChassis.add(chassis);
+      rawEntries.push({ chassis });
+    }
+  }
+  rawEntries.sort((a, b) => a.chassis.localeCompare(b.chassis));
+
+  const entries = rawEntries.map(({ chassis }, slot) => ({
+    id:         0,
+    mechType:   0,
+    slot,
+    typeString: '',
+    variant:    '',
+    name:       chassis,
+    maxSpeedMag: 0,
+    extraCritCount: 0,
+  }));
+
+  connLog.info('[world] sending mech chassis picker: class=%s entries=%d', classKey ?? classIndex, entries.length);
+  send(
+    session.socket,
+    buildMechListPacket(entries, MECH_CHASSIS_LIST_ID, '', nextSeq(session)),
+    capture,
+    'CMD26_MECH_CHASSIS_PICKER',
+  );
+  send(session.socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
+}
+
+/** Step 3 — send the variant picker for the chosen chassis. */
+export function sendMechVariantPicker(
+  session: ClientSession,
+  chassis: string,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  session.mechPickerStep    = 'variant';
+  session.mechPickerChassis = chassis;
+
+  const variants = WORLD_MECHS.filter(mech => getMechChassis(mech.typeString) === chassis);
+  const entries = variants.map(mech => ({
+    id:         mech.id,
+    mechType:   mech.mechType,
+    slot:       mech.slot,
+    typeString: mech.typeString,
+    variant:    `${mechKph(mech.maxSpeedMag)} kph`,
+    name:       mech.typeString,
+    maxSpeedMag: mech.maxSpeedMag,
+    extraCritCount: mech.extraCritCount,
+  }));
+
+  connLog.info('[world] sending mech variant picker: chassis="%s" entries=%d', chassis, entries.length);
+  send(
+    session.socket,
+    buildMechListPacket(entries, MECH_CLASS_LIST_ID, '', nextSeq(session)),
+    capture,
+    'CMD26_MECH_VARIANT_PICKER',
+  );
+  send(session.socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
+}

@@ -274,6 +274,12 @@ export interface MechEntry {
    * CONFIRMED via RE of Combat_ReadLocalActorMechState_v123 @ 0x004456c0.
    */
   extraCritCount: number;
+  /**
+   * Maximum forward speed magnitude derived from mec_speed at offset 0x16:
+   *   maxSpeedMag = mec_speed * 450
+   * CONFIRMED by RE of Combat_InitActorRuntimeFromMec_v123 @ 0x00433910.
+   */
+  maxSpeedMag: number;
 }
 
 /**
@@ -338,6 +344,29 @@ export function decodeArgType1(buf: Buffer, offset: number): [val: number, next:
   const d0 = buf[offset]     - 0x21;
   const d1 = buf[offset + 1] - 0x21;
   return [d0 * 85 + d1, offset + 2];
+}
+
+/**
+ * Decode 3-byte type-2 value from client args buffer at given offset.
+ * Encoding: FUN_00402be0(2, v) → 3 bytes, big-endian base-85.
+ */
+export function decodeArgType2(buf: Buffer, offset: number): [val: number, next: number] {
+  const d0 = buf[offset]     - 0x21;
+  const d1 = buf[offset + 1] - 0x21;
+  const d2 = buf[offset + 2] - 0x21;
+  return [d0 * 85 * 85 + d1 * 85 + d2, offset + 3];
+}
+
+/**
+ * Decode 4-byte type-3 value from client args buffer at given offset.
+ * Encoding: FUN_00402be0(3, v) → 4 bytes, big-endian base-85.
+ */
+export function decodeArgType3(buf: Buffer, offset: number): [val: number, next: number] {
+  const d0 = buf[offset]     - 0x21;
+  const d1 = buf[offset + 1] - 0x21;
+  const d2 = buf[offset + 2] - 0x21;
+  const d3 = buf[offset + 3] - 0x21;
+  return [d0 * 85 ** 3 + d1 * 85 ** 2 + d2 * 85 + d3, offset + 4];
 }
 
 /**
@@ -458,8 +487,118 @@ export function parseClientCmd23LocationAction(
   };
 }
 
+// ── Combat client frames (cmd8 / cmd9 / cmd10 / cmd12) ───────────────────────
+
+/** Raw decoded fields from client cmd8 (coasting: no throttle and no turning). */
+export interface ClientCmd8Coasting {
+  seq: number;
+  xRaw: number;
+  yRaw: number;
+  headingRaw: number;
+  turnMomRaw: number;
+  rotationRaw: number;
+}
+
+/** Raw decoded fields from client cmd9 (moving: throttle or turning active). */
+export interface ClientCmd9Moving extends ClientCmd8Coasting {
+  neutralRaw: number;
+  throttleRaw: number;
+  legVelRaw: number;
+}
+
+/** Raw decoded fields from client cmd10 weapon-fire geometry. */
+export interface ClientCmd10WeaponFire {
+  seq: number;
+  targetRaw: number;
+  weaponSlot: number;
+  flag: number;
+  angleSeedA: number;
+  angleSeedB: number;
+  impactXRaw: number;
+  impactYRaw: number;
+  impactZ: number;
+}
+
+/** Raw decoded fields from client cmd12 combat action. */
+export interface ClientCmd12Action {
+  seq: number;
+  action: number;
+}
+
+/** Parse a client-sent combat cmd8 coasting movement frame. */
+export function parseClientCmd8Coasting(payload: Buffer): ClientCmd8Coasting | null {
+  if (payload.length < 21 || payload[0] !== 0x1B) return null;
+  if (payload[2] - 0x21 !== 8) return null;
+  let off = 3;
+  let xRaw: number, yRaw: number, headingRaw: number, turnMomRaw: number, rotationRaw: number;
+  [xRaw,       off] = decodeArgType3(payload, off);
+  [yRaw,       off] = decodeArgType3(payload, off);
+  [headingRaw, off] = decodeArgType2(payload, off);
+  [turnMomRaw, off] = decodeArgType1(payload, off);
+  [rotationRaw,   ] = decodeArgType1(payload, off);
+  return { seq: payload[1] - 0x21, xRaw, yRaw, headingRaw, turnMomRaw, rotationRaw };
+}
+
+/** Parse a client-sent combat cmd9 moving frame. */
+export function parseClientCmd9Moving(payload: Buffer): ClientCmd9Moving | null {
+  if (payload.length < 27 || payload[0] !== 0x1B) return null;
+  if (payload[2] - 0x21 !== 9) return null;
+  let off = 3;
+  let xRaw: number, yRaw: number, headingRaw: number;
+  let turnMomRaw: number, neutralRaw: number, throttleRaw: number, legVelRaw: number, rotationRaw: number;
+  [xRaw,        off] = decodeArgType3(payload, off);
+  [yRaw,        off] = decodeArgType3(payload, off);
+  [headingRaw,  off] = decodeArgType2(payload, off);
+  [turnMomRaw,  off] = decodeArgType1(payload, off);
+  [neutralRaw,  off] = decodeArgType1(payload, off);
+  [throttleRaw, off] = decodeArgType1(payload, off);
+  [legVelRaw,   off] = decodeArgType1(payload, off);
+  [rotationRaw,    ] = decodeArgType1(payload, off);
+  return {
+    seq: payload[1] - 0x21,
+    xRaw, yRaw, headingRaw,
+    turnMomRaw, neutralRaw, throttleRaw, legVelRaw, rotationRaw,
+  };
+}
+
+/** Parse a client-sent combat cmd10 weapon-fire frame. */
+export function parseClientCmd10WeaponFire(payload: Buffer): ClientCmd10WeaponFire | null {
+  if (payload.length < 24 || payload[0] !== 0x1B) return null;
+  if (payload[2] - 0x21 !== 10) return null;
+  let off = 3;
+  const targetRaw = payload[off] - 0x21; off += 1;
+  const weaponSlot = Math.max(0, payload[off] - 0x22); off += 1;
+  const flag = payload[off] - 0x22; off += 1;
+  let angleSeedA: number, angleSeedB: number, impactXRaw: number, impactYRaw: number, impactZ: number;
+  [angleSeedA, off] = decodeArgType1(payload, off);
+  [angleSeedB, off] = decodeArgType1(payload, off);
+  [impactXRaw, off] = decodeArgType3(payload, off);
+  [impactYRaw, off] = decodeArgType3(payload, off);
+  [impactZ,       ] = decodeArgType2(payload, off);
+  return {
+    seq: payload[1] - 0x21,
+    targetRaw,
+    weaponSlot,
+    flag,
+    angleSeedA,
+    angleSeedB,
+    impactXRaw,
+    impactYRaw,
+    impactZ,
+  };
+}
+
+/** Parse a client-sent combat cmd12 action frame. */
+export function parseClientCmd12Action(payload: Buffer): ClientCmd12Action | null {
+  if (payload.length < 7 || payload[0] !== 0x1B) return null;
+  if (payload[2] - 0x21 !== 12) return null;
+  return {
+    seq: payload[1] - 0x21,
+    action: payload[3] - 0x21,
+  };
+}
+
 /**
- * Parse a client-sent cmd-9 character creation reply.
  *
  * CONFIRMED from MPBTWIN.EXE FUN_0042dbf0 -> FUN_0040d400:
  *   [subcmd byte == 1] [encodeString typed_name] [selected-index byte]
