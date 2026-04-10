@@ -20,6 +20,7 @@ import {
   parseClientCmd8Coasting,
   parseClientCmd9Moving,
 } from '../protocol/game.js';
+import { MECH_STATS } from '../data/mech-stats.js';
 import { buildCombatWelcomePacket }    from '../protocol/auth.js';
 import {
   buildCmd62CombatStartPacket,
@@ -900,9 +901,13 @@ export function handleMechPickerCmd7(
       sendMechClassPicker(session, connLog, capture);
       return true;
     }
+    const classIndex = session.mechPickerClass ?? 0;
+    const classKey = CLASS_KEYS[classIndex] as string | undefined;
     const seenChassis = new Set<string>();
     const chassisList: string[] = [];
     for (const mech of WORLD_MECHS) {
+      const stat = MECH_STATS.get(mech.typeString);
+      if (classKey && stat && !stat.disabled && stat.weightClass.toUpperCase() !== classKey) continue;
       const chassis = getMechChassis(mech.typeString);
       if (!seenChassis.has(chassis)) {
         seenChassis.add(chassis);
