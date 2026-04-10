@@ -225,11 +225,13 @@ export function setSessionRoomPosition(
   session: { worldMapRoomId?: number; worldX?: number; worldY?: number; worldZ?: number },
   roomId: number,
 ): void {
-  // getSolarisRoomInfo falls back to DEFAULT_MAP_ROOM_ID when roomId is unknown.
-  // Use the resolved room's roomId for worldMapRoomId so all three fields
-  // (worldMapRoomId, worldX, worldY) are always mutually consistent.
+  // Always assign the caller's roomId directly so that generated rooms
+  // (IDs ≥ 1000, in world-map.json but not in SOLARIS_ROOM_BY_ID) are
+  // correctly tracked.  getSolarisRoomInfo may fall back to DEFAULT_MAP_ROOM_ID
+  // when roomId is unknown; centreX/Y from the fallback are acceptable
+  // placeholder coords, but worldMapRoomId must be the real room.
   const room = getSolarisRoomInfo(roomId);
-  session.worldMapRoomId = room.roomId;
+  session.worldMapRoomId = roomId;
   session.worldX         = room.centreX;
   session.worldY         = room.centreY;
   session.worldZ         = 0;
