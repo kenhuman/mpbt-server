@@ -228,6 +228,8 @@ export function getSolarisRoomIcon(roomId: number): number {
 export const MECH_CLASS_LIST_ID   = 0x20;
 /** Cmd26 listId for the chassis picker (step 2). */
 export const MECH_CHASSIS_LIST_ID = 0x3e;
+/** Cmd26 can safely carry at most 20 rows; reserve one row for pagination. */
+export const MECH_CHASSIS_PAGE_SIZE = 19;
 
 /** Display labels for each weight class (slot 0..3). */
 export const CLASS_LABELS = ['Light', 'Medium', 'Heavy', 'Assault'] as const;
@@ -278,6 +280,24 @@ export function getMechChassis(typeString: string): string {
   const hyphen = typeString.indexOf('-');
   const prefix = hyphen > 0 ? typeString.slice(0, hyphen) : typeString;
   return PREFIX_TO_CHASSIS.get(prefix) ?? CHASSIS_BY_PREFIX[prefix] ?? prefix;
+}
+
+/** Return sorted chassis names for the chosen weight class index. */
+export function getMechChassisListForClass(classIndex: number): string[] {
+  const classKey = CLASS_KEYS[classIndex] as string | undefined;
+  const seenChassis = new Set<string>();
+  const chassisList: string[] = [];
+  for (const mech of WORLD_MECHS) {
+    const stat = MECH_STATS.get(mech.typeString);
+    if (classKey && stat?.weightClass.toUpperCase() !== classKey) continue;
+    const chassis = getMechChassis(mech.typeString);
+    if (!seenChassis.has(chassis)) {
+      seenChassis.add(chassis);
+      chassisList.push(chassis);
+    }
+  }
+  chassisList.sort((a, b) => a.localeCompare(b));
+  return chassisList;
 }
 
 /** Convert maxSpeedMag back to displayed kph, matching the client's mec_speed scale. */

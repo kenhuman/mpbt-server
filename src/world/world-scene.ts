@@ -22,7 +22,6 @@ import { buildMenuDialogPacket, buildMechListPacket } from '../protocol/game.js'
 import { PlayerRegistry, ClientSession } from '../state/players.js';
 import { Logger }         from '../util/logger.js';
 import { CaptureLogger }  from '../util/capture.js';
-import { MECH_STATS }     from '../data/mech-stats.js';
 
 import {
   worldCaptures,
@@ -39,10 +38,12 @@ import {
   getSolarisRoomIcon,
   WORLD_MECHS,
   getMechChassis,
+  getMechChassisListForClass,
   CLASS_LABELS,
   CLASS_KEYS,
   MECH_CLASS_LIST_ID,
   MECH_CHASSIS_LIST_ID,
+  MECH_CHASSIS_PAGE_SIZE,
   mechKph,
 } from './world-data.js';
 
@@ -432,6 +433,9 @@ export function sendMechClassPicker(
   capture: CaptureLogger,
 ): void {
   session.mechPickerStep = 'class';
+  session.mechPickerClass = undefined;
+  session.mechPickerChassis = undefined;
+  session.mechPickerChassisPage = undefined;
   const entries = CLASS_LABELS.map((label, slot) => ({
     id:         0,
     mechType:   0,
@@ -458,25 +462,20 @@ export function sendMechChassisPicker(
   classIndex: number,
   connLog: Logger,
   capture: CaptureLogger,
+  page = 0,
 ): void {
   session.mechPickerStep   = 'chassis';
   session.mechPickerClass  = classIndex;
+  session.mechPickerChassis = undefined;
+  session.mechPickerChassisPage = page;
 
   const classKey = CLASS_KEYS[classIndex] as string | undefined;
-  const seenChassis = new Set<string>();
-  const rawEntries: Array<{ chassis: string }> = [];
-  for (const mech of WORLD_MECHS) {
-    const stat = MECH_STATS.get(mech.typeString);
-    if (classKey && stat?.weightClass.toUpperCase() !== classKey) continue;
-    const chassis = getMechChassis(mech.typeString);
-    if (!seenChassis.has(chassis)) {
-      seenChassis.add(chassis);
-      rawEntries.push({ chassis });
-    }
-  }
-  rawEntries.sort((a, b) => a.chassis.localeCompare(b.chassis));
+  const chassisList = getMechChassisListForClass(classIndex);
+  const start = page * MECH_CHASSIS_PAGE_SIZE;
+  const visibleChassis = chassisList.slice(start, start + MECH_CHASSIS_PAGE_SIZE);
+  const hasMore = start + MECH_CHASSIS_PAGE_SIZE < chassisList.length;
 
-  const entries = rawEntries.map(({ chassis }, slot) => ({
+  const entries = visibleChassis.map((chassis, slot) => ({
     id:         0,
     mechType:   0,
     slot,
@@ -486,8 +485,21 @@ export function sendMechChassisPicker(
     maxSpeedMag: 0,
     extraCritCount: 0,
   }));
+  if (hasMore) {
+    entries.push({
+      id:         0,
+      mechType:   0,
+      slot:       entries.length,
+      typeString: '',
+      variant:    '',
+      name:       'More...',
+      maxSpeedMag: 0,
+      extraCritCount: 0,
+    });
+  }
 
-  connLog.info('[world] sending mech chassis picker: class=%s entries=%d', classKey ?? classIndex, entries.length);
+  connLog.info('[world] sending mech chassis picker: class=%s page=%d entries=%d total=%d',
+    classKey ?? classIndex, page, entries.length, chassisList.length);
   send(
     session.socket,
     buildMechListPacket(entries, MECH_CHASSIS_LIST_ID, '', nextSeq(session)),

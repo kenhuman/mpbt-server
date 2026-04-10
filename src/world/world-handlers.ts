@@ -20,7 +20,6 @@ import {
   parseClientCmd8Coasting,
   parseClientCmd9Moving,
 } from '../protocol/game.js';
-import { MECH_STATS } from '../data/mech-stats.js';
 import { buildCombatWelcomePacket }    from '../protocol/auth.js';
 import {
   buildCmd62CombatStartPacket,
@@ -53,8 +52,10 @@ import {
   setSessionRoomPosition,
   CLASS_KEYS,
   getMechChassis,
+  getMechChassisListForClass,
   MECH_CLASS_LIST_ID,
   MECH_CHASSIS_LIST_ID,
+  MECH_CHASSIS_PAGE_SIZE,
 } from './world-data.js';
 import {
   send,
@@ -902,20 +903,17 @@ export function handleMechPickerCmd7(
       return true;
     }
     const classIndex = session.mechPickerClass ?? 0;
-    const classKey = CLASS_KEYS[classIndex] as string | undefined;
-    const seenChassis = new Set<string>();
-    const chassisList: string[] = [];
-    for (const mech of WORLD_MECHS) {
-      const stat = MECH_STATS.get(mech.typeString);
-      if (classKey && stat?.weightClass.toUpperCase() !== classKey) continue;
-      const chassis = getMechChassis(mech.typeString);
-      if (!seenChassis.has(chassis)) {
-        seenChassis.add(chassis);
-        chassisList.push(chassis);
-      }
+    const page = session.mechPickerChassisPage ?? 0;
+    const chassisList = getMechChassisListForClass(classIndex);
+    const start = page * MECH_CHASSIS_PAGE_SIZE;
+    const visibleChassis = chassisList.slice(start, start + MECH_CHASSIS_PAGE_SIZE);
+    const hasMore = start + MECH_CHASSIS_PAGE_SIZE < chassisList.length;
+    const selectionIndex = selection - 1;
+    if (hasMore && selectionIndex === visibleChassis.length) {
+      sendMechChassisPicker(session, classIndex, connLog, capture, page + 1);
+      return true;
     }
-    chassisList.sort((a, b) => a.localeCompare(b));
-    const chassis = chassisList[selection - 1];
+    const chassis = visibleChassis[selectionIndex];
     if (!chassis) {
       sendMechClassPicker(session, connLog, capture);
       return true;
@@ -926,7 +924,13 @@ export function handleMechPickerCmd7(
 
   if (step === 'variant' && listId === MECH_CLASS_LIST_ID) {
     if (selection === 0) {
-      sendMechChassisPicker(session, session.mechPickerClass ?? 0, connLog, capture);
+      sendMechChassisPicker(
+        session,
+        session.mechPickerClass ?? 0,
+        connLog,
+        capture,
+        session.mechPickerChassisPage ?? 0,
+      );
       return true;
     }
     const chassis = session.mechPickerChassis ?? '';
@@ -948,6 +952,7 @@ export function handleMechPickerCmd7(
     session.mechPickerStep    = undefined;
     session.mechPickerClass   = undefined;
     session.mechPickerChassis = undefined;
+    session.mechPickerChassisPage = undefined;
 
     connLog.info('[world] mech selected: callsign="%s" slot=%d id=%d typeString=%s',
       getDisplayName(session), chosen.slot, chosen.id, chosen.typeString);

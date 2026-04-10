@@ -143,6 +143,8 @@ export interface ClientSession {
   mechPickerClass?: number;
   /** Chassis name (e.g. "Jenner") chosen in step 2. */
   mechPickerChassis?: string;
+  /** Page offset for the chassis picker when a weight class has more than 20 rows. */
+  mechPickerChassisPage?: number;
 
   // ── Persistence fields (set after DB lookup / character creation) ─────────
 
