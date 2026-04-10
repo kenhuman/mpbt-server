@@ -304,7 +304,7 @@ export function handleRoomMenuSelection(
  *   • terrainId / terrainResourceId — 1/0 chosen; live capture needed.
  *   • identity2..4 — empty; purpose in client UI unconfirmed.
  *   • headingBias  — 0 (MOTION_NEUTRAL added by encoder); live capture needed.
- *   • globalA/B/C  — 0; purpose unlabelled in Ghidra.
+ *   • globalA/B/C  — globalA=2800 confirmed (D²=7840000 → eq. v = speed_target); B/C = 0.
  */
 export function sendCombatBootstrapSequence(
   session: ClientSession,
@@ -345,7 +345,7 @@ export function sendCombatBootstrapSequence(
       terrainResourceId:  0,      // ASSUMPTION: no additional resource
       terrainPoints:      [],
       arenaPoints:        [],
-      globalA:            3612,   // avoids div-by-zero in Cmd65 handler (RE: checkpoint 019-021)
+      globalA:            2800,   // D=2800 → D²=7840000; equilibrium v = speed_target (RE: FUN_0042c830)
       globalB:            0,
       globalC:            0,
       headingBias:        0,      // ASSUMPTION: 0 → MOTION_NEUTRAL after encode
