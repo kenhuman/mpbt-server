@@ -81,6 +81,8 @@ import {
 const BOT_INITIAL_HEALTH = 100;
 /** Prototype damage applied to the scripted bot for each cmd10 fire frame. */
 const BOT_DAMAGE_PER_HIT = 20;
+/** Prototype jump-jet altitude echoed through Cmd65 after cmd12/action 4. */
+const JUMP_JET_ALTITUDE = 1200;
 /** Interval (ms) at which the scripted bot fires back at the player. */
 const BOT_FIRE_INTERVAL_MS = 3_000;
 /** Prototype damage per bot retaliatory shot (Cmd67 damageCode=1, value=10). */
@@ -333,6 +335,7 @@ export function sendCombatBootstrapSequence(
   // Store per-mech speedMag caps so Cmd8/9 handlers can apply them.
   session.combatMaxSpeedMag  = mechEntry?.maxSpeedMag  ?? 0;
   session.combatWalkSpeedMag = mechEntry?.walkSpeedMag ?? 0;
+  session.combatJumpAltitude = 0;
   session.botHealth    = BOT_INITIAL_HEALTH;
   session.playerHealth = BOT_INITIAL_HEALTH; // simplified IS counter (stops Cmd67 when ≤ 0)
 
@@ -784,7 +787,7 @@ export function handleCombatMovementFrame(
             slot:     0,
             x:        session.combatX,
             y:        session.combatY,
-            z:        0,
+            z:        session.combatJumpAltitude ?? 0,
             facing:   (frame.headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
             throttle: boostThrottle,
             legVel:   0,
@@ -855,7 +858,7 @@ export function handleCombatMovementFrame(
           slot:     0,
           x:        session.combatX,
           y:        session.combatY,
-          z:        0,
+          z:        session.combatJumpAltitude ?? 0,
           facing:   (frame.headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
           throttle: -throttle,
           legVel,
@@ -949,13 +952,51 @@ export function handleCombatActionFrame(
   session: ClientSession,
   payload: Buffer,
   connLog: Logger,
-  _capture: CaptureLogger,
+  capture: CaptureLogger,
 ): void {
   const action = parseClientCmd12Action(payload);
   if (!action) {
     connLog.warn('[world/combat] cmd-12 action parse failed (len=%d)', payload.length);
     return;
   }
+
+  if (action.action === 4 || action.action === 6) {
+    session.combatJumpAltitude = action.action === 4 ? JUMP_JET_ALTITUDE : 0;
+
+    const x = session.combatX ?? 0;
+    const y = session.combatY ?? 0;
+    const headingRaw = session.combatHeadingRaw ?? MOTION_NEUTRAL;
+    const throttle = session.combatThrottle ?? 0;
+    const legVel = session.combatLegVel ?? 0;
+    const speedMag = session.combatSpeedMag ?? 0;
+
+    connLog.info(
+      '[world/combat] cmd-12 jump action=%d altitude=%d',
+      action.action,
+      session.combatJumpAltitude,
+    );
+
+    send(
+      session.socket,
+      buildCmd65PositionSyncPacket(
+        {
+          slot:     0,
+          x,
+          y,
+          z:        session.combatJumpAltitude,
+          facing:   (headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
+          throttle,
+          legVel,
+          speedMag,
+        },
+        nextSeq(session),
+      ),
+      capture,
+      action.action === 4 ? 'CMD65_JUMP_ASCENT' : 'CMD65_JUMP_LAND',
+    );
+    return;
+  }
+
   // Ghidra confirmed: action 0x34 (THROTTLE_UP) calls FUN_004229a0 locally
   // but does NOT call Combat_SendCmd12Action_v123 — so these packets never
   // arrive from the client.  Speed is driven entirely by the Cmd9

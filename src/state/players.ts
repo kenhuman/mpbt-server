@@ -140,6 +140,11 @@ export interface ClientSession {
   combatLegVel?: number;
   /** Current speedMag echoed in Cmd65 responses. */
   combatSpeedMag?: number;
+  /**
+   * Prototype jump-jet altitude echoed in Cmd65 responses.
+   * This is a server-side estimate only; real fuel/arc physics remain unknown.
+   */
+  combatJumpAltitude?: number;
   /** Per-mech run/max speedMag cap (round(mec_speed * 1.5) * 300), set at combat bootstrap. */
   combatMaxSpeedMag?: number;
   /** Per-mech walk speedMag (mec_speed * 300), set at combat bootstrap. */
