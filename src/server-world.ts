@@ -291,8 +291,16 @@ function handleWorldGameData(
       connLog.warn('[world] cmd-4 parse failed');
       return;
     }
-    // "/fight" command: trigger combat bootstrap if not already in combat.
-    if (parsed.text.trim().toLowerCase() === '/fight') {
+    const textCmd = parsed.text.trim().toLowerCase();
+    // "/fight" family: trigger combat bootstrap if not already in combat.
+    if (textCmd === '/fight' || textCmd === '/fightwin' || textCmd === '/fightlose') {
+      if (textCmd === '/fightwin') {
+        session.combatVerificationMode = 'autowin';
+      } else if (textCmd === '/fightlose') {
+        session.combatVerificationMode = 'autolose';
+      } else {
+        session.combatVerificationMode = undefined;
+      }
       if (!session.combatInitialized && session.phase === 'world') {
         sendCombatBootstrapSequence(session, connLog, capture);
       } else {
@@ -652,6 +660,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     // Reset combat per-session counters so a reconnect starts fresh.
     session.botHealth            = undefined;
     session.playerHealth         = undefined;
+    session.combatVerificationMode = undefined;
     session.combatJumpFuel       = undefined;
     session.lastCombatFireActionAt = undefined;
     capture.close();
