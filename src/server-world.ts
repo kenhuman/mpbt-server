@@ -85,6 +85,7 @@ import {
   sendAllRosterList,
   sendSolarisTravelMap,
   currentRoomPresenceEntries,
+  sendMechClassPicker,
 } from './world/world-scene.js';
 import {
   handleComstarTextReply,
@@ -335,6 +336,15 @@ function handleWorldGameData(
         connLog.debug('[world] cmd-5 Fight ignored: combatInitialized=%s phase=%s',
           session.combatInitialized, session.phase);
       }
+      return;
+    }
+    if (parsed.actionType === 6) {
+      // "Mech Bay" button — open the 3-step mech picker.
+      if (session.phase !== 'world') {
+        connLog.warn('[world] cmd-5 mech bay ignored outside world phase: phase=%s', session.phase);
+        return;
+      }
+      sendMechClassPicker(session, connLog, capture);
       return;
     }
     connLog.warn('[world] cmd-5 unsupported scene action type=%d', parsed.actionType);

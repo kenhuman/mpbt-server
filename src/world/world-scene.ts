@@ -247,11 +247,13 @@ export function buildSceneInitForSession(session: ClientSession) {
   // Room-type-aware action buttons.
   // actionType 4 → "Travel" (opens Cmd43 travel map).
   // actionType 5 → "Fight"  (enter combat; handled by cmd-5 dispatch in server-world.ts).
+  // actionType 6 → "Mech Bay" (opens the 3-step mech picker).
   // The client hard-codes actionType 0 (0x100 wire) as the local Help button.
   const isArena = mapRoom?.type === 'arena';
   const arenaOptions: Array<{ type: number; label: string }> = [
     { type: 0, label: 'Help' },
     { type: 4, label: 'Travel' },
+    { type: 6, label: 'Mech Bay' },
   ];
   if (isArena) {
     arenaOptions.push({ type: 5, label: 'Fight' });
