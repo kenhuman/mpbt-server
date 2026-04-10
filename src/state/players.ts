@@ -145,6 +145,8 @@ export interface ClientSession {
    * This is a server-side estimate only; real fuel/arc physics remain unknown.
    */
   combatJumpAltitude?: number;
+  /** Timestamp (ms) of the last cmd12/action 0 fire trigger frame from client. */
+  lastCombatFireActionAt?: number;
   /** Per-mech run/max speedMag cap (round(mec_speed * 1.5) * 300), set at combat bootstrap. */
   combatMaxSpeedMag?: number;
   /** Per-mech walk speedMag (mec_speed * 300), set at combat bootstrap. */
