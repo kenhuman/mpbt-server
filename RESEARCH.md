@@ -30,6 +30,7 @@ contributors who want to extend or audit the server emulator.
 20. [MEC File Binary Format](#20-mec-file-binary-format)
 21. [MAP File Leading Room Table](#21-map-file-leading-room-table)
 22. [Windowed Mode — DirectDraw Rendering Architecture](#22-windowed-mode--directdraw-rendering-architecture)
+23. [Combat Match-End State Machine](#23-combat-match-end-state-machine--confirmed-issue-79)
 
 ---
 
@@ -3308,3 +3309,128 @@ rendering investigation and should be considered canonical names:
 | `Render_SurfFill` | `0x00453c28` | Fills a game pixel buffer with a constant byte value |
 | `Render_TileDraw` | `0x0040b040` | Terrain tile renderer: raw pixel copy to game pixel buffer |
 | `Render_MapDraw` | `0x00430730` | Terrain map: calls `Render_TileDraw` for each tile |
+
+---
+
+## 23. Combat Match-End State Machine — CONFIRMED (Issue #79)
+
+**Confirmed by Ghidra decompilation of `FUN_00447170`, `FUN_0043d2a0`, `FUN_0040de90`, `FUN_00441130`, `FUN_0040b4a0`, `FUN_00448290`, and XREFs to `DAT_004ef174` / `DAT_004f56a8` / `DAT_004f2032` in `MPBTWIN.EXE` v1.23.**
+
+---
+
+### §23.1 — Finding: No Server-to-Client "Match-End" Packet
+
+**The match-end transition is entirely client-driven.** There is no dedicated server→client combat command that signals "match over, show results screen." The client determines match outcome using its local combat simulation.
+
+---
+
+### §23.2 — Key State Variables
+
+| Address | Name | Values |
+|---------|------|--------|
+| `DAT_004f56a8` | `g_roundState` | `1` = active combat, `2` = match ended (results loop) |
+| `DAT_004f5690` | `g_combatMode`  | `3` = normal combat (set in `FUN_00446060` init) |
+| `DAT_004ef174` | `g_inputFlags`  | Bitmask updated by keyboard/joystick input handlers |
+| `DAT_004f4eb0` | `g_matchEndFlag`| Set to `1` when `g_roundState` transitions to `2` |
+| `DAT_004f2032` | `g_actorDeadFlag[0]` | `!= 0` when the focused enemy actor is destroyed |
+| `DAT_0047d05c` | `g_exitState`   | `3` = graceful exit, `4` = awaiting network disconnect |
+| `DAT_004e16dc` | `g_disconnectTimer` | Timestamp: when < `DAT_0047ef50`, fires `FUN_0040b3d0` (TCP close) |
+
+---
+
+### §23.3 — Main Combat Update Loop (`FUN_00447170`)
+
+Each render tick:
+1. Calls `FUN_0042cf60(0)` — per-actor physics step (mech movement, projectile advance).
+2. Calls `FUN_0043d2a0()` — processes input flags from `g_inputFlags`, may set `g_roundState = 2`.
+3. Checks the focused actor (`DAT_004f54d8`):
+   - **WIN path**: `g_actorDeadFlag[focused] != 0 && g_combatMode == 3`  
+     → calls `FUN_00449330` (IS bar renderer) + `FUN_00438170` (results panel for enemy mech).  
+     Sets `g_actorDeadFlag[focused] = 0` and `DAT_0047f118 = now + 50` (re-display timer).
+   - **LOSS path** (via `g_roundState == 2`): calls same functions for local actor (actor 0).
+     Sets `g_matchEndFlag = 1`.
+4. Checks `g_disconnectTimer`: if non-zero and expired, calls `FUN_0040b3d0(DAT_0047ef5c)` to close TCP.
+
+---
+
+### §23.4 — Input-Flag Architecture (`FUN_0040b4a0`)
+
+`FUN_0040b4a0(flagIndex, value)` is a generic bit-setter for `g_inputFlags` (`DAT_004ef174`).
+Callers: `FUN_0043d500` (keyboard translator → calls after key decode), `FUN_0044bca0` (joystick).
+
+Bit assignments (selected):
+
+| Case | Bit | Notes |
+|------|-----|-------|
+| 1 | `0x0001` | — |
+| 5 | `0x0010` | Throttle up |
+| 6 | `0x0020` | Throttle down |
+| 7 | `0x0040` | **Match-exit / result-screen trigger** |
+| 0x34 | `0x10000` | — |
+| 0x35 | `0x20000` | — |
+
+`g_inputFlags & 0x40` (bit 7) is checked in `FUN_0043d2a0`:
+- If `g_roundState == 1`: sets `g_matchEndFlag = 1`, `g_roundState = 2` → enters LOSS-style results screen (showing own mech damage).
+- If `g_roundState == 2`: toggles back to `g_roundState = 1`.
+
+This bit is set by the **key bound to action index 7** — likely the combat-exit key (Escape or F-key). It is **not** a network-delivered signal.
+
+---
+
+### §23.5 — WIN Path (Enemy Killed)
+
+1. Player fires weapon; `buildCmd68ProjectileSpawnPacket` spawns projectile client-side.
+2. `FUN_004409f0` (projectile collision loop, called each tick via `FUN_0042cf60`) detects hit on enemy actor.
+3. `FUN_00441130(enemy_actor_ptr)` is called:
+   - Sets `*(int*)(&DAT_004f2032 + actor_index * 0x49c) = 1` (marks actor dead).
+   - If `actor_index == 0` (player's own mech): additionally calls `FUN_004461c0(7)` (disconnect timer, LOSS only).
+4. `FUN_00447170` WIN branch detects `g_actorDeadFlag[focused] == 1`, shows mini-results panel in loop.
+5. Player presses combat-exit key → `g_inputFlags & 0x40` set → `g_roundState = 2` → full results screen.
+6. `FUN_0040de90(0)` (similar dead-actor handler) eventually triggers `FUN_004461c0(7)`.
+7. `g_disconnectTimer` fires → `FUN_0040b3d0` → TCP close.
+
+---
+
+### §23.6 — LOSS Path (Player Killed by Bot)
+
+1. Server sends `Cmd67` (`FUN_0040de80`) with `damageCode, damageValue` pair.
+2. Cmd67 applies the IS damage to local actor (actor 0) IS component array.
+3. When IS component 0 reaches 0, the client's local physics step (`FUN_0042bb00`) detects actor death.
+4. `FUN_0040de90(0)` is called:
+   - Sets `g_actorDeadFlag[0] = 1`.
+   - Calls `FUN_004461c0(7)` — sets `g_disconnectTimer = now + 7` (if `g_exitState == 4`).
+5. `g_roundState = 2` (set externally via `g_inputFlags` or results loop).
+6. `g_disconnectTimer` fires → `FUN_0040b3d0` → TCP close.
+
+**Note:** The death detection path requires `g_exitState == 4` (`DAT_0047d05c`) for the timer to fire.  
+The precise conditions under which `g_exitState` transitions to `4` during a normal LOSS were not fully traced.  
+Live packet capture is needed to confirm the exact IS component threshold and death sequence timing.
+
+---
+
+### §23.7 — Server Implementation Implications
+
+- **No match-end packet to send.** The server does not need to signal match-end.
+- **WIN** is triggered automatically by client local simulation when the bot (seeded via `Cmd64`) dies from player weapon fire. The server should only ensure the bot has correct IS/HP seeded (see Issue #80).
+- **LOSS** is triggered when enough `Cmd67` damage drains an IS component on actor 0 to zero. Server should stop sending `Cmd67` once it estimates player HP is depleted.
+- **Cleanup**: The client closes the TCP connection itself (via `FUN_0040b3d0`) after the results screen. Server handles cleanup in the TCP-close handler.
+
+---
+
+### §23.8 — Function Cross-Reference
+
+| Function | Address | Role |
+|----------|---------|------|
+| `Combat_MainLoop` | `0x00447170` | Main combat update loop; 250+ lines |
+| `Combat_InputHandler` | `0x0043d2a0` | Input flag dispatch; triggers `g_roundState = 2` |
+| `Combat_ActorDeadFlag_Setter` | `0x0040de90` | Sets `g_actorDeadFlag`; triggers disconnect timer for actor 0 |
+| `Combat_ProjectileHitHandler` | `0x00441130` | Called by projectile collision; marks actor dead |
+| `Combat_ProjectileLoop` | `0x004409f0` | Iterates active projectiles; calls `FUN_00441130` on expiry |
+| `Combat_InputFlagSet` | `0x0040b4a0` | Generic bit-setter for `g_inputFlags` |
+| `Combat_KeyTranslator` | `0x0043d500` | Translates raw key scancode → flag index → `FUN_0040b4a0` |
+| `Combat_TimerSet` | `0x004461c0` | Sets `g_disconnectTimer = now + N` (only if `g_exitState == 4`) |
+| `Combat_Disconnect` | `FUN_0040b3d0` | Closes TCP connection (called when timer fires) |
+| `Combat_ResultsPanel` | `0x00438170` | Renders the post-match results screen panel |
+| `Combat_ISBarRender` | `0x00449330` | Renders IS component bars on results screen |
+| `Combat_ActiveRound` | `0x004466c0` | Per-tick render: radar blips, range text, heading lines |
+| `Combat_Init` | `0x00446060` | Combat init: sets `g_combatMode = 3`, `g_roundState = 1` |
