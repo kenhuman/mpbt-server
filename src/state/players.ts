@@ -164,6 +164,11 @@ export interface ClientSession {
   combatShotsRejected?: number;
   /** Count of cmd10 shots accepted without a recent cmd12/action0 gate (relaxed mode). */
   combatShotsUngatedAccepted?: number;
+  /**
+   * Mech ID override for the scripted bot opponent.  Set via `/botmech <id>`;
+   * used instead of the player's own mech when bootstrapping combat.
+   */
+  combatBotMechId?: number;
   /** Per-mech run/max speedMag cap (round(mec_speed * 1.5) * 300), set at combat bootstrap. */
   combatMaxSpeedMag?: number;
   /** Per-mech walk speedMag (mec_speed * 300), set at combat bootstrap. */

@@ -94,6 +94,7 @@ import {
   handleLocationAction,
   handleWorldTextCommand,
   sendCombatBootstrapSequence,
+  stopCombatTimers,
   notifyRoomArrival,
   notifyRoomDeparture,
   handleCombatMovementFrame,
@@ -292,6 +293,30 @@ function handleWorldGameData(
       return;
     }
     const textCmd = parsed.text.trim().toLowerCase();
+    // "/fightrestart": stop any running combat timers, reset state, and
+    // re-run the bootstrap from scratch — works even if combat was already
+    // started.  Useful for iterating test scenarios without disconnecting.
+    if (textCmd === '/fightrestart') {
+      if (session.phase !== 'world') {
+        connLog.debug('[world] /fightrestart ignored in phase=%s', session.phase);
+        return;
+      }
+      connLog.info('[world] /fightrestart: stopping timers and resetting combat state');
+      stopCombatTimers(session);
+      session.combatInitialized = false;
+      session.phase = 'world';
+      session.botHealth    = undefined;
+      session.playerHealth = undefined;
+      session.combatJumpAltitude = undefined;
+      session.combatJumpFuel = undefined;
+      session.lastCombatFireActionAt = undefined;
+      session.combatRequireAction0ForFire = undefined;
+      session.combatShotsAccepted = undefined;
+      session.combatShotsRejected = undefined;
+      session.combatShotsUngatedAccepted = undefined;
+      sendCombatBootstrapSequence(session, connLog, capture);
+      return;
+    }
     // "/fight" family: trigger combat bootstrap if not already in combat.
     if (
       textCmd === '/fight' ||
@@ -658,18 +683,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     if (keepaliveTimer !== undefined) {
       clearInterval(keepaliveTimer);
     }
-    if (session.botPositionTimer !== undefined) {
-      clearInterval(session.botPositionTimer);
-    }
-    if (session.botFireTimer !== undefined) {
-      clearInterval(session.botFireTimer);
-    }
-    if (session.combatJumpTimer !== undefined) {
-      clearInterval(session.combatJumpTimer);
-    }
-    if (session.combatJumpFuelRegenTimer !== undefined) {
-      clearInterval(session.combatJumpFuelRegenTimer);
-    }
+    stopCombatTimers(session);
     // Reset combat per-session counters so a reconnect starts fresh.
     if (
       session.combatShotsAccepted !== undefined ||

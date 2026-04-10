@@ -123,6 +123,32 @@ function regenJumpFuelIfGrounded(session: ClientSession): void {
   session.combatJumpFuel = Math.min(JUMP_JET_FUEL_MAX, fuel + JUMP_JET_FUEL_REGEN_PER_FRAME);
 }
 
+/**
+ * Clear all repeating combat timers on a session.
+ *
+ * Called both from the TCP 'close' handler (cleanup on disconnect) and from
+ * the `/fightrestart` handler (cleanup before re-bootstrapping in the same
+ * connection).  Idempotent — safe to call multiple times.
+ */
+export function stopCombatTimers(session: ClientSession): void {
+  if (session.botPositionTimer !== undefined) {
+    clearInterval(session.botPositionTimer);
+    session.botPositionTimer = undefined;
+  }
+  if (session.botFireTimer !== undefined) {
+    clearInterval(session.botFireTimer);
+    session.botFireTimer = undefined;
+  }
+  if (session.combatJumpTimer !== undefined) {
+    clearInterval(session.combatJumpTimer);
+    session.combatJumpTimer = undefined;
+  }
+  if (session.combatJumpFuelRegenTimer !== undefined) {
+    clearInterval(session.combatJumpFuelRegenTimer);
+    session.combatJumpFuelRegenTimer = undefined;
+  }
+}
+
 // ── ComStar messaging ─────────────────────────────────────────────────────────
 
 export function handleComstarTextReply(
@@ -435,6 +461,8 @@ export function sendCombatBootstrapSequence(
   send(socket, cmd72, capture, 'CMD72_COMBAT_BOOTSTRAP');
 
   // 3. Cmd64 — add remote bot actor at slot 1.
+  const botMechId   = session.combatBotMechId ?? mechId;
+  const botMechEntry = WORLD_MECH_BY_ID.get(botMechId);
   const cmd64 = buildCmd64RemoteActorPacket(
     {
       slot:          1,
@@ -445,11 +473,12 @@ export function sendCombatBootstrapSequence(
       identity3:     '',
       identity4:     '',
       statusByte:    0,
-      mechId:        mechId,  // same mech type as player
+      mechId:        botMechId,
     },
     nextSeq(session),
   );
   send(socket, cmd64, capture, 'CMD64_BOT_ACTOR');
+  connLog.info('[world] bot actor: mech_id=%d type=%s', botMechId, botMechEntry?.typeString ?? '?');
 
   // 4. Cmd65 — initial position for the local actor (slot 0) at the origin.
   //    Gives the client something to render immediately after bootstrap.
@@ -690,6 +719,40 @@ export function handleWorldTextCommand(
 
   const line = `${getDisplayName(session)}: ${clean}`;
   connLog.info('[world] cmd-4 text: %s', line);
+
+  // /botmech <id> — choose the mech ID for the scripted bot opponent.
+  // The ID is a numeric mech variant ID from the loaded mech list.  Persists
+  // across /fightrestart within the same connection.
+  const botmechMatch = clean.match(/^\/botmech\s+(\d+)$/i);
+  if (botmechMatch) {
+    const requestedId = parseInt(botmechMatch[1], 10);
+    const mechEntry   = WORLD_MECH_BY_ID.get(requestedId);
+    if (!mechEntry) {
+      connLog.warn('[world] /botmech: unknown mech_id=%d', requestedId);
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket(
+          `Unknown mech_id ${requestedId}. Use /mechs to browse available mechs.`,
+          nextSeq(session),
+        ),
+        capture,
+        'CMD3_BOTMECH_UNKNOWN',
+      );
+    } else {
+      session.combatBotMechId = requestedId;
+      connLog.info('[world] /botmech: bot mech set to %s (id=%d)', mechEntry.typeString, requestedId);
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket(
+          `Bot mech set to ${mechEntry.typeString} (id=${requestedId}). Use /fight or /fightrestart.`,
+          nextSeq(session),
+        ),
+        capture,
+        'CMD3_BOTMECH_ACK',
+      );
+    }
+    return;
+  }
 
   const senderStatus  = getPresenceStatus(session);
   const senderInBooth = senderStatus > 5;
