@@ -347,7 +347,11 @@ export function sendCombatBootstrapSequence(
       terrainResourceId:  0,      // ASSUMPTION: no additional resource
       terrainPoints:      [],
       arenaPoints:        [],
-      globalA:            3612,   // avoids div-by-zero in Cmd65 handler (RE: checkpoint 019-021)
+      // DAT_004f56b4 = globalA. Physics equilibrium: v_eq = speed_target when
+      // globalA = sqrt(speed_target * 980 / (globalA/100)) → globalA = sqrt(980*10000)
+      // = sqrt(9800000) ≈ 2800. At 2800: forward eq = 900 (32 kph), backward eq = 600 (21 kph).
+      // CONFIRMED by Ghidra RE of FUN_0042c830 (velocity integrator) and FUN_0042cd20 (ground drag).
+      globalA:            2800,
       globalB:            0,
       globalC:            0,
       headingBias:        0,      // ASSUMPTION: 0 → MOTION_NEUTRAL after encode
@@ -730,16 +734,47 @@ export function handleCombatMovementFrame(
       session.combatSpeedMag = 0;
       speedMag = 0;
     }
-    connLog.debug(
-      '[world/combat] cmd8 coasting: x=%d y=%d heading=%d clientSpeed=%d latchedThrottle=%d latchedLegVel=%d latchedSpeedMag=%d; suppressing Cmd65 echo',
-      session.combatX, session.combatY, frame.headingRaw, clientSpeed, throttle, legVel, speedMag,
-    );
+    // Ghidra: DAT_004f1f7c=0 → is_moving=false → client sends Cmd8 forever.
+    // When the mech is moving (clientSpeed!=0), echo Cmd65 with a non-zero
+    // throttle to set DAT_004f1f7c != 0 → is_moving=true → next frame is Cmd9.
+    // Cmd9 handler then maintains the accumulator via sign-inverted echo.
+    if (clientSpeed !== 0) {
+      const maxSpeedMag = session.combatMaxSpeedMag ?? 0;
+      const dir = Math.sign(clientSpeed);
+      const boostThrottle = dir * MOTION_DIV;          // minimal non-zero value in correct direction
+      const boostSpeedMag = dir * maxSpeedMag;          // drive to max speed
+      session.combatThrottle  = boostThrottle;
+      session.combatLegVel    = 0;
+      session.combatSpeedMag  = boostSpeedMag;
+      connLog.debug(
+        '[world/combat] cmd8 coasting: x=%d y=%d heading=%d clientSpeed=%d → echoing Cmd65 throttle=%d speedMag=%d to break Cmd8 trap',
+        session.combatX, session.combatY, frame.headingRaw, clientSpeed, boostThrottle, boostSpeedMag,
+      );
+      send(
+        session.socket,
+        buildCmd65PositionSyncPacket(
+          {
+            slot:    0,
+            x:       session.combatX,
+            y:       session.combatY,
+            z:       0,
+            facing:  (frame.headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
+            throttle: boostThrottle,
+            legVel:  0,
+            speedMag: boostSpeedMag,
+          },
+          nextSeq(session),
+        ),
+        capture,
+        'CMD65_MOVEMENT',
+      );
+      return;
+    }
 
-    // Ghidra: the client movement builder emits Cmd8 when DAT_004f1f7a/7c
-    // are both zero, and Cmd65 writes those registers directly. Echoing Cmd65
-    // during Cmd8 can keep the client trapped in zero-throttle Cmd8 frames.
-    // Keep the server-side position state, but do not continuously touch client
-    // throttle/leg velocity registers until the next Cmd9 moving frame.
+    connLog.debug(
+      '[world/combat] cmd8 coasting: x=%d y=%d heading=%d clientSpeed=0 latchedThrottle=%d latchedLegVel=%d latchedSpeedMag=%d; suppressing Cmd65 echo (mech stopped)',
+      session.combatX, session.combatY, frame.headingRaw, throttle, legVel, speedMag,
+    );
     return;
   }
 
@@ -790,8 +825,11 @@ export function handleCombatMovementFrame(
           y:        session.combatY,
           z:        0,
           facing:   (frame.headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
-          throttle: 0,
-          legVel:   0,
+          // Sign-inverted pass-through: Cmd65 decoder uses (MOTION_NEUTRAL - raw)*MOTION_DIV
+          // while Cmd9 parser uses (raw - MOTION_NEUTRAL)*MOTION_DIV, so negate to preserve
+          // DAT_004f1f7c (movement accumulator) and keep the client in Cmd9-sending mode.
+          throttle: -throttle,
+          legVel:   legVel,
           speedMag: signedSpeedMag,
         },
         nextSeq(session),

@@ -3016,6 +3016,65 @@ At full reverse samples (`throttlePct ≈ +30`): `signedSpeedMag = -maxSpeedMag`
 
 ---
 
+### §21.4 — Physics Equilibrium and the `globalA` (DAT_004f56b4) Constant
+
+#### Root cause of the 21 kph speed cap (confirmed by Ghidra RE)
+
+Before this fix, full forward throttle on ANH-1A was capped at ~21 kph (speedMag ≈ 589)
+even though the run target is 900 (32 kph).  This was caused by the Cmd72 bootstrap value
+`globalA = 3612` encoding `DAT_004f56b4 = 3612` in the client physics engine.
+
+Two key functions were reverse-engineered:
+
+**`FUN_0042c830` — velocity integrator (runs every physics tick)**
+```
+base_impulse = speed_target * 980 / DAT_004f56b4   // actor+0x6e per tick
+governor_factor = (governor_pct / -5 + 100) / 100  // governor_pct ≈ v*100/speed_target
+actor+0x6e = governor_factor * base_impulse
+```
+At equilibrium (governor_pct = 100):  `actor+0x6e_effective = 0.8 * speed_target * 980 / D`
+
+**`FUN_0042cd20` — ground deceleration (always active when grounded)**
+```
+decel = |velocity| * (DAT_004f56b4 / 100 + DAT_004f1d24) / 100  // DAT_004f1d24 = 0
+       = |velocity| * D / 10000
+```
+(Note: `DAT_004f21a6 & 1` is the JUMP flag, NOT a "is_moving" flag.  Ground drag always applies.)
+
+#### Equilibrium formula
+
+Setting `accel == decel` at `v = speed_target`:
+
+```
+0.8 × speed_target × 980 / D  =  speed_target × D / 10000
+0.8 × 980 × 10000             =  D²
+7,840,000                      =  D²
+D                              =  2800   (exact)
+```
+
+With **`D = 2800`**, the equilibrium velocity equals `speed_target` for any throttle setting.
+Integer arithmetic in the client rounds cleanly at D=2800 (no drift at steady state).
+
+#### Observed confirmation
+
+| `globalA` | D   | Forward eq. (speed_target=900) | Observed |
+|-----------|-----|-------------------------------|----------|
+| 3612      | 3612 | `7840000 × 900 / 3612² ≈ 540` → ~589 units ~21 kph | ✓ matched |
+| 3612      | 3612 | Backward eq. (speed_target=600): `≈ 393` → ~14 kph | ✓ matched |
+| **2800**  | **2800** | **Forward eq. = 900 → 32 kph** | **target** |
+| **2800**  | **2800** | **Backward eq. = 600 → 21 kph (walk cap)** | **expected** |
+
+**Fix applied**: `globalA` changed from `3612` → `2800` in `world-handlers.ts`
+`sendCombatBootstrapSequence` (~line 350).
+
+#### Key corrections from earlier analysis
+
+- `DAT_004f5684 = globalC = 0` affects only the **jumping** deceleration path; irrelevant for ground mechs.
+- `actor+0x6e / 0x72 / 0x76` are per-tick **impulse** values, zeroed at the start of each `FUN_0042c830` call.  They are NOT persistent velocity accumualtors.
+- Persistent world velocity is in `actor+0x7a / 0x7e / 0x82`.
+
+---
+
 ## 22. Windowed Mode — DirectDraw Rendering Architecture
 
 This section documents the game's DirectDraw rendering pipeline as discovered through
