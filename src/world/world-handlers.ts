@@ -87,6 +87,12 @@ const JUMP_JET_ALTITUDE = 1200;
 const JUMP_JET_STEP = 240;
 /** Tick interval (ms) for prototype jump-jet altitude updates. */
 const JUMP_JET_TICK_MS = 120;
+/** Jump-jet fuel max value (percentage-like integer scale). */
+const JUMP_JET_FUEL_MAX = 100;
+/** Jump-jet fuel drained on each ascent/descent tick. */
+const JUMP_JET_FUEL_DRAIN_PER_TICK = 8;
+/** Grounded jump-jet fuel regen applied on each movement frame. */
+const JUMP_JET_FUEL_REGEN_PER_FRAME = 2;
 /** Max age for correlating cmd12/action0 to the following cmd10 shot frame. */
 const FIRE_ACTION_WINDOW_MS = 1_000;
 /** Interval (ms) at which the scripted bot fires back at the player. */
@@ -98,6 +104,14 @@ const BOT_RETALIATION_DAMAGE = 10;
 // Using 20 as the scale means sVar2=20 → maxSpeedMag (run speed), rather than
 // the upstream assumption of 45 which capped movement at walk speed.
 const THROTTLE_RUN_SCALE = 20;
+
+function regenJumpFuelIfGrounded(session: ClientSession): void {
+  if (session.combatJumpTimer !== undefined) return;
+  if ((session.combatJumpAltitude ?? 0) > 0) return;
+  const fuel = session.combatJumpFuel ?? JUMP_JET_FUEL_MAX;
+  if (fuel >= JUMP_JET_FUEL_MAX) return;
+  session.combatJumpFuel = Math.min(JUMP_JET_FUEL_MAX, fuel + JUMP_JET_FUEL_REGEN_PER_FRAME);
+}
 
 // ── ComStar messaging ─────────────────────────────────────────────────────────
 
@@ -346,6 +360,7 @@ export function sendCombatBootstrapSequence(
     session.combatJumpTimer = undefined;
   }
   session.combatJumpAltitude = 0;
+  session.combatJumpFuel = JUMP_JET_FUEL_MAX;
   session.botHealth    = BOT_INITIAL_HEALTH;
   session.playerHealth = BOT_INITIAL_HEALTH; // simplified IS counter (stops Cmd67 when ≤ 0)
 
@@ -767,6 +782,7 @@ export function handleCombatMovementFrame(
   if (cmd === 8) {
     const frame = parseClientCmd8Coasting(payload);
     if (!frame) return;
+    regenJumpFuelIfGrounded(session);
     session.combatX          = frame.xRaw - COORD_BIAS;
     session.combatY          = frame.yRaw - COORD_BIAS;
     session.combatHeadingRaw = frame.headingRaw;
@@ -827,6 +843,7 @@ export function handleCombatMovementFrame(
   if (cmd === 9) {
     const frame = parseClientCmd9Moving(payload);
     if (!frame) return;
+    regenJumpFuelIfGrounded(session);
     session.combatX          = frame.xRaw - COORD_BIAS;
     session.combatY          = frame.yRaw - COORD_BIAS;
     session.combatHeadingRaw = frame.headingRaw;
@@ -991,6 +1008,12 @@ export function handleCombatActionFrame(
   }
 
   if (action.action === 4) {
+    const fuel = session.combatJumpFuel ?? JUMP_JET_FUEL_MAX;
+    if (fuel <= 0) {
+      connLog.info('[world/combat] cmd-12 jump action=4 ignored (fuel depleted)');
+      return;
+    }
+
     if (session.combatJumpTimer !== undefined) {
       clearInterval(session.combatJumpTimer);
       session.combatJumpTimer = undefined;
@@ -1028,16 +1051,27 @@ export function handleCombatActionFrame(
 
     // Emit the first ascent step immediately so jump feedback is visible without delay.
     session.combatJumpAltitude = Math.min(JUMP_JET_ALTITUDE, (session.combatJumpAltitude ?? 0) + JUMP_JET_STEP);
-    connLog.info('[world/combat] cmd-12 jump action=4 altitude=%d (ascent start)', session.combatJumpAltitude);
+    session.combatJumpFuel = Math.max(0, fuel - JUMP_JET_FUEL_DRAIN_PER_TICK);
+    connLog.info(
+      '[world/combat] cmd-12 jump action=4 altitude=%d fuel=%d (ascent start)',
+      session.combatJumpAltitude,
+      session.combatJumpFuel,
+    );
     sendJumpUpdate('CMD65_JUMP_ASCENT');
 
     session.combatJumpTimer = setInterval(() => {
       if (session.socket.destroyed || !session.socket.writable) return;
 
+      const currentFuel = session.combatJumpFuel ?? 0;
+      if (currentFuel <= 0) {
+        jumpDirection = -1;
+      }
+
       const currentAltitude = session.combatJumpAltitude ?? 0;
       if (jumpDirection > 0) {
         const nextAltitude = Math.min(JUMP_JET_ALTITUDE, currentAltitude + JUMP_JET_STEP);
         session.combatJumpAltitude = nextAltitude;
+        session.combatJumpFuel = Math.max(0, currentFuel - JUMP_JET_FUEL_DRAIN_PER_TICK);
         sendJumpUpdate('CMD65_JUMP_ASCENT');
         if (nextAltitude >= JUMP_JET_ALTITUDE) {
           jumpDirection = -1;
@@ -1047,11 +1081,12 @@ export function handleCombatActionFrame(
 
       const nextAltitude = Math.max(0, currentAltitude - JUMP_JET_STEP);
       session.combatJumpAltitude = nextAltitude;
+      session.combatJumpFuel = Math.max(0, currentFuel - JUMP_JET_FUEL_DRAIN_PER_TICK);
       sendJumpUpdate('CMD65_JUMP_DESCENT');
       if (nextAltitude <= 0) {
         clearInterval(session.combatJumpTimer);
         session.combatJumpTimer = undefined;
-        connLog.info('[world/combat] jump arc complete');
+        connLog.info('[world/combat] jump arc complete (fuel=%d)', session.combatJumpFuel ?? 0);
       }
     }, JUMP_JET_TICK_MS);
     session.combatJumpTimer.unref();
