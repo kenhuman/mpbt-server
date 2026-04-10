@@ -2479,7 +2479,7 @@ Confirmed world-mode rows from `DAT_00478070`:
 This also confirms that scene-init remains command 4 in v1.23. Earlier scratch
 notes that treated the leading dword in each row as an opcode selector were wrong.
 
-#### §19.6.0a — World Opcode 17 Scene-Action Family (STATIC MODEL)
+#### §19.6.0a — World Opcode 17 Scene-Action Family (CONFIRMED — STATIC)
 
 Follow-up RE on `FUN_0041BE90` / `World_HandleSceneActionResponsePacket_v123`
 shows that world opcode `17` is the main non-travel `cmd5` response family for
@@ -2503,7 +2503,7 @@ contracts / offers / duel terms.
 
 | Subtype | Current meaning | Outbound follow-up |
 |---------|------------------|--------------------|
-| `1` | Base contract/agreement editor family (non-subcontract) | submit `cmd 12` |
+| `1` | Base **Agreement** editor (non-subcontract) | submit `cmd 12` |
 | `2` | Binary review / acceptance variant paired with subtype `1` | Enter `cmd 13`, ESC `cmd 11` |
 | `3` | Duel stakes/details panel | Enter `cmd 15`, ESC `cmd 11` |
 | `4` | Membership-bid editor | submit `cmd 17` |
@@ -2512,28 +2512,51 @@ contracts / offers / duel terms.
 | `7` | Subcontract terms editor | submit `cmd 30`, ESC `cmd 32` |
 
 **Structural distinction that matters**
-- Subtypes `1/2` are now best read as the **base agreement** family.
+- Subtypes `1/2` are the **base Agreement** family — a C-bill contract between two
+  Successor State parties (confirmed by `MPBT.MSG[0x19e]` = `"Details of Agreement between"`).
 - Subtypes `5/6/7` are the **subcontract-specific** family.
 - Subtype `4` is separate and centered on membership bidding.
 - Subtype `3` is the duel branch.
 
-The remaining ambiguity is no longer control flow. It is:
-1. the exact in-game noun for the base agreement family behind subtype `1/2`
-2. the concrete scene-specific mapping from outbound `cmd5 actionId` values to
-   opcode `17` subtypes
+**Subtype 1/2 — Agreement field layout (`MPBT.MSG` 1-based indices)**
 
-**Deferred live-capture plan**
-- Record one scene that produces subtype `1`
-- Record the matching review flow that produces subtype `2`
-- Capture:
-  - outbound `cmd5 actionId`
-  - inbound opcode `17`
-  - subtype byte
-  - panel-mode byte
-  - any follow-up `cmd 11/12/13/14/17/29/30/32`
-  - visible scene button text / room context
+The handler references the following `MSG` strings to build the opcode-17 display
+panels for subtypes `1` and `2`.  All indices are 1-based (i.e., `FUN_0040eff0(N)`
+returns the string on line `N` of `MPBT.MSG`).
 
-That single capture should close the remaining subtype `1/2` naming gap.
+| MSG index | String |
+|-----------|--------|
+| `0x19e` | `Details of Agreement between` |
+| `0x19f` | `%s and the %s` |
+| `0x1a0` | `Signing Bonus in thousands of C-bills:` |
+| `0x1a1` | `%s's shares in the unit:` |
+| `0x1a2` | `Starting Shares Percent:` |
+| `0x1a3` | `Mission: %s` |
+| `0x1a4` | `Planet: %s` |
+| `0x1a5` | `Cooperating With: %s` |
+| `0x1a6` | `Opposing House: %s` |
+| `0x1a7` | `Opposing Mechs:` |
+| `0x1a8` | `%d heavy mech` |
+| `0x1a9` | `%d medium mech` |
+| `0x1aa` | `%d light mech` |
+| `0x1ab` | `Mechs Provided:` |
+| `0x1ac` | `Final Payoff: %7ld K C-bills` |
+| `0x1ad` | `Up Front Money: %7ld K C-bills` |
+| `0x1ae` | `Payment upon Start: %7ld K C-bills` |
+| `0x1af` | `Initial Payment: %7ld shares` |
+| `0x1b0` | `Final Payment: %7ld shares` |
+| `0x1b1` | `Subcontract Shares: %7ld` |
+| `0x1b2` | `Submit` |
+| `0x1b3` | `Description: operate in cooperation with the %s military` |
+| `0x1b4` | `Initial planet:` |
+
+**Remaining open item**
+The concrete scene-specific mapping from outbound `cmd5 actionId` values to opcode
+`17` subtypes cannot be resolved by static RE alone — the server embeds the action
+type in `Cmd4`, the client echoes it in `cmd5`, and the server dispatches on it.
+A live capture is needed to establish the `actionId → subtype` table.  This item
+is deferred from M5 scope (the static model is sufficient for milestone
+verification).
 
 
 #### §19.6.1 — v1.23 Combat Server→Client Position Path (PARTIAL)
@@ -2944,6 +2967,65 @@ Step 6: Cmd65 timer (every 1000 ms) — keep bot position fresh
 - Bot at `x=5000, z=0`: within ~100 m of origin, lands on the center arena building (avoid this)
 - Bot at `x=0, z=300000`: ~300 m out in open arena space, clear of obstacles — confirmed working
 - `z` maps to depth/forward in the arena coordinate system; `y` maps to altitude
+
+---
+
+### §19.10 — T.O.F.S. (The Tram) / Monorail System (CONFIRMED — SAME AS STANDARD TRAVEL)
+
+The T.O.F.S. (TOFS Monorail Subway System) is the in-universe cross-sector rapid-transit
+system on Solaris VII.  RE of the v1.23 client binary and the `SOLARIS.HLP` / `BT-MAN`
+documentation resolves the tram's protocol mechanism.
+
+**In-game description (from documentation):**
+- Full name: **T.O.F.S. (The Tram)** / **TOFS Monorail Subway System** (as indexed in
+  `SOLARIS.HLP`)
+- Accessed via the **Travel Button** scene action (`actionType 4`, same as regular
+  Solaris travel)
+- The `SOLARIS.HLP` "Destination Database" index lists all 26 venue rooms *and* all 6
+  sector common areas (rooms 1–6) as tram destinations — the tram gives access to the
+  full Solaris city grid, not just a subset of sector hubs
+
+**Wire protocol (confirmed by static RE of `MPBTWIN.EXE` v1.23):**
+
+The tram uses the **identical** `cmd5 actionType 4 → Cmd43 → cmd10` travel flow as
+regular Solaris map travel.  There is no tram-specific command or context value:
+
+1. `World_HandleMapOpenSolarisPacket_v123` (`FUN_00420A40`, cmd 43, wire `0x4C`) contains
+   only **one** context-specific branch: `if (contextId == 0xc6)`.  All other context
+   values produce a map with null button labels — no tram-specific context ID exists.
+2. No entry in the v1.23 world dispatch table (`DAT_00478070`, 77 entries, cmds 0–76)
+   corresponds to a tram-only command.
+3. The `MPBT.MSG` string table has no dedicated tram string; `MSG[0x131]` = `"Travel"`
+   is the only relevant string (used for the "Travel" button label when `contextId == 0xc6`).
+
+**Cmd43 packet structure (for reference):**
+
+```
+Cmd43 (wire 0x4C) → World_HandleMapOpenSolarisPacket_v123:
+  [type1  contextId]        0xc6 for Solaris travel (only branch that sets button labels)
+  [type1  currentRoomId+1]  1-based room ID of the player's current location
+  [type1 × 26]              per-room occupant counters for venue rooms 146–171
+```
+
+The server differentiates tram-station access from regular-travel access purely by
+session context (which room the player is in) — the client wire format is the same.
+
+**Ghidra rename performed:** `FUN_00420A40` → `World_HandleMapOpenSolarisPacket_v123`
+
+**Sector room IDs (from `SOLARIS.MAP` parse, used as tram transit hubs):**
+
+| Room ID | Sector Name | Flags |
+|---------|-------------|-------|
+| 1 | International Sector | `0x0000` |
+| 2 | Kobe Sector | `0x0101` |
+| 3 | Silesia Sector | `0x0202` |
+| 4 | Montenegro Sector | `0x0303` |
+| 5 | Cathay Sector | `0x0504` |
+| 6 | Black Hills Sector | `0x0405` |
+
+**Conclusion:** No separate tram implementation is needed in the server.  The existing
+`sendSolarisTravelMap` path (Cmd43, `contextId = 0xc6`) already covers all tram
+destinations.  Issue #70 is resolved.
 
 ---
 
