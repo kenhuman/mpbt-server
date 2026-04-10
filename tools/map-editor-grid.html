@@ -1,0 +1,1337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>MPBT Grid Map Editor</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0d0d1a;
+      color: #ccc;
+      font: 13px/1.4 monospace;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    /* ── Toolbar ──────────────────────────────────────────────────────────── */
+    #toolbar {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 6px 10px;
+      background: #12122a;
+      border-bottom: 1px solid #2a2a4a;
+      flex-shrink: 0;
+    }
+    .sep { width: 1px; height: 20px; background: #2a2a4a; margin: 0 2px; }
+    button {
+      background: #1e1e3a;
+      color: #aac;
+      border: 1px solid #3a3a5a;
+      padding: 4px 10px;
+      cursor: pointer;
+      border-radius: 3px;
+      font: inherit;
+      white-space: nowrap;
+    }
+    button:hover { background: #2a2a5a; }
+    button.active { background: #2a4a6a; border-color: #5a8ab0; color: #adf; }
+    button.danger { background: #2a1010; color: #f88; border-color: #5a2a2a; }
+    button.danger:hover { background: #3a1515; }
+    input[type=file] { display: none; }
+    .check-label {
+      display: flex; align-items: center; gap: 4px;
+      cursor: pointer; color: #99a; font-size: 12px;
+    }
+    .check-label input { cursor: pointer; accent-color: #5a8ab0; }
+    select.sm {
+      background: #12122a; color: #aac; border: 1px solid #3a3a5a;
+      padding: 3px 6px; font: inherit; border-radius: 3px; cursor: pointer;
+    }
+    #status { margin-left: auto; color: #667; font-size: 11px; }
+
+    /* ── Layout ───────────────────────────────────────────────────────────── */
+    #main { display: flex; flex: 1; overflow: hidden; }
+
+    #canvas-wrap {
+      flex: 1; position: relative; overflow: hidden;
+    }
+    canvas { position: absolute; top: 0; left: 0; }
+
+    /* ── HUD ──────────────────────────────────────────────────────────────── */
+    #hud {
+      position: absolute; bottom: 8px; left: 8px;
+      background: rgba(5,5,20,0.82); color: #88a;
+      padding: 5px 9px; border-radius: 3px; font-size: 11px;
+      pointer-events: none; border: 1px solid #2a2a4a;
+    }
+    #coords {
+      position: absolute; bottom: 8px; right: 270px;
+      background: rgba(5,5,20,0.82); color: #667;
+      padding: 4px 8px; border-radius: 3px; font-size: 11px;
+      pointer-events: none; border: 1px solid #2a2a4a;
+    }
+
+    /* ── Side panel ───────────────────────────────────────────────────────── */
+    #panel {
+      width: 255px; background: #0e0e20;
+      border-left: 1px solid #2a2a4a;
+      overflow-y: auto; flex-shrink: 0;
+      display: flex; flex-direction: column;
+    }
+    #panel-empty {
+      flex: 1; display: flex; align-items: center; justify-content: center;
+      color: #667; font-size: 12px; text-align: center; line-height: 2;
+    }
+    #editor { padding: 10px; display: none; }
+    .ph {
+      color: #556; font-size: 11px; text-transform: uppercase;
+      letter-spacing: 1px; margin: 12px 0 6px;
+      border-bottom: 1px solid #2a2a4a; padding-bottom: 4px;
+    }
+    .ph:first-child { margin-top: 0; }
+    .field { margin-bottom: 7px; }
+    .field > label { display: block; color: #668; font-size: 11px; margin-bottom: 3px; }
+    .field input, .field select {
+      width: 100%; background: #12122a; color: #bbc;
+      border: 1px solid #2a2a4a; padding: 4px 6px; font: inherit; border-radius: 2px;
+    }
+    .field input:focus, .field select:focus { outline: none; border-color: #5a8ab0; }
+    .field input[readonly] { color: #556; cursor: default; }
+    .checkbox-row {
+      display: flex; align-items: center; gap: 5px;
+      color: #778; font-size: 12px; margin-bottom: 7px; cursor: pointer;
+    }
+    .checkbox-row input { cursor: pointer; accent-color: #5a8ab0; }
+    .btn-full { width: 100%; margin-top: 5px; }
+    /* Exit compass display in panel */
+    #exit-compass {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      grid-template-rows: 1fr 1fr 1fr;
+      gap: 2px;
+      width: 100%;
+      aspect-ratio: 1;
+      margin-bottom: 8px;
+    }
+    .compass-cell {
+      background: #12122a;
+      border: 1px solid #2a2a4a;
+      border-radius: 2px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; cursor: pointer;
+      transition: background 0.1s;
+      min-height: 36px;
+    }
+    .compass-cell.center {
+      background: #1a1a3a; border-color: #5a8ab0;
+      cursor: default; font-size: 9px; color: #66f;
+    }
+    .compass-cell.has-room { background: #132413; border-color: #3a5a3a; color: #6c6; }
+    .compass-cell.selected { background: #1a2a3a; border-color: #5a8ab0; color: #adf; }
+    .compass-cell.empty-exit { background: #1a1010; border-color: #3a2a2a; color: #633; }
+    .compass-cell.wall { background: #200a0a; border-color: #5a2020; color: #844; }
+    .compass-corner { background: transparent !important; border: none !important; cursor: default !important; }
+    /* Icon picker overlay */
+    #icon-picker-overlay {
+      position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:100;
+      display:flex; align-items:center; justify-content:center;
+    }
+    #icon-picker-box {
+      background:#0e0e20; border:1px solid #3a3a5a; border-radius:6px;
+      padding:14px; width:560px; max-height:80vh; display:flex; flex-direction:column; gap:8px;
+    }
+    #icon-picker-box h3 { color:#aac; font-size:13px; margin:0; }
+    #icon-picker-search { background:#12122a; color:#bbc; border:1px solid #2a2a4a; padding:4px 8px; font:13px monospace; border-radius:3px; width:100%; }
+    #icon-picker-grid { display:flex; flex-wrap:wrap; gap:4px; overflow-y:auto; flex:1; padding:4px; }
+    .ip-cell { width:56px; text-align:center; cursor:pointer; border:1px solid #2a2a4a; border-radius:3px; padding:3px; background:#12122a; }
+    .ip-cell:hover, .ip-cell.selected { border-color:#5a8ab0; background:#1a2a4a; }
+    .ip-cell img { width:40px; height:40px; image-rendering:pixelated; display:block; margin:0 auto; }
+    .ip-cell span { font-size:9px; color:#667; display:block; }
+    .exit-badge {
+      display: inline-block; padding: 1px 4px;
+      border-radius: 2px; font-size: 10px; font-weight: bold;
+      background: #223; border: 1px solid #334;
+    }
+  </style>
+</head>
+<body>
+
+<div id="toolbar">
+  <button id="btnLoadJson">Load JSON</button>
+  <input type="file" id="fileJson" accept=".json">
+  <button id="btnLoadBg">Load Map Image</button>
+  <input type="file" id="fileBg" accept="image/*">
+  <button id="btnSave">Save JSON</button>
+
+  <div class="sep"></div>
+
+  Grid:
+  <select class="sm" id="cellSize">
+    <option value="24">Small (24px)</option>
+    <option value="32" selected>Medium (32px)</option>
+    <option value="48">Large (48px)</option>
+    <option value="64">XL (64px)</option>
+  </select>
+  &nbsp;
+  Map size:
+  <select class="sm" id="gridSize">
+    <option value="20">20×20</option>
+    <option value="30" selected>30×30</option>
+    <option value="40">40×40</option>
+    <option value="50">50×50</option>
+  </select>
+
+  <div class="sep"></div>
+
+  <label class="check-label"><input type="checkbox" id="chkBgFit" checked> Fit bg</label>
+  <label class="check-label"><input type="checkbox" id="chkLabels" checked> Names</label>
+  <label class="check-label"><input type="checkbox" id="chkIcons" checked> Icons</label>
+
+  <button id="btnFit">Fit [F]</button>
+  <button id="btnImport">Import Positions</button>
+
+  <span id="status">Load world-map.json to begin</span>
+</div>
+
+<div id="main">
+  <div id="canvas-wrap">
+    <canvas id="canvas"></canvas>
+    <div id="hud">Scroll to zoom · Drag to pan · Left-click cell to select/place room · Right-click room to remove</div>
+    <div id="coords"></div>
+  </div>
+
+  <div id="panel">
+    <div id="panel-empty">No cell selected.<br><br>Left-click any cell<br>to select it.<br><br>Use <b>Apply Changes</b><br>to place a room<br>in an empty cell.<br><br>Right-click a room<br>to remove it.</div>
+    <div id="editor">
+
+      <p class="ph">Location</p>
+      <div class="field">
+        <label>Grid (col, row)</label>
+        <input type="text" id="eGridPos" readonly tabindex="-1">
+      </div>
+      <div class="field">
+        <label>Room ID (0 = unassigned)</label>
+        <input type="number" id="eId" min="0">
+      </div>
+
+      <p class="ph">Metadata</p>
+      <div class="field">
+        <label>Name</label>
+        <input type="text" id="eName" placeholder="(unnamed)">
+      </div>
+      <div class="field">
+        <label>Type</label>
+        <select id="eType">
+          <option value="street">street</option>
+          <option value="path">path</option>
+          <option value="arena">arena</option>
+          <option value="hub">hub</option>
+          <option value="terminal">terminal</option>
+          <option value="bar">bar</option>
+          <option value="sector">sector</option>
+          <option value="bank">bank</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Sector</label>
+        <select id="eSector">
+          <option value="international">international</option>
+          <option value="kobe">kobe</option>
+          <option value="silesia">silesia</option>
+          <option value="montenegro">montenegro</option>
+          <option value="cathay">cathay</option>
+          <option value="blackhills">blackhills</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Description</label>
+        <textarea id="eDesc" rows="3" style="width:100%;background:#12122a;color:#bbc;border:1px solid #2a2a4a;padding:4px 6px;font:inherit;border-radius:2px;resize:vertical" placeholder="(no description)"></textarea>
+      </div>
+      <div class="field">
+        <label>Icon ID</label>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input type="number" id="eIcon" min="0" max="255" placeholder="1" style="flex:1">
+          <button type="button" id="btnPickIcon" style="white-space:nowrap;font-size:11px;padding:3px 7px">Browse…</button>
+        </div>
+      </div>
+      <div id="icon-preview" style="display:none;text-align:center;margin-bottom:8px">
+        <img id="icon-img" style="width:64px;height:64px;image-rendering:pixelated;border:1px solid #2a2a4a;border-radius:3px">
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="eInferred">
+        <label for="eInferred">Inferred (_inferred flag)</label>
+      </div>
+
+      <p class="ph">Exits</p>
+      <p style="font-size:10px;color:#556;margin-bottom:6px">
+        Green = exit open &nbsp;|&nbsp; Red = wall. Click to <b>toggle</b>. Shift+click to navigate.
+      </p>
+      <div id="exit-compass">
+        <!-- 3×3 compass, filled by JS -->
+      </div>
+      <div style="font-size:10px;color:#556;margin-bottom:8px" id="exit-summary"></div>
+
+      <button id="btnApply" class="btn-full">Apply Changes ↵</button>
+      <button id="btnRemove" class="btn-full danger" style="margin-top:4px">Remove Room from Cell</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const ASSETS = '../../assets';
+
+// ── Icon image cache (icon ID → HTMLImageElement) ───────────────────────────
+const iconCache = new Map();
+function getIconImg(iconId) {
+  if (iconCache.has(iconId)) return iconCache.get(iconId);
+  const img = new Image();
+  img.src = `${ASSETS}/icons/I${iconId + 101}.png`;
+  img.onload = () => render();
+  iconCache.set(iconId, img);
+  return img;
+}
+function iconReady(img) {
+  return img && img.complete && img.naturalWidth > 0;
+}
+
+function updateIconPreview(iconId) {
+  const wrap = document.getElementById('icon-preview');
+  const imgEl = document.getElementById('icon-img');
+  if (iconId != null && iconId !== '') {
+    imgEl.src = `${ASSETS}/icons/I${parseInt(iconId) + 101}.png`;
+    wrap.style.display = '';
+  } else {
+    wrap.style.display = 'none';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ANCHOR POSITIONS: SOLARIS.MAP centreX/centreY (pixel space 0-420 × 0-440)
+// Used only by "Import Positions" to pre-populate rooms from graph data
+// ─────────────────────────────────────────────────────────────────────────────
+const ANCHOR_POS = {
+  1:   [42,  388],   2: [86,  106],   3: [322, 306],
+  4:   [274,  92],   5: [206, 326],   6: [104, 310],
+  146: [30,  311], 147: [132, 131], 148: [142,  85],
+  149: [25,   84], 150: [35,  140], 151: [83,   60],
+  152: [323, 249], 153: [366, 182], 154: [387, 331],
+  155: [321, 199], 156: [303, 369], 157: [296,  61],
+  158: [240, 126], 159: [311, 124], 160: [305, 155],
+  161: [365,  50], 162: [240, 246], 163: [196, 366],
+  164: [228, 289], 165: [236, 187], 166: [251, 213],
+  167: [159, 224], 168: [46,  266], 169: [109, 252],
+  170: [99,  170], 171: [67,  214],
+};
+
+const TYPE_COLOR = {
+  arena:    '#c44', hub:      '#e90', terminal: '#38c',
+  bar:      '#4a4', sector:   '#d70', bank:     '#a4a',
+  street:   '#557', path:     '#557',
+};
+const TYPE_LETTER = {
+  arena: 'A', hub: 'H', terminal: 'T', bar: 'B',
+  sector: 'S', bank: '$', street: '+', path: '+',
+};
+
+// Icon ID → short label (named locations only; everything else shows type letter)
+const ICON_LABEL = {
+  4: 'STAR', 6: 'SEC', 12: 'FACT', 17: 'LYR',
+  18: 'PRK', 25: 'WST', 26: 'WL', 28: 'ISH',
+  29: 'STE', 31: 'JNG', 32: 'DAV', 34: 'SIL',
+  35: 'MON', 36: 'CTH', 37: 'BLK', 43: 'VWP',
+  44: 'BLT', 45: 'GOV', 46: 'WRF', 50: 'MZE', 51: 'SLM',
+};
+
+// ── Grid state ────────────────────────────────────────────────────────────────
+// grid[row][col] = null | { roomId, _name, type, sector, icon, _inferred }
+// roomId 0 means unassigned (cell is a room but no ID yet)
+let GRID_SIZE = 30;   // cols & rows
+let grid = [];        // GRID_SIZE × GRID_SIZE, row-major
+let selectedCell = null;  // { col, row }
+
+let VIEW = { scale: 1, tx: 20, ty: 20 };
+let bgImage = null;
+let panning = null;
+
+// JSON source data (for import)
+let jsonRooms = [];
+let nextNewId = 2000;
+
+// Reverse lookup: roomId → {col, row} — kept in sync with grid
+let posById = new Map();
+function rebuildPosById() {
+  posById.clear();
+  for (let r = 0; r < GRID_SIZE; r++)
+    for (let c = 0; c < GRID_SIZE; c++)
+      if (grid[r][c]) posById.set(grid[r][c].roomId, { col: c, row: r });
+}
+
+function makeGrid(size) {
+  GRID_SIZE = size;
+  grid = Array.from({ length: size }, () => Array(size).fill(null));
+  posById.clear();
+}
+makeGrid(GRID_SIZE);
+
+// ── Canvas ────────────────────────────────────────────────────────────────────
+const wrap   = document.getElementById('canvas-wrap');
+const canvas = document.getElementById('canvas');
+const ctx    = canvas.getContext('2d');
+
+function resizeCanvas() { canvas.width = wrap.clientWidth; canvas.height = wrap.clientHeight; render(); }
+new ResizeObserver(resizeCanvas).observe(wrap);
+
+// ── Coordinate helpers ────────────────────────────────────────────────────────
+// Map space: origin top-left, each unit = 1 cell
+function CELL() { return parseInt(document.getElementById('cellSize').value); }
+
+function toCanvas(col, row) {
+  const cs = CELL();
+  return { x: col * cs * VIEW.scale + VIEW.tx, y: row * cs * VIEW.scale + VIEW.ty };
+}
+function toGrid(cx, cy) {
+  const cs = CELL();
+  return {
+    col: Math.floor((cx - VIEW.tx) / (cs * VIEW.scale)),
+    row: Math.floor((cy - VIEW.ty) / (cs * VIEW.scale)),
+  };
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function render() {
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0a0a18';
+  ctx.fillRect(0, 0, W, H);
+
+  const cs = CELL() * VIEW.scale;
+
+  // Background image
+  if (bgImage) {
+    const fitBg = document.getElementById('chkBgFit').checked;
+    ctx.globalAlpha = 0.55;
+    if (fitBg) {
+      const bw = GRID_SIZE * cs, bh = GRID_SIZE * cs;
+      ctx.drawImage(bgImage, VIEW.tx, VIEW.ty, bw, bh);
+    } else {
+      ctx.drawImage(bgImage, VIEW.tx, VIEW.ty, bgImage.width * VIEW.scale, bgImage.height * VIEW.scale);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // Grid cells
+  const showLbl = document.getElementById('chkLabels').checked;
+  const showIco = document.getElementById('chkIcons').checked;
+
+  for (let row = 0; row < GRID_SIZE; row++) {
+    for (let col = 0; col < GRID_SIZE; col++) {
+      const { x, y } = toCanvas(col, row);
+      if (x + cs < 0 || x > W || y + cs < 0 || y > H) continue;
+
+      const room = grid[row][col];
+      const isSel = selectedCell && selectedCell.col === col && selectedCell.row === row;
+      const isNeighbour = isSelectedNeighbour(col, row);
+
+      // Cell fill
+      if (room) {
+        const baseColor = TYPE_COLOR[room.type] ?? '#557';
+        ctx.fillStyle = isSel
+          ? '#1a2a4a'
+          : isNeighbour ? '#1a1a38' : hexWithAlpha(baseColor, 0.70);
+        ctx.fillRect(x, y, cs, cs);
+      } else {
+        ctx.fillStyle = isSel ? '#111830' : (isNeighbour ? '#0e0e1e' : 'transparent');
+        if (isSel || isNeighbour) ctx.fillRect(x, y, cs, cs);
+      }
+
+      // Border
+      ctx.strokeStyle = isSel
+        ? '#7ab0e8'
+        : (room
+            ? (isNeighbour ? '#5580b0' : lighten(TYPE_COLOR[room.type] ?? '#557', 0.5))
+            : '#181828');
+      ctx.lineWidth = isSel ? 2 : (room ? 1 : 0.5);
+      ctx.strokeRect(x + 0.5, y + 0.5, cs - 1, cs - 1);
+
+      if (!room) continue;
+
+      // Exit indicators — small arrows on edges
+      drawExitArrows(col, row, room, x, y, cs, isSel);
+
+      if (cs < 10) continue;
+
+      // Icon / label
+      if (showIco || showLbl) {
+        const color = TYPE_COLOR[room.type] ?? '#445';
+
+        // Try to draw icon image when cell is large enough
+        const iconId = room.icon;
+        const iconImgEl = (showIco && iconId != null) ? getIconImg(iconId) : null;
+        const iconDrawn = iconReady(iconImgEl) && cs >= 20;
+
+        if (iconDrawn) {
+          const pad2 = Math.max(2, cs * 0.08);
+          const size = cs - pad2 * 2;
+          ctx.globalAlpha = isSel ? 1.0 : 0.85;
+          ctx.drawImage(iconImgEl, x + pad2, y + pad2, size, size);
+          ctx.globalAlpha = 1;
+        } else {
+          // Fallback letter badge
+          const letter = showIco
+            ? (iconId != null && ICON_LABEL[iconId] ? ICON_LABEL[iconId] : (TYPE_LETTER[room.type] ?? '?'))
+            : null;
+          if (letter && cs >= 24) {
+            const fs = Math.max(8, cs * 0.28);
+            ctx.font = `bold ${fs}px monospace`;
+            ctx.textAlign = 'center';
+            ctx.fillStyle = isSel ? '#adf' : lighten(color, 0.7);
+            ctx.fillText(letter, x + cs / 2, y + cs * 0.45);
+          }
+        }
+
+        // Name label (bottom) — skip if icon image is drawn and cell is small
+        const name = room._name && room._name !== 'Street' && room._name !== 'Path'
+          ? room._name : null;
+        if (showLbl && name && cs >= (iconDrawn ? 40 : 32)) {
+          const fs = Math.max(7, cs * 0.16);
+          ctx.font = `${fs}px monospace`;
+          ctx.textAlign = 'center';
+          ctx.fillStyle = isSel ? '#cdf' : '#99b';
+          ctx.save();
+          ctx.rect(x + 1, y + 1, cs - 2, cs - 2);
+          ctx.clip();
+          // Draw name below icon (bottom quarter)
+          const labelY = iconDrawn ? y + cs - Math.max(4, cs * 0.13) : y + cs - Math.max(4, cs * 0.13);
+          ctx.fillText(name, x + cs / 2, labelY);
+          ctx.restore();
+        }
+
+        // Room ID (small, bottom-right) — skip if icon fills the cell
+        if (!iconDrawn && room.roomId && cs >= 28) {
+          const fs = Math.max(7, cs * 0.14);
+          ctx.font = `${fs}px monospace`;
+          ctx.textAlign = 'right';
+          ctx.fillStyle = '#558';
+          ctx.fillText(String(room.roomId), x + cs - 3, y + cs - 3);
+        }
+      }
+    }
+  }
+
+  // Selection outline (on top)
+  if (selectedCell) {
+    const { x, y } = toCanvas(selectedCell.col, selectedCell.row);
+    ctx.strokeStyle = '#7ab0e8';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 1, y + 1, cs - 2, cs - 2);
+  }
+}
+
+function drawExitArrows(col, row, room, x, y, cs, isSel) {
+  if (cs < 16) return;
+  const exits = getRoomExits(col, row, room);
+  const arrowLen = Math.min(6, cs * 0.18);
+  const mid = cs / 2;
+  const m = 3;
+  ctx.strokeStyle = isSel ? '#7ab0e8' : '#445';
+  ctx.lineWidth = 1;
+
+  if (exits.north) { arrow(ctx, x + mid, y + m + arrowLen, x + mid, y + m); }
+  if (exits.south) { arrow(ctx, x + mid, y + cs - m - arrowLen, x + mid, y + cs - m); }
+  if (exits.west)  { arrow(ctx, x + m + arrowLen, y + mid, x + m, y + mid); }
+  if (exits.east)  { arrow(ctx, x + cs - m - arrowLen, y + mid, x + cs - m, y + mid); }
+}
+
+function arrow(ctx, x1, y1, x2, y2) {
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+  // Arrowhead
+  const angle = Math.atan2(y2 - y1, x2 - x1);
+  const sz = 3;
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(x2 - sz * Math.cos(angle - 0.5), y2 - sz * Math.sin(angle - 0.5));
+  ctx.lineTo(x2 - sz * Math.cos(angle + 0.5), y2 - sz * Math.sin(angle + 0.5));
+  ctx.closePath();
+  ctx.fillStyle = ctx.strokeStyle;
+  ctx.fill();
+}
+
+// ── Exit logic ────────────────────────────────────────────────────────────────
+// An exit exists in a direction if the adjacent cell also has a room.
+// The exits stored in the room data are the CANONICAL source of truth;
+// grid adjacency is the visual representation & editing shorthand.
+function getRoomExits(col, row, room) {
+  // Use room's stored exits if present
+  if (room.exits) return room.exits;
+  // Otherwise derive from grid adjacency
+  return {
+    north: (row > 0 && grid[row-1][col]) ? grid[row-1][col].roomId : null,
+    south: (row < GRID_SIZE-1 && grid[row+1][col]) ? grid[row+1][col].roomId : null,
+    west:  (col > 0 && grid[row][col-1]) ? grid[row][col-1].roomId : null,
+    east:  (col < GRID_SIZE-1 && grid[row][col+1]) ? grid[row][col+1].roomId : null,
+  };
+}
+
+function isSelectedNeighbour(col, row) {
+  if (!selectedCell) return false;
+  const { col: sc, row: sr } = selectedCell;
+  return (Math.abs(col - sc) === 1 && row === sr) ||
+         (Math.abs(row - sr) === 1 && col === sc);
+}
+
+// ── Hit test ───────────────────────────────────────────────────────────────────
+function hitCell(cx, cy) {
+  const { col, row } = toGrid(cx, cy);
+  if (col < 0 || col >= GRID_SIZE || row < 0 || row >= GRID_SIZE) return null;
+  return { col, row };
+}
+
+// ── Selection ─────────────────────────────────────────────────────────────────
+function selectCell(col, row) {
+  selectedCell = { col, row };
+  const room = grid[row][col];
+  const panel_empty = document.getElementById('panel-empty');
+  const editor = document.getElementById('editor');
+  panel_empty.style.display = 'none';
+  editor.style.display = 'block';
+
+  document.getElementById('eGridPos').value = `col ${col}, row ${row}`;
+  document.getElementById('eId').value      = room ? (room.roomId ?? 0) : 0;
+  document.getElementById('eName').value    = room?._name ?? '';
+  document.getElementById('eDesc').value    = room?.description ?? '';
+  document.getElementById('eType').value    = room?.type ?? 'street';
+  document.getElementById('eSector').value  = room?.sector ?? 'international';
+  document.getElementById('eIcon').value    = room?.icon != null ? room.icon : '';
+  document.getElementById('eInferred').checked = !!(room?._inferred);
+  updateIconPreview(room?.icon ?? null);
+
+  buildCompass(col, row, room);
+  render();
+}
+
+function buildCompass(col, row, room) {
+  const compass = document.getElementById('exit-compass');
+  compass.innerHTML = '';
+
+  // 3×3 compass: [NW, N, NE, W, C, E, SW, S, SE]
+  const DIRS = [
+    { dc: -1, dr: -1, label: '',    dir: null    },
+    { dc:  0, dr: -1, label: '↑ N', dir: 'north' },
+    { dc:  1, dr: -1, label: '',    dir: null    },
+    { dc: -1, dr:  0, label: '← W', dir: 'west'  },
+    { dc:  0, dr:  0, label: null,  dir: 'center'},
+    { dc:  1, dr:  0, label: '→ E', dir: 'east'  },
+    { dc: -1, dr:  1, label: '',    dir: null    },
+    { dc:  0, dr:  1, label: '↓ S', dir: 'south' },
+    { dc:  1, dr:  1, label: '',    dir: null    },
+  ];
+
+  // Build compass using STORED exits (by roomId), not just grid adjacency
+  const storedExits = room?.exits ?? {};
+
+  for (const { dc, dr, label, dir } of DIRS) {
+    const div = document.createElement('div');
+    div.className = 'compass-cell';
+
+    if (dir === 'center') {
+      div.classList.add('center');
+      div.textContent = room ? (room._name ?? `#${room.roomId}` ?? '?') : `(${col},${row})`;
+    } else if (!dir) {
+      div.classList.add('compass-corner');
+    } else {
+      const exitId = storedExits[dir]; // roomId the stored exit points to
+
+      // Also check if the adjacent grid cell has a room (may differ from stored exit)
+      const nc = col + dc, nr = row + dr;
+      const inBounds = nc >= 0 && nc < GRID_SIZE && nr >= 0 && nr < GRID_SIZE;
+      const adjRoom = inBounds ? grid[nr][nc] : null;
+
+      if (exitId != null) {
+        // Open exit in this direction
+        const exitRoom = adjRoom?.roomId === exitId ? adjRoom
+                       : (posById.has(exitId) ? grid[posById.get(exitId).row][posById.get(exitId).col] : null);
+        const nname = exitRoom?._name && exitRoom._name !== 'Street' ? exitRoom._name : `#${exitId}`;
+        const epos = posById.get(exitId);
+        const isAdj = epos && epos.col === nc && epos.row === nr;
+        div.classList.add('has-room');
+        div.innerHTML = `<span class="exit-badge">${label}</span><br><small>${nname}${isAdj ? '' : ' ↗'}</small>`;
+        div.title = `${dir}: open — click to add wall, Shift+click to navigate`;
+        div.addEventListener('click', e => {
+          if (!room) return;
+          if (e.shiftKey && epos) { selectCell(epos.col, epos.row); return; }
+          // Close this exit (add wall)
+          if (!room.exits) room.exits = {};
+          room.exits[dir] = null;
+          // Also close reciprocal
+          const opp = { north:'south', south:'north', east:'west', west:'east' };
+          if (exitRoom?.exits) exitRoom.exits[opp[dir]] = null;
+          buildCompass(col, row, room); render();
+        });
+      } else if (adjRoom) {
+        // Adjacent room exists but wall blocks the exit
+        div.classList.add('wall');
+        const aname = adjRoom._name && adjRoom._name !== 'Street' ? adjRoom._name : `#${adjRoom.roomId}`;
+        div.innerHTML = `<span class="exit-badge" style="opacity:0.5">${label}</span><br><small style="opacity:0.6">${aname} wall</small>`;
+        div.title = `${dir}: wall — click to open exit`;
+        div.addEventListener('click', () => {
+          if (!room) return;
+          if (!room.exits) room.exits = {};
+          room.exits[dir] = adjRoom.roomId;
+          // Open reciprocal
+          if (!adjRoom.exits) adjRoom.exits = {};
+          const opp = { north:'south', south:'north', east:'west', west:'east' };
+          adjRoom.exits[opp[dir]] = room.roomId;
+          buildCompass(col, row, room); render();
+        });
+      } else {
+        // No room in this direction
+        div.classList.add('empty-exit');
+        div.textContent = label;
+        div.title = `${dir}: no room`;
+      }
+    }
+    compass.appendChild(div);
+  }
+
+  const summaryEl = document.getElementById('exit-summary');
+  if (room) {
+    const exits = getRoomExits(col, row, room);
+    const parts = [];
+    if (exits.north != null) parts.push('N→' + exits.north);
+    if (exits.south != null) parts.push('S→' + exits.south);
+    if (exits.east  != null) parts.push('E→' + exits.east);
+    if (exits.west  != null) parts.push('W→' + exits.west);
+    summaryEl.textContent = parts.length ? 'Exits: ' + parts.join('  ') : 'No exits';
+  } else {
+    summaryEl.textContent = '';
+  }
+}
+
+function applyChanges() {
+  if (!selectedCell) return;
+  const { col, row } = selectedCell;
+  let room = grid[row][col];
+
+  const idVal = parseInt(document.getElementById('eId').value) || 0;
+  const name  = document.getElementById('eName').value.trim();
+  const desc  = document.getElementById('eDesc').value.trim();
+  const type  = document.getElementById('eType').value;
+  const sector = document.getElementById('eSector').value;
+  const iconRaw = document.getElementById('eIcon').value.trim();
+  const icon  = iconRaw !== '' ? parseInt(iconRaw) : null;
+  const inferred = document.getElementById('eInferred').checked;
+
+  if (!room) {
+    // Create new room: open exits to all adjacent rooms
+    const useId = idVal > 0 ? idVal : nextNewId++;
+    room = {
+      roomId: useId,
+      _name: name || 'New Room',
+      description: desc || undefined,
+      type, sector, icon: icon ?? 1, _inferred: inferred || undefined,
+      exits: deriveExits(col, row),
+    };
+    grid[row][col] = room;
+    updateNeighbourExits(col, row);
+  } else {
+    // Update existing room — preserve manually-set exits
+    const oldRoomId = room.roomId;
+    const newRoomId = idVal > 0 ? idVal : room.roomId;
+    // If the roomId changed, update every room whose exits referenced the old ID.
+    if (newRoomId !== oldRoomId) {
+      for (let r = 0; r < GRID_SIZE; r++) {
+        for (let c = 0; c < GRID_SIZE; c++) {
+          const other = grid[r][c];
+          if (!other?.exits) continue;
+          for (const dir of Object.keys(other.exits)) {
+            if (other.exits[dir] === oldRoomId) other.exits[dir] = newRoomId;
+          }
+        }
+      }
+    }
+    room.roomId      = newRoomId;
+    room._name       = name || undefined;
+    room.description = desc || undefined;
+    room.type        = type;
+    room.sector      = sector;
+    room.icon        = icon;
+    room._inferred   = inferred || undefined;
+    // Do NOT recompute exits — user may have toggled walls via compass
+  }
+  updateIconPreview(icon);
+  rebuildPosById();
+  buildCompass(col, row, grid[row][col]);
+  render();
+  setStatus(`Saved room ${room.roomId} at (${col}, ${row})`);
+}
+
+function deriveExits(col, row) {
+  return {
+    north: (row > 0 && grid[row-1][col]) ? grid[row-1][col].roomId : null,
+    south: (row < GRID_SIZE-1 && grid[row+1][col]) ? grid[row+1][col].roomId : null,
+    west:  (col > 0 && grid[row][col-1]) ? grid[row][col-1].roomId : null,
+    east:  (col < GRID_SIZE-1 && grid[row][col+1]) ? grid[row][col+1].roomId : null,
+  };
+}
+
+function updateNeighbourExits(col, row) {
+  const me = grid[row][col];
+  const myId = me ? me.roomId : null;
+  const neighbors = [
+    { dc: 0, dr: -1, myDir: 'north', theirDir: 'south' },
+    { dc: 0, dr:  1, myDir: 'south', theirDir: 'north' },
+    { dc: -1, dr: 0, myDir: 'west',  theirDir: 'east'  },
+    { dc:  1, dr: 0, myDir: 'east',  theirDir: 'west'  },
+  ];
+  for (const { dc, dr, theirDir } of neighbors) {
+    const nc = col + dc, nr = row + dr;
+    if (nc < 0 || nc >= GRID_SIZE || nr < 0 || nr >= GRID_SIZE) continue;
+    const nb = grid[nr][nc];
+    if (!nb) continue;
+    if (!nb.exits) nb.exits = { north: null, south: null, east: null, west: null };
+    nb.exits[theirDir] = myId;
+  }
+}
+
+function removeRoom() {
+  if (!selectedCell) return;
+  const { col, row } = selectedCell;
+  const room = grid[row][col];
+  if (!room) return;
+  if (!confirm(`Remove room ${room.roomId} (${room._name ?? 'unnamed'}) from (${col},${row})?`)) return;
+  grid[row][col] = null;
+  updateNeighbourExits(col, row);
+  rebuildPosById();
+  selectCell(col, row);
+  render();
+  setStatus(`Removed room from (${col},${row})`);
+}
+
+// ── Import from JSON ──────────────────────────────────────────────────────────
+// Find a free cell near (col,row), preferring to continue in direction (dc,dr)
+function findFreeCell(col, row, dc = 0, dr = 0) {
+  col = Math.max(0, Math.min(GRID_SIZE-1, col));
+  row = Math.max(0, Math.min(GRID_SIZE-1, row));
+  if (!grid[row][col]) return { col, row };
+  // Prefer continuing in the given direction first
+  if (dc || dr) {
+    for (let s = 1; s < GRID_SIZE; s++) {
+      const nc = col + dc * s, nr = row + dr * s;
+      if (nc < 0 || nc >= GRID_SIZE || nr < 0 || nr >= GRID_SIZE) break;
+      if (!grid[nr][nc]) return { col: nc, row: nr };
+    }
+  }
+  // Spiral fallback
+  for (let r = 1; r <= 8; r++) {
+    for (let ddc = -r; ddc <= r; ddc++) {
+      for (let ddr = -r; ddr <= r; ddr++) {
+        if (Math.abs(ddc) !== r && Math.abs(ddr) !== r) continue;
+        const nc = col + ddc, nr = row + ddr;
+        if (nc >= 0 && nc < GRID_SIZE && nr >= 0 && nr < GRID_SIZE && !grid[nr][nc])
+          return { col: nc, row: nr };
+      }
+    }
+  }
+  return null;
+}
+
+function importPositions() {
+  if (!jsonRooms.length) { alert('Load a world-map.json file first.'); return; }
+
+  const byId = new Map(jsonRooms.map(r => [r.roomId, r]));
+  const DIR_DELTA = { north: [0,-1], south: [0,1], east: [1,0], west: [-1,0] };
+  const logPos = new Map(); // roomId → {lc, lr} logical integer coordinates
+
+  // ── BFS logical coordinate assignment ──────────────────────────────────────
+  // Starting from Starport (or first room), assign each room a (lc, lr) by
+  // following exits one step at a time in the declared direction.
+  // Any room reachable from the start via the BFS tree will be exactly 1 step
+  // (grid-adjacent) from its BFS parent.  Back-edges in graph cycles produce
+  // the only non-adjacent connections — unavoidable given MPBT's topology.
+  const startId = byId.has(146) ? 146 : jsonRooms[0].roomId;
+  logPos.set(startId, { lc: 0, lr: 0 });
+  const bfsQ = [startId];
+  while (bfsQ.length) {
+    const id = bfsQ.shift();
+    const { lc, lr } = logPos.get(id);
+    const room = byId.get(id);
+    for (const [dir, [dc, dr]] of Object.entries(DIR_DELTA)) {
+      const exitId = room?.exits?.[dir];
+      if (!exitId || logPos.has(exitId)) continue;
+      logPos.set(exitId, { lc: lc + dc, lr: lr + dr });
+      bfsQ.push(exitId);
+    }
+  }
+
+  // ── Bounds ─────────────────────────────────────────────────────────────────
+  let minLc = Infinity, maxLc = -Infinity, minLr = Infinity, maxLr = -Infinity;
+  for (const { lc, lr } of logPos.values()) {
+    if (lc < minLc) minLc = lc; if (lc > maxLc) maxLc = lc;
+    if (lr < minLr) minLr = lr; if (lr > maxLr) maxLr = lr;
+  }
+  const needed = Math.max(maxLc - minLc, maxLr - minLr) + 4; // +4 padding
+
+  // Auto-expand grid if the logical layout is larger than the current size
+  if (needed > GRID_SIZE) {
+    GRID_SIZE = needed;
+    const sel = document.getElementById('gridSize');
+    let found = false;
+    for (const opt of sel.options) {
+      if (parseInt(opt.value) >= needed) { sel.value = opt.value; found = true; break; }
+    }
+    if (!found) {
+      const opt = document.createElement('option');
+      opt.value = needed; opt.textContent = `${needed}×${needed}`;
+      sel.appendChild(opt); sel.value = String(needed);
+    }
+  }
+
+  makeGrid(GRID_SIZE);
+
+  // ── Place rooms on grid ────────────────────────────────────────────────────
+  const colOff = -minLc + 1;
+  const rowOff = -minLr + 1;
+  const placedAt = new Map();
+
+  for (const [roomId, { lc, lr }] of logPos.entries()) {
+    const col = Math.max(0, Math.min(GRID_SIZE-1, lc + colOff));
+    const row = Math.max(0, Math.min(GRID_SIZE-1, lr + rowOff));
+    if (!grid[row][col]) {
+      grid[row][col] = { ...byId.get(roomId) };
+      placedAt.set(roomId, { col, row });
+    } else {
+      // Collision (shouldn't happen in a DAG, can happen with graph cycles)
+      const cell = findFreeCell(col, row, 0, 0);
+      if (cell) {
+        grid[cell.row][cell.col] = { ...byId.get(roomId) };
+        placedAt.set(roomId, cell);
+      }
+    }
+  }
+
+  // ── Prune non-adjacent exits ──────────────────────────────────────────────
+  // Any exit whose target isn't exactly 1 cell away is a cycle back-edge that
+  // can't be honoured in a 2D grid.  Remove both directions so the player must
+  // take the longer road path instead of a phantom shortcut.
+  // Rebuild posById first so it reflects the newly placed rooms.
+  rebuildPosById();
+  let pruned = 0;
+  const OPP = { north:'south', south:'north', east:'west', west:'east' };
+  for (let row = 0; row < GRID_SIZE; row++) {
+    for (let col = 0; col < GRID_SIZE; col++) {
+      const room = grid[row][col];
+      if (!room?.exits) continue;
+      for (const dir of Object.keys(room.exits)) {
+        const targetId = room.exits[dir];
+        if (!targetId) continue;
+        const tp = posById.get(targetId);
+        if (!tp) { delete room.exits[dir]; pruned++; continue; }
+        const dist = Math.abs(tp.col - col) + Math.abs(tp.row - row);
+        if (dist > 1) {
+          // Remove forward exit
+          delete room.exits[dir];
+          // Remove reciprocal exit from target
+          const target = grid[tp.row][tp.col];
+          if (target?.exits?.[OPP[dir]] === room.roomId)
+            delete target.exits[OPP[dir]];
+          pruned++;
+        }
+      }
+    }
+  }
+
+  rebuildPosById();
+  fitView();
+  render();
+  setStatus(`Imported ${placedAt.size} of ${jsonRooms.length} rooms` +
+    (pruned ? ` · ${pruned} non-grid exit(s) removed` : ' · all exits grid-adjacent ✓'));
+}
+
+// ── File I/O ──────────────────────────────────────────────────────────────────
+function loadJson(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (!Array.isArray(data.rooms)) throw new Error('"rooms" array not found');
+      jsonRooms = data.rooms;
+
+      // Check for saved _gridCol/_gridRow fields
+      let hasGrid = jsonRooms.some(r => typeof r._gridCol === 'number');
+      if (hasGrid) {
+        // Restore saved grid layout
+        makeGrid(GRID_SIZE);
+        for (const room of jsonRooms) {
+          const col = room._gridCol, row = room._gridRow;
+          if (typeof col === 'number' && typeof row === 'number'
+              && col >= 0 && col < GRID_SIZE && row >= 0 && row < GRID_SIZE) {
+            grid[row][col] = { ...room };
+          }
+        }
+        // Recompute exits from grid adjacency after restore
+        for (let r = 0; r < GRID_SIZE; r++) {
+          for (let c = 0; c < GRID_SIZE; c++) {
+            if (grid[r][c]) grid[r][c].exits = deriveExits(c, r);
+          }
+        }
+        rebuildPosById();
+        setStatus(`Restored ${jsonRooms.length} rooms from saved layout`);
+      } else {
+        // No saved layout — auto-import from graph positions immediately
+        importPositions();
+        return; // importPositions handles fitView/render/status
+      }
+
+      let maxId = 1999;
+      for (const r of jsonRooms) if (r.roomId > maxId) maxId = r.roomId;
+      nextNewId = maxId + 1;
+
+      selectedCell = null;
+      document.getElementById('panel-empty').style.display = '';
+      document.getElementById('editor').style.display = 'none';
+      fitView();
+      render();
+    } catch (err) {
+      alert('Failed to load JSON:\n' + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+function saveJson() {
+  // Build rooms array from grid, including _gridCol/_gridRow for round-trip
+  const out = [];
+  const seen = new Set();
+  for (let row = 0; row < GRID_SIZE; row++) {
+    for (let col = 0; col < GRID_SIZE; col++) {
+      const room = grid[row][col];
+      if (!room) continue;
+      const r = { ...room };
+      r._gridCol = col;
+      r._gridRow = row;
+      // Use stored exits (preserves manual walls); fall back to grid-derived if missing
+      if (!r.exits) r.exits = deriveExits(col, row);
+      // Clean up undefined optional fields
+      if (!r.description) delete r.description;
+      if (r._inferred === undefined) delete r._inferred;
+      if (r._name === undefined) delete r._name;
+      out.push(r);
+      seen.add(r.roomId);
+    }
+  }
+
+  // Include any jsonRooms that aren't on the grid (not yet placed)
+  for (const room of jsonRooms) {
+    if (!seen.has(room.roomId)) out.push({ ...room });
+  }
+
+  const json = JSON.stringify({ rooms: out }, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'world-map.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  setStatus(`Saved ${out.length} rooms to world-map.json`);
+}
+
+function loadBackground(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    const img = new Image();
+    img.onload = () => { bgImage = img; render(); setStatus('Map image loaded'); };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+// ── View ───────────────────────────────────────────────────────────────────────
+function fitView() {
+  const cs = CELL();
+  const W = canvas.width, H = canvas.height;
+  const totalW = GRID_SIZE * cs, totalH = GRID_SIZE * cs;
+  const pad = 20;
+  const s = Math.min((W - pad * 2) / totalW, (H - pad * 2) / totalH);
+  VIEW.scale = s;
+  VIEW.tx = pad + (W - pad * 2 - totalW * s) / 2;
+  VIEW.ty = pad + (H - pad * 2 - totalH * s) / 2;
+  render();
+}
+
+function setStatus(msg) { document.getElementById('status').textContent = msg; }
+
+// ── Colour helpers ─────────────────────────────────────────────────────────────
+function expandHex(hex) {
+  // Expand 3-digit shorthand (#rgb → #rrggbb)
+  if (hex && hex.length === 4)
+    return '#' + hex[1]+hex[1] + hex[2]+hex[2] + hex[3]+hex[3];
+  return hex;
+}
+function hexWithAlpha(hex, alpha) {
+  hex = expandHex(hex);
+  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+function lighten(hex, amt) {
+  // Simple lighten: blend toward white
+  try {
+    hex = expandHex(hex);
+    const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+    const lr = Math.round(r + (255-r)*amt), lg = Math.round(g + (255-g)*amt), lb = Math.round(b + (255-b)*amt);
+    return `rgb(${lr},${lg},${lb})`;
+  } catch { return hex; }
+}
+
+// ── Mouse events ───────────────────────────────────────────────────────────────
+function getCanvasXY(e) {
+  const rect = canvas.getBoundingClientRect();
+  return { cx: e.clientX - rect.left, cy: e.clientY - rect.top };
+}
+
+canvas.addEventListener('mousedown', e => {
+  const { cx, cy } = getCanvasXY(e);
+
+  if (e.button === 2) {
+    // Right click: remove room
+    const cell = hitCell(cx, cy);
+    if (cell) {
+      const { col, row } = cell;
+      if (grid[row][col]) {
+        selectCell(col, row);
+        removeRoom();
+      }
+    }
+    e.preventDefault();
+    return;
+  }
+
+  if (e.button === 1 || (e.button === 0 && e.altKey)) {
+    panning = { startCX: e.clientX, startCY: e.clientY, startTX: VIEW.tx, startTY: VIEW.ty };
+    canvas.style.cursor = 'move';
+    e.preventDefault();
+    return;
+  }
+
+  if (e.button === 0) {
+    const cell = hitCell(cx, cy);
+    if (cell) {
+      selectCell(cell.col, cell.row);
+    } else {
+      panning = { startCX: e.clientX, startCY: e.clientY, startTX: VIEW.tx, startTY: VIEW.ty };
+      canvas.style.cursor = 'move';
+    }
+  }
+});
+
+canvas.addEventListener('mousemove', e => {
+  if (panning) {
+    VIEW.tx = panning.startTX + (e.clientX - panning.startCX);
+    VIEW.ty = panning.startTY + (e.clientY - panning.startCY);
+    render();
+    return;
+  }
+  const { cx, cy } = getCanvasXY(e);
+  const cell = hitCell(cx, cy);
+  if (cell) {
+    const { col, row } = cell;
+    const room = grid[row][col];
+    document.getElementById('coords').textContent =
+      `(${col}, ${row})${room ? '  ' + (room._name ?? room.type) + ' #' + room.roomId : '  empty'}`;
+    canvas.style.cursor = 'cell';
+  } else {
+    document.getElementById('coords').textContent = '';
+    canvas.style.cursor = 'default';
+  }
+});
+
+canvas.addEventListener('mouseup', () => {
+  panning = null;
+  canvas.style.cursor = 'default';
+});
+canvas.addEventListener('mouseleave', () => { panning = null; });
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const { cx, cy } = getCanvasXY(e);
+  const factor = e.deltaY > 0 ? 0.88 : 1.14;
+  const newScale = Math.max(0.1, Math.min(10, VIEW.scale * factor));
+  VIEW.tx = cx - (cx - VIEW.tx) * (newScale / VIEW.scale);
+  VIEW.ty = cy - (cy - VIEW.ty) * (newScale / VIEW.scale);
+  VIEW.scale = newScale;
+  render();
+}, { passive: false });
+
+// ── Keyboard shortcuts ─────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  const inInput = ['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName);
+
+  if (e.key === 'Escape') { selectedCell = null; render(); return; }
+  if ((e.key === 'f' || e.key === 'F') && !inInput) { fitView(); return; }
+  if (e.key === 'Delete' && !inInput && selectedCell) { removeRoom(); return; }
+  if (e.key === 'Enter' && inInput) { applyChanges(); }
+
+  // Arrow keys navigate selection
+  if (!inInput && selectedCell && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) {
+    e.preventDefault();
+    const { col, row } = selectedCell;
+    const moves = { ArrowUp: [0,-1], ArrowDown: [0,1], ArrowLeft: [-1,0], ArrowRight: [1,0] };
+    const [dc, dr] = moves[e.key];
+    const nc = col + dc, nr = row + dr;
+    if (nc >= 0 && nc < GRID_SIZE && nr >= 0 && nr < GRID_SIZE) selectCell(nc, nr);
+  }
+});
+
+// ── Toolbar bindings ───────────────────────────────────────────────────────────
+document.getElementById('btnLoadJson').addEventListener('click', () => document.getElementById('fileJson').click());
+document.getElementById('fileJson').addEventListener('change', e => {
+  if (e.target.files[0]) { loadJson(e.target.files[0]); e.target.value = ''; }
+});
+
+document.getElementById('btnLoadBg').addEventListener('click', () => document.getElementById('fileBg').click());
+document.getElementById('fileBg').addEventListener('change', e => {
+  if (e.target.files[0]) { loadBackground(e.target.files[0]); e.target.value = ''; }
+});
+
+document.getElementById('btnSave').addEventListener('click', saveJson);
+document.getElementById('btnImport').addEventListener('click', importPositions);
+document.getElementById('btnFit').addEventListener('click', () => { fitView(); });
+
+document.getElementById('btnApply').addEventListener('click', applyChanges);
+document.getElementById('btnRemove').addEventListener('click', removeRoom);
+
+document.getElementById('cellSize').addEventListener('change', render);
+document.getElementById('gridSize').addEventListener('change', e => {
+  const newSize = parseInt(e.target.value);
+  if (newSize !== GRID_SIZE) {
+    if (confirm(`Resize grid to ${newSize}×${newSize}? Rooms outside will be lost.`)) {
+      const old = grid;
+      makeGrid(newSize);
+      for (let r = 0; r < Math.min(old.length, newSize); r++) {
+        for (let c = 0; c < Math.min(old[r].length, newSize); c++) {
+          grid[r][c] = old[r][c];
+        }
+      }
+      selectedCell = null;
+      fitView();
+    }
+  }
+});
+
+document.getElementById('chkBgFit').addEventListener('change', render);
+document.getElementById('chkLabels').addEventListener('change', render);
+document.getElementById('chkIcons').addEventListener('change', render);
+
+// ── Icon Picker ────────────────────────────────────────────────────────────────
+(function() {
+  // Build overlay lazily on first open
+  let overlay = null;
+  let built = false;
+
+  function buildPicker() {
+    overlay = document.createElement('div');
+    overlay.id = 'icon-picker-overlay';
+    overlay.style.display = 'none';
+    overlay.innerHTML = `
+      <div id="icon-picker-box">
+        <h3>Pick Icon &nbsp;<small style="color:#667;font-weight:normal">click to select · Esc to close</small></h3>
+        <input id="icon-picker-search" type="text" placeholder="Filter by ID…" autocomplete="off">
+        <div id="icon-picker-grid"></div>
+        <div style="display:flex;gap:8px;margin-top:4px">
+          <button id="ip-cancel" style="flex:1">Cancel</button>
+          <button id="ip-ok" class="active" style="flex:1">OK</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    const grid2 = overlay.querySelector('#icon-picker-grid');
+    const search = overlay.querySelector('#icon-picker-search');
+    let selectedId = null;
+
+    function renderCells(filter) {
+      grid2.innerHTML = '';
+      for (let i = 0; i <= 99; i++) {
+        if (filter && !String(i).includes(filter)) continue;
+        const cell = document.createElement('div');
+        cell.className = 'ip-cell';
+        cell.dataset.id = i;
+        const img = document.createElement('img');
+        img.src = `${ASSETS}/icons/I${i + 101}.png`;
+        img.onerror = () => { cell.style.display = 'none'; };
+        const lbl = document.createElement('span');
+        lbl.textContent = `#${i}`;
+        cell.appendChild(img); cell.appendChild(lbl);
+        cell.addEventListener('click', () => {
+          overlay.querySelectorAll('.ip-cell.selected').forEach(el => el.classList.remove('selected'));
+          cell.classList.add('selected');
+          selectedId = i;
+        });
+        cell.addEventListener('dblclick', () => { selectedId = i; confirm_pick(); });
+        grid2.appendChild(cell);
+      }
+    }
+
+    function confirm_pick() {
+      if (selectedId == null) return;
+      document.getElementById('eIcon').value = selectedId;
+      updateIconPreview(selectedId);
+      close();
+    }
+
+    function close() { overlay.style.display = 'none'; }
+
+    search.addEventListener('input', () => renderCells(search.value.trim()));
+    overlay.querySelector('#ip-cancel').addEventListener('click', close);
+    overlay.querySelector('#ip-ok').addEventListener('click', confirm_pick);
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+    document.addEventListener('keydown', e => {
+      if (overlay.style.display !== 'none' && e.key === 'Escape') close();
+    });
+
+    renderCells('');
+    built = true;
+
+    // Expose open function
+    window._openIconPicker = (currentId) => {
+      selectedId = currentId;
+      search.value = '';
+      renderCells('');
+      // Mark current selection
+      overlay.querySelectorAll('.ip-cell').forEach(el => {
+        el.classList.toggle('selected', parseInt(el.dataset.id) === currentId);
+      });
+      // Scroll to current
+      const cur = overlay.querySelector('.ip-cell.selected');
+      if (cur) cur.scrollIntoView({ block: 'center' });
+      overlay.style.display = 'flex';
+      search.focus();
+    };
+  }
+
+  document.getElementById('btnPickIcon').addEventListener('click', () => {
+    if (!built) buildPicker();
+    const cur = parseInt(document.getElementById('eIcon').value);
+    window._openIconPicker(isNaN(cur) ? null : cur);
+  });
+})();
+
+// ── Auto-load background ────────────────────────────────────────────────────
+(function() {
+  const img = new Image();
+  img.onload = () => { bgImage = img; render(); setStatus('Solaris map loaded — Load world-map.json to begin'); };
+  img.src = `${ASSETS}/maps/solaris_background.png`;
+})();
+
+// Initial render
+resizeCanvas();
+</script>
+</body>
+</html>

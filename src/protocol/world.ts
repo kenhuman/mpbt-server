@@ -110,8 +110,9 @@ export interface Cmd4Options {
    * Location entries (up to 4). Historical name retained to minimize churn.
    * Missing/extra entries are zero-padded → stored as -1 → icon hidden.
    * Only used when sessionFlags & 0x10 is set.
+   * Slots may be `undefined` (i.e. sparse array) to represent no exit in that position.
    */
-  opponents?: OpponentEntry[];
+  opponents?: Array<OpponentEntry | undefined>;
   /**
    * Player callsign string (FUN_0040c0d0 / encodeString format; max 84 bytes).
    * Required when sessionFlags & 0x10 is set.

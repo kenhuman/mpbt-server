@@ -30,12 +30,11 @@ The client reaches the mech selection screen, confirms a mech selection, is redi
 
 ## Game Data
 
-The server reads mech definitions from `mechdata/*.MEC` files and `MPBT.MSG` at startup.
-**These files are not included in this repository** — they are proprietary assets
+The server requires several proprietary data files at runtime.
+**These files are not included in this repository** — they are assets
 of Kesmai Corporation / Electronic Arts and must not be redistributed.
 
-To run the server, copy the following from your own licensed copy of
-**Multiplayer BattleTech: Solaris** into the project root:
+Copy the following from your own licensed copy of **Multiplayer BattleTech: Solaris** into the project root before starting the server (or deploying to a VPS):
 
 ```
 mpbt-server/
@@ -44,10 +43,18 @@ mpbt-server/
     ARC-2K.MEC
     ... (161 files total)
   MPBT.MSG
+  IS.MAP
+  SOLARIS.MAP
 ```
 
-`MPBT.MSG` is the game's string table and is used to resolve the correct mech ID
-indices that the client expects in the cmd 26 mech list packet.
+| File | Purpose | Missing behaviour |
+|------|---------|-------------------|
+| `mechdata/*.MEC` | Mech stats (armor, weapons, speed) for the cmd 26 lobby list and combat bootstrap | **Fatal** — lobby server refuses to start |
+| `MPBT.MSG` | String table used to resolve mech variant IDs | **Fatal** — lobby server refuses to start |
+| `IS.MAP` | Inner Sphere room records (IS travel map) | Non-fatal — IS travel map unavailable |
+| `SOLARIS.MAP` | Solaris room records, names, and coordinates | Non-fatal — falls back to hardcoded 32-room list |
+
+`MPBT_DATA_DIR` can be set in `.env` to point at a directory containing these files if they are not in the project root.
 
 ---
 

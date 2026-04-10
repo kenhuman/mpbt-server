@@ -1,0 +1,2434 @@
+{
+  "rooms": [
+    {
+      "roomId": 1,
+      "_name": "International Sector",
+      "type": "sector",
+      "sector": "international",
+      "icon": 6,
+      "exits": {
+        "north": 2000,
+        "south": null,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 4,
+      "_gridRow": 25
+    },
+    {
+      "roomId": 2,
+      "_name": "Kobe Sector",
+      "type": "sector",
+      "sector": "kobe",
+      "icon": 6,
+      "exits": {
+        "north": 2011,
+        "south": null,
+        "east": 2003,
+        "west": 2007
+      },
+      "_gridCol": 7,
+      "_gridRow": 8
+    },
+    {
+      "roomId": 3,
+      "_name": "Silesia Sector",
+      "type": "sector",
+      "sector": "silesia",
+      "icon": 34,
+      "exits": {
+        "north": 2020,
+        "south": null,
+        "east": 2022,
+        "west": 2012
+      },
+      "_gridCol": 21,
+      "_gridRow": 20
+    },
+    {
+      "roomId": 4,
+      "_name": "Montenegro Sector",
+      "type": "sector",
+      "sector": "montenegro",
+      "icon": 35,
+      "exits": {
+        "north": null,
+        "south": 2051,
+        "east": 2047,
+        "west": 2040
+      },
+      "_gridCol": 18,
+      "_gridRow": 8
+    },
+    {
+      "roomId": 5,
+      "_name": "Cathay Sector",
+      "type": "sector",
+      "sector": "cathay",
+      "icon": 36,
+      "exits": {
+        "north": 2019,
+        "south": 2062,
+        "east": 2057,
+        "west": null
+      },
+      "_gridCol": 14,
+      "_gridRow": 22
+    },
+    {
+      "roomId": 6,
+      "_name": "Black Hills Sector",
+      "type": "sector",
+      "sector": "blackhills",
+      "icon": 37,
+      "exits": {
+        "north": 2067,
+        "south": null,
+        "east": null,
+        "west": 2064
+      },
+      "_gridCol": 8,
+      "_gridRow": 21
+    },
+    {
+      "roomId": 146,
+      "_name": "Solaris Starport",
+      "type": "hub",
+      "sector": "international",
+      "icon": 4,
+      "exits": {
+        "north": null,
+        "south": 2002,
+        "east": 2066,
+        "west": null
+      },
+      "_gridCol": 4,
+      "_gridRow": 21
+    },
+    {
+      "roomId": 147,
+      "_name": "Ishiyama Arena",
+      "type": "arena",
+      "sector": "kobe",
+      "icon": 28,
+      "exits": {
+        "north": 2006,
+        "south": 2077,
+        "east": 2072,
+        "west": 2085
+      },
+      "_gridCol": 10,
+      "_gridRow": 10
+    },
+    {
+      "roomId": 148,
+      "_name": "Government House",
+      "type": "terminal",
+      "sector": "kobe",
+      "icon": 45,
+      "exits": {
+        "north": null,
+        "south": 2005,
+        "east": 2088,
+        "west": null
+      },
+      "_gridCol": 10,
+      "_gridRow": 7
+    },
+    {
+      "roomId": 149,
+      "_name": "White Lotus",
+      "type": "bar",
+      "sector": "kobe",
+      "icon": 26,
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2094,
+        "west": null
+      },
+      "_gridCol": 3,
+      "_gridRow": 7
+    },
+    {
+      "roomId": 150,
+      "_name": "Waterfront",
+      "type": "bar",
+      "sector": "kobe",
+      "icon": 46,
+      "exits": {
+        "north": 2010,
+        "south": null,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 4,
+      "_gridRow": 10
+    },
+    {
+      "roomId": 151,
+      "_name": "Kobe Slums",
+      "type": "street",
+      "sector": "kobe",
+      "icon": 51,
+      "exits": {
+        "north": null,
+        "south": 2011,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 7,
+      "_gridRow": 6
+    },
+    {
+      "roomId": 152,
+      "_name": "Steiner Stadium",
+      "type": "arena",
+      "sector": "silesia",
+      "icon": 29,
+      "exits": {
+        "north": 2027,
+        "south": 2021,
+        "east": null,
+        "west": 2095
+      },
+      "_gridCol": 21,
+      "_gridRow": 17
+    },
+    {
+      "roomId": 153,
+      "_name": "Lyran Building",
+      "type": "terminal",
+      "sector": "silesia",
+      "icon": 17,
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": null,
+        "west": 2103
+      },
+      "_gridCol": 24,
+      "_gridRow": 13
+    },
+    {
+      "roomId": 154,
+      "_name": "Chahar Park",
+      "type": "street",
+      "sector": "silesia",
+      "icon": 18,
+      "exits": {
+        "north": 2026,
+        "south": null,
+        "east": null,
+        "west": 2106
+      },
+      "_gridCol": 25,
+      "_gridRow": 22
+    },
+    {
+      "roomId": 155,
+      "_name": "Riverside",
+      "type": "bar",
+      "sector": "silesia",
+      "icon": 46,
+      "exits": {
+        "north": 2105,
+        "south": 2028,
+        "east": null,
+        "west": 2110
+      },
+      "_gridCol": 21,
+      "_gridRow": 14
+    },
+    {
+      "roomId": 156,
+      "_name": "Black Throne",
+      "type": "street",
+      "sector": "cathay",
+      "icon": 44,
+      "exits": {
+        "north": 2031,
+        "south": null,
+        "east": null,
+        "west": 2124
+      },
+      "_gridCol": 20,
+      "_gridRow": 24
+    },
+    {
+      "roomId": 157,
+      "_name": "Factory",
+      "type": "arena",
+      "sector": "montenegro",
+      "icon": 12,
+      "exits": {
+        "north": null,
+        "south": 2049,
+        "east": 2129,
+        "west": null
+      },
+      "_gridCol": 20,
+      "_gridRow": 6
+    },
+    {
+      "roomId": 158,
+      "_name": "Marik Tower",
+      "type": "terminal",
+      "sector": "montenegro",
+      "icon": 17,
+      "exits": {
+        "north": 2050,
+        "south": 2133,
+        "east": null,
+        "west": 2076
+      },
+      "_gridCol": 16,
+      "_gridRow": 10
+    },
+    {
+      "roomId": 159,
+      "_name": "Allman",
+      "type": "street",
+      "sector": "montenegro",
+      "icon": 1,
+      "exits": {
+        "north": 2048,
+        "south": null,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 20,
+      "_gridRow": 9
+    },
+    {
+      "roomId": 160,
+      "_name": "Riverfront",
+      "type": "street",
+      "sector": "silesia",
+      "icon": 46,
+      "exits": {
+        "north": null,
+        "south": 2112,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 20,
+      "_gridRow": 11
+    },
+    {
+      "roomId": 161,
+      "_name": "Wasteland",
+      "type": "street",
+      "sector": "montenegro",
+      "icon": 25,
+      "exits": {
+        "north": null,
+        "south": 2132,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 24,
+      "_gridRow": 5
+    },
+    {
+      "roomId": 162,
+      "_name": "Jungle",
+      "type": "arena",
+      "sector": "cathay",
+      "icon": 31,
+      "exits": {
+        "north": 2118,
+        "south": 2032,
+        "east": 2098,
+        "west": 2099
+      },
+      "_gridCol": 16,
+      "_gridRow": 17
+    },
+    {
+      "roomId": 163,
+      "_name": "Chancellor's Quarters",
+      "type": "terminal",
+      "sector": "cathay",
+      "icon": 45,
+      "exits": {
+        "north": 2062,
+        "south": null,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 14,
+      "_gridRow": 24
+    },
+    {
+      "roomId": 164,
+      "_name": "Middletown",
+      "type": "street",
+      "sector": "cathay",
+      "icon": 1,
+      "exits": {
+        "north": 2032,
+        "south": 2016,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 16,
+      "_gridRow": 19
+    },
+    {
+      "roomId": 165,
+      "_name": "Rivertown",
+      "type": "street",
+      "sector": "montenegro",
+      "icon": 1,
+      "exits": {
+        "north": 2134,
+        "south": null,
+        "east": 2056,
+        "west": 2084
+      },
+      "_gridCol": 16,
+      "_gridRow": 13
+    },
+    {
+      "roomId": 166,
+      "_name": "Maze",
+      "type": "street",
+      "sector": "silesia",
+      "icon": 50,
+      "exits": {
+        "north": 2115,
+        "south": null,
+        "east": null,
+        "west": 2117
+      },
+      "_gridCol": 17,
+      "_gridRow": 15
+    },
+    {
+      "roomId": 167,
+      "_name": "Davion Arena",
+      "type": "arena",
+      "sector": "silesia",
+      "icon": 32,
+      "exits": {
+        "north": 2123,
+        "south": 2039,
+        "east": 2138,
+        "west": 2139
+      },
+      "_gridCol": 11,
+      "_gridRow": 15
+    },
+    {
+      "roomId": 168,
+      "_name": "Sortek Building",
+      "type": "terminal",
+      "sector": "blackhills",
+      "icon": 17,
+      "exits": {
+        "north": null,
+        "south": 2071,
+        "east": 2143,
+        "west": null
+      },
+      "_gridCol": 5,
+      "_gridRow": 18
+    },
+    {
+      "roomId": 169,
+      "_name": "Guzman Park",
+      "type": "street",
+      "sector": "blackhills",
+      "icon": 18,
+      "exits": {
+        "north": 2142,
+        "south": 2069,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 8,
+      "_gridRow": 17
+    },
+    {
+      "roomId": 170,
+      "_name": "Marina",
+      "type": "bar",
+      "sector": "kobe",
+      "icon": 1,
+      "exits": {
+        "north": 2087,
+        "south": null,
+        "east": null,
+        "west": 2146
+      },
+      "_gridCol": 8,
+      "_gridRow": 12
+    },
+    {
+      "roomId": 171,
+      "_name": "Viewpoint",
+      "type": "street",
+      "sector": "blackhills",
+      "icon": 43,
+      "exits": {
+        "north": 2149,
+        "south": 2145,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 6,
+      "_gridRow": 15
+    },
+    {
+      "roomId": 2000,
+      "type": "street",
+      "sector": "international",
+      "exits": {
+        "north": 2001,
+        "south": 1,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 4,
+      "_gridRow": 24
+    },
+    {
+      "roomId": 2001,
+      "type": "street",
+      "sector": "international",
+      "exits": {
+        "north": 2002,
+        "south": 2000,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 4,
+      "_gridRow": 23
+    },
+    {
+      "roomId": 2002,
+      "type": "street",
+      "sector": "international",
+      "exits": {
+        "north": 146,
+        "south": 2001,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 4,
+      "_gridRow": 22
+    },
+    {
+      "roomId": 2003,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2004,
+        "west": 2
+      },
+      "_gridCol": 8,
+      "_gridRow": 8
+    },
+    {
+      "roomId": 2004,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2005,
+        "west": 2003
+      },
+      "_gridCol": 9,
+      "_gridRow": 8
+    },
+    {
+      "roomId": 2005,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": 148,
+        "south": 2006,
+        "east": 2046,
+        "west": 2004
+      },
+      "_gridCol": 10,
+      "_gridRow": 8
+    },
+    {
+      "roomId": 2006,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": 2005,
+        "south": 147,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 10,
+      "_gridRow": 9
+    },
+    {
+      "roomId": 2007,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2,
+        "west": 2008
+      },
+      "_gridCol": 6,
+      "_gridRow": 8
+    },
+    {
+      "roomId": 2008,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2007,
+        "west": 2009
+      },
+      "_gridCol": 5,
+      "_gridRow": 8
+    },
+    {
+      "roomId": 2009,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": 2094,
+        "south": 2010,
+        "east": 2008,
+        "west": null
+      },
+      "_gridCol": 4,
+      "_gridRow": 8
+    },
+    {
+      "roomId": 2010,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": 2009,
+        "south": 150,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 4,
+      "_gridRow": 9
+    },
+    {
+      "roomId": 2011,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": 151,
+        "south": 2,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 7,
+      "_gridRow": 7
+    },
+    {
+      "roomId": 2012,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": 2029,
+        "east": 3,
+        "west": 2013
+      },
+      "_gridCol": 20,
+      "_gridRow": 20
+    },
+    {
+      "roomId": 2013,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2012,
+        "west": 2014
+      },
+      "_gridCol": 19,
+      "_gridRow": 20
+    },
+    {
+      "roomId": 2014,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2013,
+        "west": 2015
+      },
+      "_gridCol": 18,
+      "_gridRow": 20
+    },
+    {
+      "roomId": 2015,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2014,
+        "west": 2016
+      },
+      "_gridCol": 17,
+      "_gridRow": 20
+    },
+    {
+      "roomId": 2016,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": 164,
+        "south": 2063,
+        "east": 2015,
+        "west": 2017
+      },
+      "_gridCol": 16,
+      "_gridRow": 20
+    },
+    {
+      "roomId": 2017,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2016,
+        "west": 2018
+      },
+      "_gridCol": 15,
+      "_gridRow": 20
+    },
+    {
+      "roomId": 2018,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": null,
+        "south": 2019,
+        "east": 2017,
+        "west": 2033
+      },
+      "_gridCol": 14,
+      "_gridRow": 20
+    },
+    {
+      "roomId": 2019,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": 2018,
+        "south": 5,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 14,
+      "_gridRow": 21
+    },
+    {
+      "roomId": 2020,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": 2021,
+        "south": 3,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 21,
+      "_gridRow": 19
+    },
+    {
+      "roomId": 2021,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": 152,
+        "south": 2020,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 21,
+      "_gridRow": 18
+    },
+    {
+      "roomId": 2022,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2023,
+        "west": 3
+      },
+      "_gridCol": 22,
+      "_gridRow": 20
+    },
+    {
+      "roomId": 2023,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2024,
+        "west": 2022
+      },
+      "_gridCol": 23,
+      "_gridRow": 20
+    },
+    {
+      "roomId": 2024,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2025,
+        "west": 2023
+      },
+      "_gridCol": 24,
+      "_gridRow": 20
+    },
+    {
+      "roomId": 2025,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": 2026,
+        "east": null,
+        "west": 2024
+      },
+      "_gridCol": 25,
+      "_gridRow": 20
+    },
+    {
+      "roomId": 2026,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": 2025,
+        "south": 154,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 25,
+      "_gridRow": 21
+    },
+    {
+      "roomId": 2027,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": 2028,
+        "south": 152,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 21,
+      "_gridRow": 16
+    },
+    {
+      "roomId": 2028,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": 155,
+        "south": 2027,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 21,
+      "_gridRow": 15
+    },
+    {
+      "roomId": 2029,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": 2012,
+        "south": 2030,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 20,
+      "_gridRow": 21
+    },
+    {
+      "roomId": 2030,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": 2029,
+        "south": 2031,
+        "east": 2109,
+        "west": 2061
+      },
+      "_gridCol": 20,
+      "_gridRow": 22
+    },
+    {
+      "roomId": 2031,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": 2030,
+        "south": 156,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 20,
+      "_gridRow": 23
+    },
+    {
+      "roomId": 2032,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": 162,
+        "south": 164,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 16,
+      "_gridRow": 18
+    },
+    {
+      "roomId": 2033,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2018,
+        "west": 2034
+      },
+      "_gridCol": 13,
+      "_gridRow": 20
+    },
+    {
+      "roomId": 2034,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2033,
+        "west": 2035
+      },
+      "_gridCol": 12,
+      "_gridRow": 20
+    },
+    {
+      "roomId": 2035,
+      "type": "street",
+      "sector": "blackhills",
+      "exits": {
+        "north": 2036,
+        "south": null,
+        "east": 2034,
+        "west": null
+      },
+      "_gridCol": 11,
+      "_gridRow": 20
+    },
+    {
+      "roomId": 2036,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": 2037,
+        "south": 2035,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 11,
+      "_gridRow": 19
+    },
+    {
+      "roomId": 2037,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": 2038,
+        "south": 2036,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 11,
+      "_gridRow": 18
+    },
+    {
+      "roomId": 2038,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": 2039,
+        "south": 2037,
+        "east": 2102,
+        "west": null
+      },
+      "_gridCol": 11,
+      "_gridRow": 17
+    },
+    {
+      "roomId": 2039,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": 167,
+        "south": 2038,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 11,
+      "_gridRow": 16
+    },
+    {
+      "roomId": 2040,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 4,
+        "west": 2041
+      },
+      "_gridCol": 17,
+      "_gridRow": 8
+    },
+    {
+      "roomId": 2041,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": 2093,
+        "south": 2050,
+        "east": 2040,
+        "west": 2042
+      },
+      "_gridCol": 16,
+      "_gridRow": 8
+    },
+    {
+      "roomId": 2042,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2041,
+        "west": 2043
+      },
+      "_gridCol": 15,
+      "_gridRow": 8
+    },
+    {
+      "roomId": 2043,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2042,
+        "west": 2044
+      },
+      "_gridCol": 14,
+      "_gridRow": 8
+    },
+    {
+      "roomId": 2044,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2043,
+        "west": 2045
+      },
+      "_gridCol": 13,
+      "_gridRow": 8
+    },
+    {
+      "roomId": 2045,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2044,
+        "west": 2046
+      },
+      "_gridCol": 12,
+      "_gridRow": 8
+    },
+    {
+      "roomId": 2046,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2045,
+        "west": 2005
+      },
+      "_gridCol": 11,
+      "_gridRow": 8
+    },
+    {
+      "roomId": 2047,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2048,
+        "west": 4
+      },
+      "_gridCol": 19,
+      "_gridRow": 8
+    },
+    {
+      "roomId": 2048,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": 2049,
+        "south": 159,
+        "east": null,
+        "west": 2047
+      },
+      "_gridCol": 20,
+      "_gridRow": 8
+    },
+    {
+      "roomId": 2049,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": 157,
+        "south": 2048,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 20,
+      "_gridRow": 7
+    },
+    {
+      "roomId": 2050,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": 2041,
+        "south": 158,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 16,
+      "_gridRow": 9
+    },
+    {
+      "roomId": 2051,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": 4,
+        "south": 2052,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 18,
+      "_gridRow": 9
+    },
+    {
+      "roomId": 2052,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": 2051,
+        "south": 2053,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 18,
+      "_gridRow": 10
+    },
+    {
+      "roomId": 2053,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": 2052,
+        "south": 2054,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 18,
+      "_gridRow": 11
+    },
+    {
+      "roomId": 2054,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": 2053,
+        "south": 2055,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 18,
+      "_gridRow": 12
+    },
+    {
+      "roomId": 2055,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": 2054,
+        "south": null,
+        "east": null,
+        "west": 2056
+      },
+      "_gridCol": 18,
+      "_gridRow": 13
+    },
+    {
+      "roomId": 2056,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2055,
+        "west": 165
+      },
+      "_gridCol": 17,
+      "_gridRow": 13
+    },
+    {
+      "roomId": 2057,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2058,
+        "west": 5
+      },
+      "_gridCol": 15,
+      "_gridRow": 22
+    },
+    {
+      "roomId": 2058,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": 2063,
+        "south": 2128,
+        "east": 2059,
+        "west": 2057
+      },
+      "_gridCol": 16,
+      "_gridRow": 22
+    },
+    {
+      "roomId": 2059,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2060,
+        "west": 2058
+      },
+      "_gridCol": 17,
+      "_gridRow": 22
+    },
+    {
+      "roomId": 2060,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2061,
+        "west": 2059
+      },
+      "_gridCol": 18,
+      "_gridRow": 22
+    },
+    {
+      "roomId": 2061,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2030,
+        "west": 2060
+      },
+      "_gridCol": 19,
+      "_gridRow": 22
+    },
+    {
+      "roomId": 2062,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": 5,
+        "south": 163,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 14,
+      "_gridRow": 23
+    },
+    {
+      "roomId": 2063,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": 2016,
+        "south": 2058,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 16,
+      "_gridRow": 21
+    },
+    {
+      "roomId": 2064,
+      "type": "street",
+      "sector": "blackhills",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 6,
+        "west": 2065
+      },
+      "_gridCol": 7,
+      "_gridRow": 21
+    },
+    {
+      "roomId": 2065,
+      "type": "street",
+      "sector": "blackhills",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2064,
+        "west": 2066
+      },
+      "_gridCol": 6,
+      "_gridRow": 21
+    },
+    {
+      "roomId": 2066,
+      "type": "street",
+      "sector": "international",
+      "exits": {
+        "north": 2070,
+        "south": null,
+        "east": 2065,
+        "west": 146
+      },
+      "_gridCol": 5,
+      "_gridRow": 21
+    },
+    {
+      "roomId": 2067,
+      "type": "street",
+      "sector": "blackhills",
+      "exits": {
+        "north": 2068,
+        "south": 6,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 8,
+      "_gridRow": 20
+    },
+    {
+      "roomId": 2068,
+      "type": "street",
+      "sector": "blackhills",
+      "exits": {
+        "north": 2069,
+        "south": 2067,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 8,
+      "_gridRow": 19
+    },
+    {
+      "roomId": 2069,
+      "type": "street",
+      "sector": "blackhills",
+      "exits": {
+        "north": 169,
+        "south": 2068,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 8,
+      "_gridRow": 18
+    },
+    {
+      "roomId": 2070,
+      "type": "street",
+      "sector": "international",
+      "exits": {
+        "north": 2071,
+        "south": 2066,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 5,
+      "_gridRow": 20
+    },
+    {
+      "roomId": 2071,
+      "type": "street",
+      "sector": "blackhills",
+      "exits": {
+        "north": 168,
+        "south": 2070,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 5,
+      "_gridRow": 19
+    },
+    {
+      "roomId": 2072,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2073,
+        "west": 147
+      },
+      "_gridCol": 11,
+      "_gridRow": 10
+    },
+    {
+      "roomId": 2073,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2074,
+        "west": 2072
+      },
+      "_gridCol": 12,
+      "_gridRow": 10
+    },
+    {
+      "roomId": 2074,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2075,
+        "west": 2073
+      },
+      "_gridCol": 13,
+      "_gridRow": 10
+    },
+    {
+      "roomId": 2075,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2076,
+        "west": 2074
+      },
+      "_gridCol": 14,
+      "_gridRow": 10
+    },
+    {
+      "roomId": 2076,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 158,
+        "west": 2075
+      },
+      "_gridCol": 15,
+      "_gridRow": 10
+    },
+    {
+      "roomId": 2077,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": 147,
+        "south": 2078,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 10,
+      "_gridRow": 11
+    },
+    {
+      "roomId": 2078,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": 2077,
+        "south": 2079,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 10,
+      "_gridRow": 12
+    },
+    {
+      "roomId": 2079,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": 2078,
+        "south": null,
+        "east": 2080,
+        "west": null
+      },
+      "_gridCol": 10,
+      "_gridRow": 13
+    },
+    {
+      "roomId": 2080,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2081,
+        "west": 2079
+      },
+      "_gridCol": 11,
+      "_gridRow": 13
+    },
+    {
+      "roomId": 2081,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2082,
+        "west": 2080
+      },
+      "_gridCol": 12,
+      "_gridRow": 13
+    },
+    {
+      "roomId": 2082,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2083,
+        "west": 2081
+      },
+      "_gridCol": 13,
+      "_gridRow": 13
+    },
+    {
+      "roomId": 2083,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2084,
+        "west": 2082
+      },
+      "_gridCol": 14,
+      "_gridRow": 13
+    },
+    {
+      "roomId": 2084,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 165,
+        "west": 2083
+      },
+      "_gridCol": 15,
+      "_gridRow": 13
+    },
+    {
+      "roomId": 2085,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 147,
+        "west": 2086
+      },
+      "_gridCol": 9,
+      "_gridRow": 10
+    },
+    {
+      "roomId": 2086,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": null,
+        "south": 2087,
+        "east": 2085,
+        "west": null
+      },
+      "_gridCol": 8,
+      "_gridRow": 10
+    },
+    {
+      "roomId": 2087,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": 2086,
+        "south": 170,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 8,
+      "_gridRow": 11
+    },
+    {
+      "roomId": 2088,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2089,
+        "west": 148
+      },
+      "_gridCol": 11,
+      "_gridRow": 7
+    },
+    {
+      "roomId": 2089,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2090,
+        "west": 2088
+      },
+      "_gridCol": 12,
+      "_gridRow": 7
+    },
+    {
+      "roomId": 2090,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2091,
+        "west": 2089
+      },
+      "_gridCol": 13,
+      "_gridRow": 7
+    },
+    {
+      "roomId": 2091,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2092,
+        "west": 2090
+      },
+      "_gridCol": 14,
+      "_gridRow": 7
+    },
+    {
+      "roomId": 2092,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2093,
+        "west": 2091
+      },
+      "_gridCol": 15,
+      "_gridRow": 7
+    },
+    {
+      "roomId": 2093,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": null,
+        "south": 2041,
+        "east": null,
+        "west": 2092
+      },
+      "_gridCol": 16,
+      "_gridRow": 7
+    },
+    {
+      "roomId": 2094,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": null,
+        "south": 2009,
+        "east": null,
+        "west": 149
+      },
+      "_gridCol": 4,
+      "_gridRow": 7
+    },
+    {
+      "roomId": 2095,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 152,
+        "west": 2096
+      },
+      "_gridCol": 20,
+      "_gridRow": 17
+    },
+    {
+      "roomId": 2096,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2095,
+        "west": 2097
+      },
+      "_gridCol": 19,
+      "_gridRow": 17
+    },
+    {
+      "roomId": 2097,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2096,
+        "west": 2098
+      },
+      "_gridCol": 18,
+      "_gridRow": 17
+    },
+    {
+      "roomId": 2098,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2097,
+        "west": 162
+      },
+      "_gridCol": 17,
+      "_gridRow": 17
+    },
+    {
+      "roomId": 2099,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 162,
+        "west": 2100
+      },
+      "_gridCol": 15,
+      "_gridRow": 17
+    },
+    {
+      "roomId": 2100,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2099,
+        "west": 2101
+      },
+      "_gridCol": 14,
+      "_gridRow": 17
+    },
+    {
+      "roomId": 2101,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2100,
+        "west": 2102
+      },
+      "_gridCol": 13,
+      "_gridRow": 17
+    },
+    {
+      "roomId": 2102,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2101,
+        "west": 2038
+      },
+      "_gridCol": 12,
+      "_gridRow": 17
+    },
+    {
+      "roomId": 2103,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 153,
+        "west": 2104
+      },
+      "_gridCol": 23,
+      "_gridRow": 13
+    },
+    {
+      "roomId": 2104,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2103,
+        "west": 2105
+      },
+      "_gridCol": 22,
+      "_gridRow": 13
+    },
+    {
+      "roomId": 2105,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": 155,
+        "east": 2104,
+        "west": null
+      },
+      "_gridCol": 21,
+      "_gridRow": 13
+    },
+    {
+      "roomId": 2106,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 154,
+        "west": 2107
+      },
+      "_gridCol": 24,
+      "_gridRow": 22
+    },
+    {
+      "roomId": 2107,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2106,
+        "west": 2108
+      },
+      "_gridCol": 23,
+      "_gridRow": 22
+    },
+    {
+      "roomId": 2108,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2107,
+        "west": 2109
+      },
+      "_gridCol": 22,
+      "_gridRow": 22
+    },
+    {
+      "roomId": 2109,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2108,
+        "west": 2030
+      },
+      "_gridCol": 21,
+      "_gridRow": 22
+    },
+    {
+      "roomId": 2110,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": 2111,
+        "south": null,
+        "east": 155,
+        "west": 2113
+      },
+      "_gridCol": 20,
+      "_gridRow": 14
+    },
+    {
+      "roomId": 2111,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": 2112,
+        "south": 2110,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 20,
+      "_gridRow": 13
+    },
+    {
+      "roomId": 2112,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": 160,
+        "south": 2111,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 20,
+      "_gridRow": 12
+    },
+    {
+      "roomId": 2113,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2110,
+        "west": 2114
+      },
+      "_gridCol": 19,
+      "_gridRow": 14
+    },
+    {
+      "roomId": 2114,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2113,
+        "west": 2115
+      },
+      "_gridCol": 18,
+      "_gridRow": 14
+    },
+    {
+      "roomId": 2115,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": 166,
+        "east": 2114,
+        "west": 2116
+      },
+      "_gridCol": 17,
+      "_gridRow": 14
+    },
+    {
+      "roomId": 2116,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": null,
+        "south": 2117,
+        "east": 2115,
+        "west": 2119
+      },
+      "_gridCol": 16,
+      "_gridRow": 14
+    },
+    {
+      "roomId": 2117,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": 2116,
+        "south": 2118,
+        "east": 166,
+        "west": 2135
+      },
+      "_gridCol": 16,
+      "_gridRow": 15
+    },
+    {
+      "roomId": 2118,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": 2117,
+        "south": 162,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 16,
+      "_gridRow": 16
+    },
+    {
+      "roomId": 2119,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2116,
+        "west": 2120
+      },
+      "_gridCol": 15,
+      "_gridRow": 14
+    },
+    {
+      "roomId": 2120,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2119,
+        "west": 2121
+      },
+      "_gridCol": 14,
+      "_gridRow": 14
+    },
+    {
+      "roomId": 2121,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2120,
+        "west": 2122
+      },
+      "_gridCol": 13,
+      "_gridRow": 14
+    },
+    {
+      "roomId": 2122,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2121,
+        "west": 2123
+      },
+      "_gridCol": 12,
+      "_gridRow": 14
+    },
+    {
+      "roomId": 2123,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": 167,
+        "east": 2122,
+        "west": null
+      },
+      "_gridCol": 11,
+      "_gridRow": 14
+    },
+    {
+      "roomId": 2124,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 156,
+        "west": 2125
+      },
+      "_gridCol": 19,
+      "_gridRow": 24
+    },
+    {
+      "roomId": 2125,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2124,
+        "west": 2126
+      },
+      "_gridCol": 18,
+      "_gridRow": 24
+    },
+    {
+      "roomId": 2126,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2125,
+        "west": 2127
+      },
+      "_gridCol": 17,
+      "_gridRow": 24
+    },
+    {
+      "roomId": 2127,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": 2128,
+        "south": null,
+        "east": 2126,
+        "west": null
+      },
+      "_gridCol": 16,
+      "_gridRow": 24
+    },
+    {
+      "roomId": 2128,
+      "type": "street",
+      "sector": "cathay",
+      "exits": {
+        "north": 2058,
+        "south": 2127,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 16,
+      "_gridRow": 23
+    },
+    {
+      "roomId": 2129,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2130,
+        "west": 157
+      },
+      "_gridCol": 21,
+      "_gridRow": 6
+    },
+    {
+      "roomId": 2130,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2131,
+        "west": 2129
+      },
+      "_gridCol": 22,
+      "_gridRow": 6
+    },
+    {
+      "roomId": 2131,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2132,
+        "west": 2130
+      },
+      "_gridCol": 23,
+      "_gridRow": 6
+    },
+    {
+      "roomId": 2132,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": 161,
+        "south": null,
+        "east": null,
+        "west": 2131
+      },
+      "_gridCol": 24,
+      "_gridRow": 6
+    },
+    {
+      "roomId": 2133,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": 158,
+        "south": 2134,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 16,
+      "_gridRow": 11
+    },
+    {
+      "roomId": 2134,
+      "type": "street",
+      "sector": "montenegro",
+      "exits": {
+        "north": 2133,
+        "south": 165,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 16,
+      "_gridRow": 12
+    },
+    {
+      "roomId": 2135,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2117,
+        "west": 2136
+      },
+      "_gridCol": 15,
+      "_gridRow": 15
+    },
+    {
+      "roomId": 2136,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2135,
+        "west": 2137
+      },
+      "_gridCol": 14,
+      "_gridRow": 15
+    },
+    {
+      "roomId": 2137,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2136,
+        "west": 2138
+      },
+      "_gridCol": 13,
+      "_gridRow": 15
+    },
+    {
+      "roomId": 2138,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2137,
+        "west": 167
+      },
+      "_gridCol": 12,
+      "_gridRow": 15
+    },
+    {
+      "roomId": 2139,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 167,
+        "west": 2140
+      },
+      "_gridCol": 10,
+      "_gridRow": 15
+    },
+    {
+      "roomId": 2140,
+      "type": "street",
+      "sector": "silesia",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 2139,
+        "west": 2141
+      },
+      "_gridCol": 9,
+      "_gridRow": 15
+    },
+    {
+      "roomId": 2141,
+      "type": "street",
+      "sector": "blackhills",
+      "exits": {
+        "north": null,
+        "south": 2142,
+        "east": 2140,
+        "west": null
+      },
+      "_gridCol": 8,
+      "_gridRow": 15
+    },
+    {
+      "roomId": 2142,
+      "type": "street",
+      "sector": "blackhills",
+      "exits": {
+        "north": 2141,
+        "south": 169,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 8,
+      "_gridRow": 16
+    },
+    {
+      "roomId": 2143,
+      "type": "street",
+      "sector": "blackhills",
+      "exits": {
+        "north": 2144,
+        "south": null,
+        "east": null,
+        "west": 168
+      },
+      "_gridCol": 6,
+      "_gridRow": 18
+    },
+    {
+      "roomId": 2144,
+      "type": "street",
+      "sector": "blackhills",
+      "exits": {
+        "north": 2145,
+        "south": 2143,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 6,
+      "_gridRow": 17
+    },
+    {
+      "roomId": 2145,
+      "type": "street",
+      "sector": "blackhills",
+      "exits": {
+        "north": 171,
+        "south": 2144,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 6,
+      "_gridRow": 16
+    },
+    {
+      "roomId": 2146,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": null,
+        "south": null,
+        "east": 170,
+        "west": 2147
+      },
+      "_gridCol": 7,
+      "_gridRow": 12
+    },
+    {
+      "roomId": 2147,
+      "type": "street",
+      "sector": "kobe",
+      "exits": {
+        "north": null,
+        "south": 2148,
+        "east": 2146,
+        "west": null
+      },
+      "_gridCol": 6,
+      "_gridRow": 12
+    },
+    {
+      "roomId": 2148,
+      "type": "street",
+      "sector": "blackhills",
+      "exits": {
+        "north": 2147,
+        "south": 2149,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 6,
+      "_gridRow": 13
+    },
+    {
+      "roomId": 2149,
+      "type": "street",
+      "sector": "blackhills",
+      "exits": {
+        "north": 2148,
+        "south": 171,
+        "east": null,
+        "west": null
+      },
+      "_gridCol": 6,
+      "_gridRow": 14
+    }
+  ]
+}

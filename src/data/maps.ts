@@ -8,6 +8,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 
 export interface MapBounds {
   x1: number;
@@ -149,4 +150,158 @@ export function parseMapFile(filePath: string, source = path.basename(filePath).
     remainingOffset: offset,
     remainingBytes: buf.length - offset,
   };
+}
+
+// ── World-room abstraction ─────────────────────────────────────────────────
+
+/**
+ * A single room entry derived from a parsed MAP file, suitable for use as
+ * the server-side room model.
+ *
+ * NOTE: centreX/centreY are pixel positions on the visual travel-map bitmap
+ * used by the client's Cmd43 (Solaris map) UI.  They do NOT encode room-to-room
+ * connections — those were server-side data in the original game and have not
+ * yet been RE'd.
+ */
+export interface WorldRoom {
+  roomId: number;
+  name: string;
+  /** Raw flags word from the map record (faction / type; exact semantics TBD). */
+  flags: number;
+  /**
+   * Pixel X position on the visual travel-map bitmap (midpoint of the record's
+   * bounding box).  Visual use only — not a navigation coordinate.
+   */
+  centreX: number;
+  /**
+   * Pixel Y position on the visual travel-map bitmap (midpoint of the record's
+   * bounding box).  Visual use only — not a navigation coordinate.
+   */
+  centreY: number;
+  /** 0-based position in the SOLARIS.MAP room list (used as scene-slot index). */
+  sceneIndex: number;
+}
+
+function projectRoot(): string {
+  // __dirname equiv: src/data/ → ../../ = project root
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(dir, '../../');
+}
+
+function findMapFile(filename: string): string | undefined {
+  const root = projectRoot();
+  const dirs = [
+    process.env['MPBT_DATA_DIR'],
+    root,
+    process.cwd(),
+    path.resolve(root, '..'),
+    path.resolve(root, 'research'),
+  ].filter((d): d is string => Boolean(d));
+
+  for (const dir of dirs) {
+    const candidate = path.join(dir, filename);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+/**
+ * Load the SOLARIS.MAP room table and return it as an ordered WorldRoom array.
+ *
+ * Returns `null` if SOLARIS.MAP cannot be found — callers should warn and fall
+ * back to a hardcoded room list so the server still starts without the
+ * proprietary assets.
+ *
+ * Throws if the file is found but fails to parse (data corruption).
+ *
+ * @param filePath  Optional explicit path; omit to search default locations.
+ */
+export function loadSolarisRooms(filePath?: string): WorldRoom[] | null {
+  const resolved = filePath ?? findMapFile('SOLARIS.MAP');
+  if (!resolved) return null;
+
+  const parsed = parseMapFile(resolved, 'SOLARIS.MAP');
+  return parsed.rooms.map((room, index): WorldRoom => ({
+    roomId:     room.roomId,
+    name:       room.name,
+    flags:      room.flags,
+    centreX:    (room.bounds.x1 + room.bounds.x2) / 2,
+    centreY:    (room.bounds.y1 + room.bounds.y2) / 2,
+    sceneIndex: index,
+  }));
+}
+
+// ── World map (navigation graph) ───────────────────────────────────────────
+
+/**
+ * Room type tags used in world-map.json.
+ * bar | arena | hub | terminal | bank | street | sector | path
+ */
+export type RoomType = 'bar' | 'arena' | 'hub' | 'terminal' | 'bank' | 'street' | 'sector' | 'path';
+
+/** One entry from world-map.json, representing navigation data for a single room. */
+export interface WorldMapRoom {
+  roomId: number;
+  /** Human-readable room name (_name or name field from the JSON). */
+  name?: string;
+  sector: string;
+  type: RoomType;
+  /**
+   * Location icon ID sent in Cmd4 mechId field.
+   * null = not yet known; server falls back to scene-slot index.
+   */
+  icon: number | null;
+  /** Cardinal exits.  null = no exit in that direction.  Values are roomIds. */
+  exits: {
+    north: number | null;
+    south: number | null;
+    east:  number | null;
+    west:  number | null;
+  };
+}
+
+/** Parsed world-map.json. */
+export interface WorldMap {
+  rooms: WorldMapRoom[];
+}
+
+/**
+ * Load world-map.json from the project root (or MPBT_DATA_DIR).
+ *
+ * Returns `null` if the file is absent — callers fall back to provisional
+ * linear topology.  Throws if the file exists but is malformed JSON.
+ */
+export function loadWorldMap(filePath?: string): WorldMap | null {
+  const resolved = filePath ?? findMapFile('world-map.json');
+  if (!resolved) return null;
+
+  const raw = fs.readFileSync(resolved, 'utf8');
+  const parsed = JSON.parse(raw) as { rooms?: unknown };
+  if (!Array.isArray(parsed.rooms)) {
+    throw new Error('world-map.json: "rooms" must be an array');
+  }
+
+  const rooms: WorldMapRoom[] = (parsed.rooms as Record<string, unknown>[]).map((r, i) => {
+    if (typeof r['roomId'] !== 'number') {
+      throw new Error(`world-map.json: rooms[${i}] missing numeric roomId`);
+    }
+    const exits = (r['exits'] ?? {}) as Record<string, unknown>;
+    return {
+      roomId: r['roomId'] as number,
+      name:   typeof r['_name'] === 'string' ? r['_name'] as string
+              : typeof r['name']  === 'string' ? r['name']  as string
+              : undefined,
+      sector: String(r['sector'] ?? ''),
+      type:   String(r['type']   ?? 'street') as RoomType,
+      icon:   typeof r['icon'] === 'number' ? r['icon'] as number : null,
+      exits: {
+        north: typeof exits['north'] === 'number' ? exits['north'] as number : null,
+        south: typeof exits['south'] === 'number' ? exits['south'] as number : null,
+        east:  typeof exits['east']  === 'number' ? exits['east']  as number : null,
+        west:  typeof exits['west']  === 'number' ? exits['west']  as number : null,
+      },
+    };
+  });
+
+  return { rooms };
 }
