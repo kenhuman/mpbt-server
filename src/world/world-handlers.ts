@@ -935,7 +935,8 @@ export function handleMechPickerCmd7(
     }
     const chassis = session.mechPickerChassis ?? '';
     const variants = WORLD_MECHS.filter(mech => getMechChassis(mech.typeString) === chassis);
-    const chosen = variants[selection - 1];
+    const selectedSlot = selection - 1;
+    const chosen = variants.find(mech => mech.slot === selectedSlot);
     if (!chosen) {
       send(
         session.socket,
