@@ -44,7 +44,6 @@ import {
 } from './protocol/game.js';
 import {
   buildCmd3BroadcastPacket,
-  buildCmd4SceneInitPacket,
   buildCmd5CursorNormalPacket,
   buildCmd6CursorBusyPacket,
   buildCmd10RoomPresenceSyncPacket,

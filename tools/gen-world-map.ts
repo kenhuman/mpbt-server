@@ -447,6 +447,11 @@ function main(): void {
     if (argv[i] === '--scale') scale   = parseInt(argv[++i], 10);
   }
 
+  if (!Number.isFinite(scale) || scale <= 0 || !Number.isInteger(scale)) {
+    process.stderr.write(`ERROR: --scale must be a positive integer (got: ${scale})\n`);
+    process.exit(1);
+  }
+
   mapPath ??= findSolarisMap();
   if (!mapPath) {
     process.stderr.write('ERROR: SOLARIS.MAP not found. Use --map PATH\n');

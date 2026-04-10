@@ -136,6 +136,24 @@ try {
   process.stderr.write(`[world] WARNING: failed to parse world-map.json: ${msg}\n`);
 }
 
+// Extend SOLARIS_ROOM_BY_ID with synthetic WorldRoom entries for any generated
+// rooms in world-map.json (roomId >= 1000) that are not in SOLARIS.MAP.
+// This ensures getSolarisRoomName()/getSolarisSceneIndex() return correct data
+// for intermediate rooms rather than falling back to DEFAULT_MAP_ROOM_ID.
+let _nextSynthSceneIndex = SOLARIS_ROOM_BY_ID.size;
+for (const [id, mapRoom] of worldMapByRoomId) {
+  if (!SOLARIS_ROOM_BY_ID.has(id)) {
+    SOLARIS_ROOM_BY_ID.set(id, {
+      roomId:     id,
+      name:       mapRoom.name ?? `Room ${id}`,
+      flags:      0,
+      centreX:    0,
+      centreY:    0,
+      sceneIndex: _nextSynthSceneIndex++,
+    });
+  }
+}
+
 // ── Room helper functions ─────────────────────────────────────────────────────
 
 export function getSolarisRoomInfo(roomId: number): WorldRoom {

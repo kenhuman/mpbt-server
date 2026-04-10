@@ -242,6 +242,8 @@ export type RoomType = 'bar' | 'arena' | 'hub' | 'terminal' | 'bank' | 'street' 
 /** One entry from world-map.json, representing navigation data for a single room. */
 export interface WorldMapRoom {
   roomId: number;
+  /** Human-readable room name (_name or name field from the JSON). */
+  name?: string;
   sector: string;
   type: RoomType;
   /**
@@ -286,6 +288,9 @@ export function loadWorldMap(filePath?: string): WorldMap | null {
     const exits = (r['exits'] ?? {}) as Record<string, unknown>;
     return {
       roomId: r['roomId'] as number,
+      name:   typeof r['_name'] === 'string' ? r['_name'] as string
+              : typeof r['name']  === 'string' ? r['name']  as string
+              : undefined,
       sector: String(r['sector'] ?? ''),
       type:   String(r['type']   ?? 'street') as RoomType,
       icon:   typeof r['icon'] === 'number' ? r['icon'] as number : null,

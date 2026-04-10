@@ -743,7 +743,21 @@ function applyChanges() {
     updateNeighbourExits(col, row);
   } else {
     // Update existing room — preserve manually-set exits
-    room.roomId      = idVal > 0 ? idVal : room.roomId;
+    const oldRoomId = room.roomId;
+    const newRoomId = idVal > 0 ? idVal : room.roomId;
+    // If the roomId changed, update every room whose exits referenced the old ID.
+    if (newRoomId !== oldRoomId) {
+      for (let r = 0; r < GRID_SIZE; r++) {
+        for (let c = 0; c < GRID_SIZE; c++) {
+          const other = grid[r][c];
+          if (!other?.exits) continue;
+          for (const dir of Object.keys(other.exits)) {
+            if (other.exits[dir] === oldRoomId) other.exits[dir] = newRoomId;
+          }
+        }
+      }
+    }
+    room.roomId      = newRoomId;
     room._name       = name || undefined;
     room.description = desc || undefined;
     room.type        = type;
@@ -907,6 +921,8 @@ function importPositions() {
   // Any exit whose target isn't exactly 1 cell away is a cycle back-edge that
   // can't be honoured in a 2D grid.  Remove both directions so the player must
   // take the longer road path instead of a phantom shortcut.
+  // Rebuild posById first so it reflects the newly placed rooms.
+  rebuildPosById();
   let pruned = 0;
   const OPP = { north:'south', south:'north', east:'west', west:'east' };
   for (let row = 0; row < GRID_SIZE; row++) {

@@ -241,10 +241,18 @@ export function buildSceneInitForSession(session: ClientSession) {
       sessionFlags:     0x30 | exitMask,
       playerScoreSlot:  sceneIndex,
       playerMechId:     getSolarisRoomIcon(roomId),
-      opponents:        slottedExits.map(exitRoomId => {
-        if (exitRoomId === null) return null as unknown as { type: number; mechId: number };
-        return { type: getSolarisSceneIndex(exitRoomId), mechId: getSolarisRoomIcon(exitRoomId) };
-      }),
+      opponents:        (() => {
+        // Build a 4-slot sparse array: set only slots with a real exit so that
+        // buildCmd4Args treats absent indices as "no location" (icon hidden).
+        const arr: Array<{ type: number; mechId: number }> = [];
+        for (let slot = 0; slot < slottedExits.length; slot++) {
+          const exitRoomId = slottedExits[slot];
+          if (exitRoomId !== null) {
+            arr[slot] = { type: getSolarisSceneIndex(exitRoomId), mechId: getSolarisRoomIcon(exitRoomId) };
+          }
+        }
+        return arr;
+      })(),
       callsign:         getDisplayName(session),
       sceneName:        getSolarisRoomName(roomId),
       // The client special-cases the first Cmd4 option button (0x100) as local Help.
