@@ -93,6 +93,10 @@ const JUMP_JET_FUEL_MAX = 100;
 const JUMP_JET_FUEL_DRAIN_PER_TICK = 8;
 /** Grounded jump-jet fuel regen applied on each movement frame. */
 const JUMP_JET_FUEL_REGEN_PER_FRAME = 2;
+/** Passive grounded jump-jet fuel regen interval (ms). */
+const JUMP_JET_FUEL_REGEN_INTERVAL_MS = 500;
+/** Passive grounded jump-jet fuel regen amount per interval tick. */
+const JUMP_JET_FUEL_REGEN_PER_TICK = 4;
 /** Max age for correlating cmd12/action0 to the following cmd10 shot frame. */
 const FIRE_ACTION_WINDOW_MS = 1_000;
 /** Interval (ms) at which the scripted bot fires back at the player. */
@@ -359,6 +363,10 @@ export function sendCombatBootstrapSequence(
     clearInterval(session.combatJumpTimer);
     session.combatJumpTimer = undefined;
   }
+  if (session.combatJumpFuelRegenTimer !== undefined) {
+    clearInterval(session.combatJumpFuelRegenTimer);
+    session.combatJumpFuelRegenTimer = undefined;
+  }
   session.combatJumpAltitude = 0;
   session.combatJumpFuel = JUMP_JET_FUEL_MAX;
   session.botHealth    = BOT_INITIAL_HEALTH;
@@ -472,6 +480,18 @@ export function sendCombatBootstrapSequence(
     );
   }, 1000);
   session.botPositionTimer.unref();
+
+  // Passive jump fuel regeneration while grounded/idle.
+  session.combatJumpFuelRegenTimer = setInterval(() => {
+    if (session.socket.destroyed || !session.socket.writable) return;
+    const before = session.combatJumpFuel ?? JUMP_JET_FUEL_MAX;
+    regenJumpFuelIfGrounded(session);
+    const after = session.combatJumpFuel ?? before;
+    if (after !== before) {
+      connLog.debug('[world/combat] jump fuel regen: %d -> %d', before, after);
+    }
+  }, JUMP_JET_FUEL_REGEN_INTERVAL_MS);
+  session.combatJumpFuelRegenTimer.unref();
 
   // Bot fires back at the player every BOT_FIRE_INTERVAL_MS milliseconds.
   // Stops once server-side playerHealth estimate reaches 0 (client handles

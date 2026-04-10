@@ -62,6 +62,8 @@ export interface ClientSession {
   botFireTimer?: ReturnType<typeof setInterval>;
   /** Repeating setInterval that drives prototype jump-jet ascent/descent updates. */
   combatJumpTimer?: ReturnType<typeof setInterval>;
+  /** Repeating setInterval that regenerates jump-jet fuel while grounded. */
+  combatJumpFuelRegenTimer?: ReturnType<typeof setInterval>;
   /** Scripted bot hit points for the current single-client combat prototype. */
   botHealth?: number;
   /**
