@@ -643,6 +643,9 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     if (session.botFireTimer !== undefined) {
       clearInterval(session.botFireTimer);
     }
+    if (session.combatJumpTimer !== undefined) {
+      clearInterval(session.combatJumpTimer);
+    }
     // Reset combat per-session counters so a reconnect starts fresh.
     session.botHealth    = undefined;
     session.playerHealth = undefined;
