@@ -95,7 +95,7 @@ function readMecFields(mecPath: string, nameLower: string): { mecSpeed: number; 
   const buf = Buffer.from(raw); // mutable copy
   decryptMec(buf, nameLower);
   return {
-    mecSpeed:       buf.readInt16LE(0x16),
+    mecSpeed:       buf.readUInt16LE(0x16),
     extraCritCount: buf.readInt16LE(0x3c),
   };
 }
