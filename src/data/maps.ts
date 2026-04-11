@@ -180,6 +180,8 @@ export interface WorldRoom {
   centreY: number;
   /** 0-based position in the SOLARIS.MAP room list (used as scene-slot index). */
   sceneIndex: number;
+  /** Flavor text from SOLARIS.MAP; empty string when no description is available. */
+  description: string;
 }
 
 function projectRoot(): string {
@@ -228,6 +230,7 @@ export function loadSolarisRooms(filePath?: string): WorldRoom[] | null {
     centreX:    (room.bounds.x1 + room.bounds.x2) / 2,
     centreY:    (room.bounds.y1 + room.bounds.y2) / 2,
     sceneIndex: index,
+    description: room.description,
   }));
 }
 
