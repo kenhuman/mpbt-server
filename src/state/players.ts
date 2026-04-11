@@ -149,6 +149,15 @@ export interface ClientSession {
   combatMaxSpeedMag?: number;
   /** Per-mech walk speedMag (mec_speed * 300), set at combat bootstrap. */
   combatWalkSpeedMag?: number;
+  /**
+   * True while a KP5 stopping intent is inferred from clientSpeed trend in Cmd9.
+   * When set, the Cmd65 echo sends speedMag=0 so actor+0x372 is driven to 0 by
+   * every echo cycle — not just the brief window between key-event callbacks.
+   * This allows physics drag to fully decelerate the mech.
+   * Cleared when clientSpeed rises again (new KP8 acceleration) or when the
+   * mech fully stops and Cmd8 reports clientSpeed=0.
+   */
+  combatIntentStop?: boolean;
 
   // ── 3-step mech picker state ──────────────────────────────────────────────
 
