@@ -69,7 +69,6 @@ import {
   PERSONNEL_MORE_ID,
   SOLARIS_TRAVEL_CONTEXT_ID,
   getSolarisRoomName,
-  getSolarisRoomDescription,
   setSessionRoomPosition,
   worldMapByRoomId,
 } from './world/world-data.js';
@@ -593,12 +592,6 @@ function sendWorldInitSequence(
   // Cmd3 — TextBroadcast: welcome message. g_chatReady is set to 1 by Cmd4, so
   // this is the earliest point at which Cmd3 will be displayed by the client.
   send(socket, buildCmd3BroadcastPacket(WELCOME_TEXT, nextSeq(session)), capture, 'CMD3_WELCOME');
-
-  // Cmd3 — TextBroadcast: starting room description (Solaris Starport).
-  const startDesc = getSolarisRoomDescription(session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID);
-  if (startDesc) {
-    send(socket, buildCmd3BroadcastPacket(startDesc, nextSeq(session)), capture, 'CMD3_ROOM_DESCRIPTION');
-  }
 
   // Cmd5 — CursorNormal: restore the arrow cursor.
   send(socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');

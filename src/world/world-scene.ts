@@ -285,7 +285,12 @@ export function buildSceneInitForSession(session: ClientSession) {
         return arr;
       })(),
       callsign:         getDisplayName(session),
-      sceneName:        getSolarisRoomName(roomId),
+      sceneName:        (() => {
+        const name = getSolarisRoomName(roomId);
+        const desc = getSolarisRoomDescription(roomId);
+        // 0x5C (\) is a hard line-break in both FUN_00416710 and FUN_00431320
+        return desc ? `${name}\x5c${desc}` : name;
+      })(),
       arenaOptions,
     },
     nextSeq(session),
@@ -316,16 +321,6 @@ export function sendSceneRefresh(
     capture,
     'CMD3_TRAVEL_COMPLETE',
   );
-
-  const desc = getSolarisRoomDescription(session.worldMapRoomId ?? 0);
-  if (desc) {
-    send(
-      session.socket,
-      buildCmd3BroadcastPacket(desc, nextSeq(session)),
-      capture,
-      'CMD3_ROOM_DESCRIPTION',
-    );
-  }
 
   send(session.socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
 }
