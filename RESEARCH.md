@@ -1428,7 +1428,10 @@ are silently discarded if `g_chatReady == 0`.
 [byte × 4: opp_type + 1]       0x21 = "no opponent" for all 4 slots
 [B85_1 × 4: opp_mech_id + 1]  0x2121 = "no opponent" for all 4
 [string: callsign]             player display name
-[string: scene_name]           "Solaris Arena"
+[string: scene_name]           "Solaris Arena" — may embed `\x5C` (0x5C) as a hard
+                               line-break; `FUN_00431320` and `FUN_00416710` both
+                               treat 0x5C as an explicit newline, allowing multi-line
+                               text (e.g. room description) below the scene title.
 [byte: arena_option_count]     0 → 2D world mode, no arena buttons
 ```
 
@@ -1531,7 +1534,7 @@ Confirmed correct order for entering the 2D game world with no arena slots:
 
 ```
 Server → Client: Cmd6  CursorBusy      (hourglass)
-Server → Client: Cmd4  SceneInit       (world frame; arena_count=0 → 2D mode)
+Server → Client: Cmd4  SceneInit       (world frame; sceneName = title + \x5C + room desc)
 Server → Client: Cmd9  RoomRoster      (count=0; sets ready flag)
 Server → Client: Cmd10 RoomPresence    (self slot + sentinel; empty room)
 Server → Client: Cmd3  TextBroadcast   (room description / welcome message)
