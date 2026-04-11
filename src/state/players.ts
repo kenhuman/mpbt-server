@@ -60,6 +60,10 @@ export interface ClientSession {
   botPositionTimer?: ReturnType<typeof setInterval>;
   /** Repeating setInterval that sends Cmd67 retaliatory damage to the player during combat. */
   botFireTimer?: ReturnType<typeof setInterval>;
+  /** Repeating setInterval that drives prototype jump-jet ascent/descent updates. */
+  combatJumpTimer?: ReturnType<typeof setInterval>;
+  /** Repeating setInterval that regenerates jump-jet fuel while grounded. */
+  combatJumpFuelRegenTimer?: ReturnType<typeof setInterval>;
   /** Scripted bot hit points for the current single-client combat prototype. */
   botHealth?: number;
   /**
@@ -120,6 +124,9 @@ export interface ClientSession {
    */
   selectedMechSlot?: number;
 
+  /** Optional scripted combat verification mode consumed on the next /fight bootstrap. */
+  combatVerificationMode?: 'autowin' | 'autolose' | 'dmglocal' | 'dmgbot' | 'strictfire';
+
   /**
    * Pending mech slot chosen in the mech-select dialog, held until the
    * player confirms their selection (cmd-7 confirm reply).
@@ -145,6 +152,25 @@ export interface ClientSession {
    * This is a server-side estimate only; real fuel/arc physics remain unknown.
    */
   combatJumpAltitude?: number;
+  /** Prototype jump-jet fuel percentage (0..100). */
+  combatJumpFuel?: number;
+  /** Timestamp (ms) of the last cmd12/action 0 fire trigger frame from client. */
+  lastCombatFireActionAt?: number;
+  /** If true, cmd10 weapon-fire frames are accepted only after cmd12/action0. */
+  combatRequireAction0ForFire?: boolean;
+  /** Count of cmd10 weapon-fire frames accepted in the current combat session. */
+  combatShotsAccepted?: number;
+  /** Count of cmd10 weapon-fire frames rejected by the strict action0 gate. */
+  combatShotsRejected?: number;
+  /** Count of cmd10 shots accepted without a recent cmd12/action0 gate (relaxed mode). */
+  combatShotsUngatedAccepted?: number;
+  /**
+   * Mech ID override for the scripted bot opponent.  Set via `/botmech <id>`;
+   * used instead of the player's own mech when bootstrapping combat.
+   */
+  combatBotMechId?: number;
+  /** Wall-clock timestamp (Date.now()) when the current combat bootstrap was sent. */
+  combatStartAt?: number;
   /** Per-mech run/max speedMag cap (round(mec_speed * 1.5) * 300), set at combat bootstrap. */
   combatMaxSpeedMag?: number;
   /** Per-mech walk speedMag (mec_speed * 300), set at combat bootstrap. */

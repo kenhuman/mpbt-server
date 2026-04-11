@@ -76,22 +76,59 @@ import {
   sendMechChassisPicker,
   sendMechVariantPicker,
 } from './world-scene.js';
+import {
+  BOT_INITIAL_HEALTH,
+  BOT_DAMAGE_PER_HIT,
+  JUMP_JET_ALTITUDE,
+  JUMP_JET_STEP,
+  JUMP_JET_TICK_MS,
+  JUMP_JET_FUEL_MAX,
+  JUMP_JET_FUEL_DRAIN_PER_TICK,
+  JUMP_JET_FUEL_REGEN_PER_FRAME,
+  JUMP_JET_FUEL_REGEN_INTERVAL_MS,
+  JUMP_JET_FUEL_REGEN_PER_TICK,
+  FIRE_ACTION_WINDOW_MS,
+  BOT_FIRE_INTERVAL_MS,
+  BOT_RETALIATION_DAMAGE,
+  VERIFY_DELAY_MS,
+  VERIFY_SWEEP_STEP_MS,
+  VERIFY_DAMAGE_CODES,
+  THROTTLE_RUN_SCALE,
+} from './combat-config.js';
 
-/** Server-side HP counter for the scripted single-client bot opponent. */
-const BOT_INITIAL_HEALTH = 100;
-/** Prototype damage applied to the scripted bot for each cmd10 fire frame. */
-const BOT_DAMAGE_PER_HIT = 20;
-/** Prototype jump-jet altitude echoed through Cmd65 after cmd12/action 4. */
-const JUMP_JET_ALTITUDE = 1200;
-/** Interval (ms) at which the scripted bot fires back at the player. */
-const BOT_FIRE_INTERVAL_MS = 3_000;
-/** Prototype damage per bot retaliatory shot (Cmd67 damageCode=1, value=10). */
-const BOT_RETALIATION_DAMAGE = 10;
+function regenJumpFuelIfGrounded(session: ClientSession): void {
+  if (session.combatJumpTimer !== undefined) return;
+  if ((session.combatJumpAltitude ?? 0) > 0) return;
+  const fuel = session.combatJumpFuel ?? JUMP_JET_FUEL_MAX;
+  if (fuel >= JUMP_JET_FUEL_MAX) return;
+  session.combatJumpFuel = Math.min(JUMP_JET_FUEL_MAX, fuel + JUMP_JET_FUEL_REGEN_PER_FRAME);
+}
 
-// KP8 full-forward produces sVar2 ≈ 20 in the client's throttle accumulator.
-// Using 20 as the scale means sVar2=20 → maxSpeedMag (run speed), rather than
-// the upstream assumption of 45 which capped movement at walk speed.
-const THROTTLE_RUN_SCALE = 20;
+/**
+ * Clear all repeating combat timers on a session.
+ *
+ * Called both from the TCP 'close' handler (cleanup on disconnect) and from
+ * the `/fightrestart` handler (cleanup before re-bootstrapping in the same
+ * connection).  Idempotent — safe to call multiple times.
+ */
+export function stopCombatTimers(session: ClientSession): void {
+  if (session.botPositionTimer !== undefined) {
+    clearInterval(session.botPositionTimer);
+    session.botPositionTimer = undefined;
+  }
+  if (session.botFireTimer !== undefined) {
+    clearInterval(session.botFireTimer);
+    session.botFireTimer = undefined;
+  }
+  if (session.combatJumpTimer !== undefined) {
+    clearInterval(session.combatJumpTimer);
+    session.combatJumpTimer = undefined;
+  }
+  if (session.combatJumpFuelRegenTimer !== undefined) {
+    clearInterval(session.combatJumpFuelRegenTimer);
+    session.combatJumpFuelRegenTimer = undefined;
+  }
+}
 
 // ── ComStar messaging ─────────────────────────────────────────────────────────
 
@@ -311,9 +348,10 @@ export function handleRoomMenuSelection(
  *
  * Unresolved assumptions (safe defaults used):
  *   • terrainId / terrainResourceId — 1/0 chosen; live capture needed.
- *   • identity2..4 — empty; purpose in client UI unconfirmed.
  *   • headingBias  — 0 (MOTION_NEUTRAL added by encoder); live capture needed.
  *   • globalA/B/C  — globalA=2800 confirmed (D²=7840000 → eq. v = speed_target); B/C = 0.
+ *   • identity2/3  — populated with mech typeString and house allegiance (assumption; live capture needed).
+ *   • identity4    — empty; unknown purpose.
  */
 export function sendCombatBootstrapSequence(
   session: ClientSession,
@@ -335,7 +373,16 @@ export function sendCombatBootstrapSequence(
   // Store per-mech speedMag caps so Cmd8/9 handlers can apply them.
   session.combatMaxSpeedMag  = mechEntry?.maxSpeedMag  ?? 0;
   session.combatWalkSpeedMag = mechEntry?.walkSpeedMag ?? 0;
+  if (session.combatJumpTimer !== undefined) {
+    clearInterval(session.combatJumpTimer);
+    session.combatJumpTimer = undefined;
+  }
+  if (session.combatJumpFuelRegenTimer !== undefined) {
+    clearInterval(session.combatJumpFuelRegenTimer);
+    session.combatJumpFuelRegenTimer = undefined;
+  }
   session.combatJumpAltitude = 0;
+  session.combatJumpFuel = JUMP_JET_FUEL_MAX;
   session.botHealth    = BOT_INITIAL_HEALTH;
   session.playerHealth = BOT_INITIAL_HEALTH; // simplified IS counter (stops Cmd67 when ≤ 0)
 
@@ -362,8 +409,8 @@ export function sendCombatBootstrapSequence(
       headingBias:        0,      // ASSUMPTION: 0 → MOTION_NEUTRAL after encode
       identity0:          callsign.substring(0, 11),
       identity1:          callsign.substring(0, 31),
-      identity2:          '',     // ASSUMPTION: mech type or empty
-      identity3:          '',     // ASSUMPTION: house or empty
+      identity2:          mechEntry?.typeString ?? '',   // mech variant string (e.g. "SDR-5V")
+      identity3:          session.allegiance   ?? '',   // house allegiance (e.g. "Davion")
       identity4:          '',     // ASSUMPTION: unknown; empty safe
       statusByte:         0,
       initialX:           0,
@@ -392,25 +439,30 @@ export function sendCombatBootstrapSequence(
     nextSeq(session),
   );
 
-  connLog.info('[world] sending Cmd72 combat bootstrap (mech_id=%d callsign="%s")', mechId, callsign);
+  connLog.info('[world] sending Cmd72 combat bootstrap (mech_id=%d callsign="%s" type=%s allegiance=%s)',
+    mechId, callsign, mechEntry?.typeString ?? '?', session.allegiance ?? '?');
   send(socket, cmd72, capture, 'CMD72_COMBAT_BOOTSTRAP');
+  session.combatStartAt = Date.now();
 
   // 3. Cmd64 — add remote bot actor at slot 1.
+  const botMechId   = session.combatBotMechId ?? mechId;
+  const botMechEntry = WORLD_MECH_BY_ID.get(botMechId);
   const cmd64 = buildCmd64RemoteActorPacket(
     {
       slot:          1,
       actorTypeByte: 0,
       identity0:     'Opponent',
       identity1:     'Opponent',
-      identity2:     '',
+      identity2:     botMechEntry?.typeString ?? '',  // bot mech variant string
       identity3:     '',
       identity4:     '',
       statusByte:    0,
-      mechId:        mechId,  // same mech type as player
+      mechId:        botMechId,
     },
     nextSeq(session),
   );
   send(socket, cmd64, capture, 'CMD64_BOT_ACTOR');
+  connLog.info('[world] bot actor: mech_id=%d type=%s', botMechId, botMechEntry?.typeString ?? '?');
 
   // 4. Cmd65 — initial position for the local actor (slot 0) at the origin.
   //    Gives the client something to render immediately after bootstrap.
@@ -448,6 +500,18 @@ export function sendCombatBootstrapSequence(
   }, 1000);
   session.botPositionTimer.unref();
 
+  // Passive jump fuel regeneration while grounded/idle.
+  session.combatJumpFuelRegenTimer = setInterval(() => {
+    if (session.socket.destroyed || !session.socket.writable) return;
+    const before = session.combatJumpFuel ?? JUMP_JET_FUEL_MAX;
+    regenJumpFuelIfGrounded(session);
+    const after = session.combatJumpFuel ?? before;
+    if (after !== before) {
+      connLog.debug('[world/combat] jump fuel regen: %d -> %d', before, after);
+    }
+  }, JUMP_JET_FUEL_REGEN_INTERVAL_MS);
+  session.combatJumpFuelRegenTimer.unref();
+
   // Bot fires back at the player every BOT_FIRE_INTERVAL_MS milliseconds.
   // Stops once server-side playerHealth estimate reaches 0 (client handles
   // the actual death/results screen via local IS simulation — see §23.6).
@@ -475,6 +539,95 @@ export function sendCombatBootstrapSequence(
     );
   }, BOT_FIRE_INTERVAL_MS);
   session.botFireTimer.unref();
+
+  const verificationMode = session.combatVerificationMode;
+  session.combatVerificationMode = undefined;
+  session.combatRequireAction0ForFire = verificationMode === 'strictfire';
+  session.combatShotsAccepted = 0;
+  session.combatShotsRejected = 0;
+  session.combatShotsUngatedAccepted = 0;
+  if (verificationMode === 'autowin') {
+    setTimeout(() => {
+      if (session.socket.destroyed || !session.socket.writable) return;
+      connLog.info('[world/combat] scripted verification: autowin');
+      session.botHealth = 0;
+      send(
+        session.socket,
+        buildCmd66ActorDamagePacket(1, 1, 999, nextSeq(session)),
+        capture,
+        'CMD66_VERIFY_AUTOWIN',
+      );
+      send(
+        session.socket,
+        buildCmd70ActorTransitionPacket(1, 4, nextSeq(session)),
+        capture,
+        'CMD70_VERIFY_AUTOWIN',
+      );
+      if (session.botPositionTimer !== undefined) {
+        clearInterval(session.botPositionTimer);
+        session.botPositionTimer = undefined;
+      }
+      if (session.botFireTimer !== undefined) {
+        clearInterval(session.botFireTimer);
+        session.botFireTimer = undefined;
+      }
+    }, VERIFY_DELAY_MS).unref();
+  } else if (verificationMode === 'autolose') {
+    setTimeout(() => {
+      if (session.socket.destroyed || !session.socket.writable) return;
+      connLog.info('[world/combat] scripted verification: autolose');
+      session.playerHealth = 0;
+      send(
+        session.socket,
+        buildCmd67LocalDamagePacket(1, 999, nextSeq(session)),
+        capture,
+        'CMD67_VERIFY_AUTOLOSE',
+      );
+      if (session.botFireTimer !== undefined) {
+        clearInterval(session.botFireTimer);
+        session.botFireTimer = undefined;
+      }
+    }, VERIFY_DELAY_MS).unref();
+  } else if (verificationMode === 'dmglocal' || verificationMode === 'dmgbot') {
+    const sendSweep = (): void => {
+      if (session.socket.destroyed || !session.socket.writable) return;
+      connLog.info('[world/combat] scripted verification: %s sweep', verificationMode);
+
+      VERIFY_DAMAGE_CODES.forEach((code, idx) => {
+        setTimeout(() => {
+          if (session.socket.destroyed || !session.socket.writable) return;
+          if (verificationMode === 'dmglocal') {
+            send(
+              session.socket,
+              buildCmd67LocalDamagePacket(code, 5, nextSeq(session)),
+              capture,
+              `CMD67_VERIFY_SWEEP_${code}`,
+            );
+          } else {
+            send(
+              session.socket,
+              buildCmd66ActorDamagePacket(1, code, 5, nextSeq(session)),
+              capture,
+              `CMD66_VERIFY_SWEEP_${code}`,
+            );
+          }
+        }, idx * VERIFY_SWEEP_STEP_MS).unref();
+      });
+    };
+
+    setTimeout(sendSweep, VERIFY_DELAY_MS).unref();
+  } else if (verificationMode === 'strictfire') {
+    setTimeout(() => {
+      if (session.socket.destroyed || !session.socket.writable) return;
+      connLog.info('[world/combat] scripted verification: strictfire gate enabled');
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket('Verification mode: strict fire gate enabled (cmd10 requires recent cmd12/action0).', nextSeq(session)),
+        capture,
+        'CMD3_VERIFY_STRICTFIRE',
+      );
+    }, VERIFY_DELAY_MS).unref();
+  }
 
   session.combatInitialized = true;
   connLog.info('[world] combat entry complete for "%s"', callsign);
@@ -550,6 +703,40 @@ export function handleWorldTextCommand(
 
   const line = `${getDisplayName(session)}: ${clean}`;
   connLog.info('[world] cmd-4 text: %s', line);
+
+  // /botmech <id> — choose the mech ID for the scripted bot opponent.
+  // The ID is a numeric mech variant ID from the loaded mech list.  Persists
+  // across /fightrestart within the same connection.
+  const botmechMatch = clean.match(/^\/botmech\s+(\d+)$/i);
+  if (botmechMatch) {
+    const requestedId = parseInt(botmechMatch[1], 10);
+    const mechEntry   = WORLD_MECH_BY_ID.get(requestedId);
+    if (!mechEntry) {
+      connLog.warn('[world] /botmech: unknown mech_id=%d', requestedId);
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket(
+          `Unknown mech_id ${requestedId}. Use /mechs to browse available mechs.`,
+          nextSeq(session),
+        ),
+        capture,
+        'CMD3_BOTMECH_UNKNOWN',
+      );
+    } else {
+      session.combatBotMechId = requestedId;
+      connLog.info('[world] /botmech: bot mech set to %s (id=%d)', mechEntry.typeString, requestedId);
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket(
+          `Bot mech set to ${mechEntry.typeString} (id=${requestedId}). Use /fight or /fightrestart.`,
+          nextSeq(session),
+        ),
+        capture,
+        'CMD3_BOTMECH_ACK',
+      );
+    }
+    return;
+  }
 
   const senderStatus  = getPresenceStatus(session);
   const senderInBooth = senderStatus > 5;
@@ -757,6 +944,7 @@ export function handleCombatMovementFrame(
   if (cmd === 8) {
     const frame = parseClientCmd8Coasting(payload);
     if (!frame) return;
+    regenJumpFuelIfGrounded(session);
     session.combatX          = frame.xRaw - COORD_BIAS;
     session.combatY          = frame.yRaw - COORD_BIAS;
     session.combatHeadingRaw = frame.headingRaw;
@@ -784,6 +972,7 @@ export function handleCombatMovementFrame(
   if (cmd === 9) {
     const frame = parseClientCmd9Moving(payload);
     if (!frame) return;
+    regenJumpFuelIfGrounded(session);
     session.combatX          = frame.xRaw - COORD_BIAS;
     session.combatY          = frame.yRaw - COORD_BIAS;
     session.combatHeadingRaw = frame.headingRaw;
@@ -847,6 +1036,28 @@ export function handleCombatWeaponFireFrame(
     connLog.warn('[world/combat] cmd-10 weapon fire parse failed (len=%d)', payload.length);
     return;
   }
+
+  const now = Date.now();
+  const actionAgeMs = session.lastCombatFireActionAt === undefined
+    ? undefined
+    : now - session.lastCombatFireActionAt;
+  const hasRecentFireAction = actionAgeMs !== undefined && actionAgeMs >= 0 && actionAgeMs <= FIRE_ACTION_WINDOW_MS;
+  if (session.combatRequireAction0ForFire === true && !hasRecentFireAction) {
+    session.combatShotsRejected = (session.combatShotsRejected ?? 0) + 1;
+    connLog.info(
+      '[world/combat] cmd-10 rejected by strict action0 gate (rejected=%d)',
+      session.combatShotsRejected,
+    );
+    return;
+  }
+  session.combatShotsAccepted = (session.combatShotsAccepted ?? 0) + 1;
+  if (hasRecentFireAction) {
+    connLog.debug('[world/combat] cmd-10 correlated with cmd12/action0 (age=%dms)', actionAgeMs);
+  } else {
+    session.combatShotsUngatedAccepted = (session.combatShotsUngatedAccepted ?? 0) + 1;
+    connLog.debug('[world/combat] cmd-10 without recent cmd12/action0 gate (age=%s)', actionAgeMs === undefined ? 'n/a' : `${actionAgeMs}ms`);
+  }
+  session.lastCombatFireActionAt = undefined;
 
   if (session.botHealth === undefined) {
     session.botHealth = BOT_INITIAL_HEALTH;
@@ -924,8 +1135,106 @@ export function handleCombatActionFrame(
     return;
   }
 
-  if (action.action === 4 || action.action === 6) {
-    session.combatJumpAltitude = action.action === 4 ? JUMP_JET_ALTITUDE : 0;
+  if (action.action === 0) {
+    session.lastCombatFireActionAt = Date.now();
+    connLog.debug('[world/combat] cmd-12 action=0 (fire trigger/TIC gate)');
+    // Keep the local effects state fresh before the following cmd10 shot frame.
+    send(session.socket, buildCmd71ResetEffectStatePacket(nextSeq(session)), capture, 'CMD71_FIRE_GATE');
+    return;
+  }
+
+  if (action.action === 4) {
+    const fuel = session.combatJumpFuel ?? JUMP_JET_FUEL_MAX;
+    if (fuel <= 0) {
+      connLog.info('[world/combat] cmd-12 jump action=4 ignored (fuel depleted)');
+      return;
+    }
+
+    if (session.combatJumpTimer !== undefined) {
+      clearInterval(session.combatJumpTimer);
+      session.combatJumpTimer = undefined;
+    }
+
+    let jumpDirection = 1;
+    session.combatJumpAltitude = Math.max(0, session.combatJumpAltitude ?? 0);
+
+    const sendJumpUpdate = (tag: string): void => {
+      const x = session.combatX ?? 0;
+      const y = session.combatY ?? 0;
+      const headingRaw = session.combatHeadingRaw ?? MOTION_NEUTRAL;
+      const throttle = session.combatThrottle ?? 0;
+      const legVel = session.combatLegVel ?? 0;
+      const speedMag = session.combatSpeedMag ?? 0;
+      send(
+        session.socket,
+        buildCmd65PositionSyncPacket(
+          {
+            slot:     0,
+            x,
+            y,
+            z:        session.combatJumpAltitude ?? 0,
+            facing:   (headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
+            throttle,
+            legVel,
+            speedMag,
+          },
+          nextSeq(session),
+        ),
+        capture,
+        tag,
+      );
+    };
+
+    // Emit the first ascent step immediately so jump feedback is visible without delay.
+    session.combatJumpAltitude = Math.min(JUMP_JET_ALTITUDE, (session.combatJumpAltitude ?? 0) + JUMP_JET_STEP);
+    session.combatJumpFuel = Math.max(0, fuel - JUMP_JET_FUEL_DRAIN_PER_TICK);
+    connLog.info(
+      '[world/combat] cmd-12 jump action=4 altitude=%d fuel=%d (ascent start)',
+      session.combatJumpAltitude,
+      session.combatJumpFuel,
+    );
+    sendJumpUpdate('CMD65_JUMP_ASCENT');
+
+    session.combatJumpTimer = setInterval(() => {
+      if (session.socket.destroyed || !session.socket.writable) return;
+
+      const currentFuel = session.combatJumpFuel ?? 0;
+      if (currentFuel <= 0) {
+        jumpDirection = -1;
+      }
+
+      const currentAltitude = session.combatJumpAltitude ?? 0;
+      if (jumpDirection > 0) {
+        const nextAltitude = Math.min(JUMP_JET_ALTITUDE, currentAltitude + JUMP_JET_STEP);
+        session.combatJumpAltitude = nextAltitude;
+        session.combatJumpFuel = Math.max(0, currentFuel - JUMP_JET_FUEL_DRAIN_PER_TICK);
+        sendJumpUpdate('CMD65_JUMP_ASCENT');
+        if (nextAltitude >= JUMP_JET_ALTITUDE) {
+          jumpDirection = -1;
+        }
+        return;
+      }
+
+      const nextAltitude = Math.max(0, currentAltitude - JUMP_JET_STEP);
+      session.combatJumpAltitude = nextAltitude;
+      session.combatJumpFuel = Math.max(0, currentFuel - JUMP_JET_FUEL_DRAIN_PER_TICK);
+      sendJumpUpdate('CMD65_JUMP_DESCENT');
+      if (nextAltitude <= 0) {
+        clearInterval(session.combatJumpTimer);
+        session.combatJumpTimer = undefined;
+        connLog.info('[world/combat] jump arc complete (fuel=%d)', session.combatJumpFuel ?? 0);
+      }
+    }, JUMP_JET_TICK_MS);
+    session.combatJumpTimer.unref();
+    return;
+  }
+
+  if (action.action === 6) {
+    if (session.combatJumpTimer !== undefined) {
+      clearInterval(session.combatJumpTimer);
+      session.combatJumpTimer = undefined;
+    }
+    session.combatJumpAltitude = 0;
 
     const x = session.combatX ?? 0;
     const y = session.combatY ?? 0;
@@ -934,12 +1243,7 @@ export function handleCombatActionFrame(
     const legVel = session.combatLegVel ?? 0;
     const speedMag = session.combatSpeedMag ?? 0;
 
-    connLog.info(
-      '[world/combat] cmd-12 jump action=%d altitude=%d',
-      action.action,
-      session.combatJumpAltitude,
-    );
-
+    connLog.info('[world/combat] cmd-12 jump action=6 altitude=0 (forced land)');
     send(
       session.socket,
       buildCmd65PositionSyncPacket(
@@ -947,7 +1251,7 @@ export function handleCombatActionFrame(
           slot:     0,
           x,
           y,
-          z:        session.combatJumpAltitude,
+          z:        0,
           facing:   (headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
           throttle,
           legVel,
@@ -956,7 +1260,7 @@ export function handleCombatActionFrame(
         nextSeq(session),
       ),
       capture,
-      action.action === 4 ? 'CMD65_JUMP_ASCENT' : 'CMD65_JUMP_LAND',
+      'CMD65_JUMP_LAND',
     );
     return;
   }

@@ -94,6 +94,7 @@ import {
   handleLocationAction,
   handleWorldTextCommand,
   sendCombatBootstrapSequence,
+  stopCombatTimers,
   notifyRoomArrival,
   notifyRoomDeparture,
   handleCombatMovementFrame,
@@ -291,8 +292,53 @@ function handleWorldGameData(
       connLog.warn('[world] cmd-4 parse failed');
       return;
     }
-    // "/fight" command: trigger combat bootstrap if not already in combat.
-    if (parsed.text.trim().toLowerCase() === '/fight') {
+    const textCmd = parsed.text.trim().toLowerCase();
+    // "/fightrestart": stop any running combat timers, reset state, and
+    // re-run the bootstrap from scratch — works even if combat was already
+    // started.  Useful for iterating test scenarios without disconnecting.
+    if (textCmd === '/fightrestart') {
+      if (session.phase !== 'world') {
+        connLog.debug('[world] /fightrestart ignored in phase=%s', session.phase);
+        return;
+      }
+      connLog.info('[world] /fightrestart: stopping timers and resetting combat state');
+      stopCombatTimers(session);
+      session.combatInitialized = false;
+      session.phase = 'world';
+      session.botHealth    = undefined;
+      session.playerHealth = undefined;
+      session.combatJumpAltitude = undefined;
+      session.combatJumpFuel = undefined;
+      session.lastCombatFireActionAt = undefined;
+      session.combatRequireAction0ForFire = undefined;
+      session.combatShotsAccepted = undefined;
+      session.combatShotsRejected = undefined;
+      session.combatShotsUngatedAccepted = undefined;
+      sendCombatBootstrapSequence(session, connLog, capture);
+      return;
+    }
+    // "/fight" family: trigger combat bootstrap if not already in combat.
+    if (
+      textCmd === '/fight' ||
+      textCmd === '/fightwin' ||
+      textCmd === '/fightlose' ||
+      textCmd === '/fightdmglocal' ||
+      textCmd === '/fightdmgbot' ||
+      textCmd === '/fightstrictfire'
+    ) {
+      if (textCmd === '/fightwin') {
+        session.combatVerificationMode = 'autowin';
+      } else if (textCmd === '/fightlose') {
+        session.combatVerificationMode = 'autolose';
+      } else if (textCmd === '/fightdmglocal') {
+        session.combatVerificationMode = 'dmglocal';
+      } else if (textCmd === '/fightdmgbot') {
+        session.combatVerificationMode = 'dmgbot';
+      } else if (textCmd === '/fightstrictfire') {
+        session.combatVerificationMode = 'strictfire';
+      } else {
+        session.combatVerificationMode = undefined;
+      }
       if (!session.combatInitialized && session.phase === 'world') {
         sendCombatBootstrapSequence(session, connLog, capture);
       } else {
@@ -637,15 +683,35 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     if (keepaliveTimer !== undefined) {
       clearInterval(keepaliveTimer);
     }
-    if (session.botPositionTimer !== undefined) {
-      clearInterval(session.botPositionTimer);
-    }
-    if (session.botFireTimer !== undefined) {
-      clearInterval(session.botFireTimer);
-    }
+    stopCombatTimers(session);
     // Reset combat per-session counters so a reconnect starts fresh.
-    session.botHealth    = undefined;
-    session.playerHealth = undefined;
+    if (
+      session.combatShotsAccepted !== undefined ||
+      session.combatShotsRejected !== undefined ||
+      session.combatShotsUngatedAccepted !== undefined
+    ) {
+      const durationMs = session.combatStartAt !== undefined
+        ? Date.now() - session.combatStartAt
+        : undefined;
+      connLog.info(
+        '[world/combat] session summary: requireAction0=%s accepted=%d rejected=%d ungatedAccepted=%d duration=%s',
+        session.combatRequireAction0ForFire === true,
+        session.combatShotsAccepted ?? 0,
+        session.combatShotsRejected ?? 0,
+        session.combatShotsUngatedAccepted ?? 0,
+        durationMs !== undefined ? `${(durationMs / 1000).toFixed(1)}s` : 'n/a',
+      );
+    }
+    session.botHealth            = undefined;
+    session.playerHealth         = undefined;
+    session.combatVerificationMode = undefined;
+    session.combatJumpFuel       = undefined;
+    session.lastCombatFireActionAt = undefined;
+    session.combatRequireAction0ForFire = undefined;
+    session.combatShotsAccepted = undefined;
+    session.combatShotsRejected = undefined;
+    session.combatShotsUngatedAccepted = undefined;
+    session.combatStartAt = undefined;
     capture.close();
   });
 
