@@ -3470,6 +3470,16 @@ to map full-throttle input to `maxSpeedMag`.
 Using a divisor of 45 (the prior value) capped forward movement at approximately
 walk speed (~21 kph for ANH-1A) because `20 × maxSpeedMag / 45 ≈ walkSpeedMag`.
 
+On 2026-04-11, live testing confirmed the remaining TAP-mode throttle regression
+was **not** another scale issue. The client keeps local ownership of
+`actor+0x372` through `FUN_004229a0` while sending Cmd8 coasting frames
+(`DAT_004f1f7c == 0`). Any server-side Cmd65 echo during that state can
+overwrite the local throttle target before the next key event. The working fix
+was to suppress Cmd8 movement echoes whenever `clientSpeed != 0` and keep only
+the stopped reset path for `clientSpeed == 0`. The earlier Cmd9-only
+`combatIntentStop` workaround was also removed because TAP mode never enters the
+Cmd9 path.
+
 ### §24.3 — Physics Equilibrium and the `globalA` Constant (DAT_004f56b4)
 
 **RE source:** Static analysis of `MPBTWIN.EXE` v1.23.

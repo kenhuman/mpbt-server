@@ -761,82 +761,12 @@ export function handleCombatMovementFrame(
     session.combatY          = frame.yRaw - COORD_BIAS;
     session.combatHeadingRaw = frame.headingRaw;
 
-    // Ghidra: DAT_004f1f7c=0 → is_moving=false → client sends Cmd8 forever.
-    // Two distinct reasons the client sends Cmd8 while clientSpeed!=0:
-    //
-    //   1. INITIAL STARTUP / POST-STOP KP8: DAT_004f1f7c never had a non-zero value
-    //      yet (or was cleared by a previous full stop).  combatSpeedMag is 0 or
-    //      undefined.  → Break the trap: echo non-zero throttle+speedMag so
-    //      DAT_004f1f7c becomes negative and the next frame is Cmd9.
-    //
-    //   2. KP5 DECELERATION: player pressed KP5 which zeroes BOTH actor+0x372 AND
-    //      DAT_004f1f7c.  We know this happened because combatSpeedMag is non-zero
-    //      (we saw Cmd9 frames with active speed before this Cmd8).  → Suppress the
-    //      echo so physics drag can decelerate the mech naturally toward 0.
     const clientSpeed       = frame.rotationRaw - MOTION_NEUTRAL;
-    const wasPreviouslyMoving = session.combatSpeedMag !== undefined && session.combatSpeedMag !== 0;
 
     if (clientSpeed !== 0) {
-      if (wasPreviouslyMoving) {
-        // KP5 path: KP5 only zeros DAT_004f1f7c (confirmed by Cmd8 observation), but
-        // does NOT zero actor+0x372 — it retains the last run speed.  We must actively
-        // drive actor+0x372 → 0 by echoing speedMag=0.  While the mech still has
-        // velocity, FUN_0042bb00 returns 1 → the Cmd65 gate WRITES actor+0x372=0 and
-        // DAT_004f1f7c=0, allowing physics to bring the mech to a full stop.
-        // Keep combatSpeedMag non-zero so we stay in "stopping mode" until the mech
-        // actually reports clientSpeed=0.
-        session.combatSpeedMag = clientSpeed; // declining; reset when clientSpeed=0
-        connLog.debug(
-          '[world/combat] cmd8 coasting: x=%d y=%d heading=%d clientSpeed=%d KP5 decelerating → echo speedMag=0',
-          session.combatX, session.combatY, frame.headingRaw, clientSpeed,
-        );
-        send(
-          session.socket,
-          buildCmd65PositionSyncPacket(
-            {
-              slot:     0,
-              x:        session.combatX,
-              y:        session.combatY,
-              z:        session.combatJumpAltitude ?? 0,
-              facing:   (frame.headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
-              throttle: 0,
-              legVel:   0,
-              speedMag: 0,
-            },
-            nextSeq(session),
-          ),
-          capture,
-          'CMD65_MOVEMENT',
-        );
-        return;
-      }
-
-      // Initial startup or post-stop restart: break the Cmd8 trap.
-      const maxSpeedMag   = session.combatMaxSpeedMag ?? 0;
-      const dir           = Math.sign(clientSpeed);
-      const boostThrottle = -dir * MOTION_DIV;
-      const boostSpeedMag = dir * maxSpeedMag;
       connLog.debug(
-        '[world/combat] cmd8 coasting: x=%d y=%d heading=%d clientSpeed=%d → breaking trap Cmd65 throttle=%d speedMag=%d',
-        session.combatX, session.combatY, frame.headingRaw, clientSpeed, boostThrottle, boostSpeedMag,
-      );
-      send(
-        session.socket,
-        buildCmd65PositionSyncPacket(
-          {
-            slot:     0,
-            x:        session.combatX,
-            y:        session.combatY,
-            z:        session.combatJumpAltitude ?? 0,
-            facing:   (frame.headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
-            throttle: boostThrottle,
-            legVel:   0,
-            speedMag: boostSpeedMag,
-          },
-          nextSeq(session),
-        ),
-        capture,
-        'CMD65_MOVEMENT',
+        '[world/combat] cmd8 coasting: x=%d y=%d heading=%d clientSpeed=%d -> no echo (trust local key events)',
+        session.combatX, session.combatY, frame.headingRaw, clientSpeed,
       );
       return;
     }
@@ -844,7 +774,6 @@ export function handleCombatMovementFrame(
     // clientSpeed === 0 → mech has fully stopped; reset so the next KP8 press
     // is treated as a fresh startup (breaks the trap correctly).
     session.combatSpeedMag  = 0;
-    session.combatIntentStop = false; // fresh start for next KP8 acceleration
     connLog.debug(
       '[world/combat] cmd8 coasting: x=%d y=%d heading=%d clientSpeed=0 suppressing echo (stopped)',
       session.combatX, session.combatY, frame.headingRaw,
@@ -872,23 +801,6 @@ export function handleCombatMovementFrame(
     // iVar5 from FUN_0042c7a0: actual physics speed (+ve=forward, -ve=reverse).
     const clientSpeed = frame.rotationRaw - MOTION_NEUTRAL;
 
-    // KP5 stop detection: when DAT_004f1f7c is non-zero (hold mode), our echo of
-    // throttle=full counteracts the client's FUN_0040d150 coasting function, so
-    // DAT_004f1f7c never reaches 0 and the client never sends Cmd8 (the path that
-    // handles KP5 stops).  Instead we detect KP5 from the clientSpeed trend: once
-    // speed starts falling we set combatIntentStop=true and echo speedMag=0 every
-    // cycle, keeping actor+0x372 at 0 regardless of key timing.  This lets physics
-    // drag decelerate the mech fully without waiting for DAT_004f1f7c to coast down.
-    // Cleared when speed rises again (new KP8 press) or on Cmd8 clientSpeed=0.
-    const STOP_DECEL_THRESH = 5;
-    const prevSpeed = session.combatSpeedMag ?? clientSpeed;
-    if (clientSpeed < prevSpeed - STOP_DECEL_THRESH) {
-      session.combatIntentStop = true;
-    } else if (clientSpeed > prevSpeed + STOP_DECEL_THRESH) {
-      session.combatIntentStop = false;
-    }
-    const speedMagEcho = session.combatIntentStop ? 0 : clientSpeed;
-
     // throttle: preserve DAT_004f1f7c as-is (no sign flip).
     // Ghidra: encodeThrottle(V) → client reads back V; -throttle was wrong and
     // caused DAT_004f1f7c oscillation limiting top speed to walk (~21 kph).
@@ -899,9 +811,8 @@ export function handleCombatMovementFrame(
     session.combatSpeedMag = clientSpeed;
 
     connLog.debug(
-      '[world/combat] cmd9 moving: throttlePct=%d legVelPct=%d clientSpeed=%d throttle=%d legVel=%d maxSpeedMag=%d nextSpeedMag=%d intentStop=%s speedMagEcho=%d',
+      '[world/combat] cmd9 moving: throttlePct=%d legVelPct=%d clientSpeed=%d throttle=%d legVel=%d maxSpeedMag=%d nextSpeedMag=%d',
       throttlePct, legVelPct, clientSpeed, throttle, legVel, maxSpeedMag, nextSpeedMag,
-      session.combatIntentStop ?? false, speedMagEcho,
     );
 
     send(
@@ -915,7 +826,7 @@ export function handleCombatMovementFrame(
           facing:   (frame.headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
           throttle,
           legVel,
-          speedMag: speedMagEcho,
+          speedMag: clientSpeed,
         },
         nextSeq(session),
       ),

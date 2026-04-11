@@ -1,8 +1,9 @@
 # MPBT Throttle / KP5 Stop — Research & Bug Documentation
 
-> **Status:** KP8 acceleration to 32 kph works. KP5 full-stop is broken in TAP mode.
-> This document captures everything reverse-engineered so far so an AI agent can
-> continue the investigation and implement a fix.
+> **Status:** Fixed and verified on 2026-04-11.
+> Cmd8 TAP-mode coasting no longer echoes Cmd65 while `clientSpeed != 0`; the
+> client now owns throttle target updates through `FUN_004229a0`, and KP8/KP5/KP2
+> behave correctly in live testing.
 
 ---
 
@@ -12,18 +13,18 @@
 |-----|----------|--------|
 | KP8 (tap ×10 to 100% throttle) | Mech accelerates to 32 kph | **Works ✓** |
 | KP5 (full stop) — held | Mech decelerates while held | **Works but slowly ✓** |
-| KP5 — released | Throttle stays at 0%; mech stays stopped | **BROKEN ✗ — mech re-accelerates to 32 kph** |
+| KP5 — released | Throttle stays at 0%; mech stays stopped | **Works ✓** |
+| KP2 reverse | Reverse throttle persists correctly after key release | **Works ✓** |
 
-**Log evidence (04:37, `world-handlers.ts` Cmd8 handler):**
+**Final log evidence (`world-handlers.ts` Cmd8 handler):**
 ```
-cmd8 coasting: x=91568 clientSpeed=921 → breaking trap Cmd65 throttle=-182 speedMag=900
-cmd8 coasting: x=92468 clientSpeed=921 → breaking trap Cmd65 throttle=-182 speedMag=900
-cmd8 coasting: x=93368 clientSpeed=921 → breaking trap Cmd65 throttle=-182 speedMag=900
-... (every ~1 second, indefinitely, even after KP5 zeroed the throttle)
+cmd8 coasting: x=... clientSpeed=921 -> no echo (trust local key events)
+cmd8 coasting: x=... clientSpeed=0 suppressing echo (stopped)
 ```
 
-The server re-echoes `speedMag=900` every second → `actor+0x372=900` → mech drives back to
-32 kph. KP5 briefly zeroes `actor+0x372`, but the next echo undoes it.
+The previous break-trap echo is gone. The server no longer reasserts `speedMag`
+from Cmd8 TAP-mode coasting frames, so the client's local key-event path keeps
+control of `actor+0x372` without being overwritten.
 
 ---
 
@@ -120,8 +121,8 @@ if (clientSpeed !== 0) {
 ```
 
 **`wasPreviouslyMoving` is ALWAYS false in TAP mode** because `combatSpeedMag` is only set
-inside the **Cmd9** handler — which never fires in TAP mode. So the break trap fires on
-every single Cmd8 echo, including while KP5 is held and after it's released.
+inside the **Cmd9** handler — which never fires in TAP mode. So the break trap fired on
+every single Cmd8 echo, including while KP5 was held and after it was released.
 
 ### Timeline of the bug
 
@@ -142,7 +143,7 @@ every single Cmd8 echo, including while KP5 is held and after it's released.
 ### Why the `combatIntentStop` fix (added in Cmd9) didn't help
 
 The `combatIntentStop` speed-trend detection was added to the **Cmd9** handler. In TAP mode,
-Cmd9 is NEVER sent. The fix code never executes. The Cmd8 handler's break trap re-accelerates
+Cmd9 is NEVER sent. The fix code never executes. The Cmd8 handler's break trap re-accelerated
 unconditionally.
 
 ---
@@ -182,7 +183,7 @@ THROTTLE_RUN_SCALE = 20            // sVar2 max=45; 45*20=900=maxSpeedMag for CP
 
 ---
 
-## 7. Proposed Fix (untested)
+## 7. Implemented Fix (verified)
 
 ### Core insight
 
@@ -193,9 +194,9 @@ our echo is the sole writer — and the break trap re-accelerates the mech.
 **In TAP mode, the server echo is harmful interference.** `actor+0x372` is already
 set correctly by the client's own key event handlers. The server should not compete.
 
-### Proposed change to Cmd8 handler
+### Change to Cmd8 handler
 
-Replace the entire `if (clientSpeed !== 0)` block (break trap + KP5 path) with:
+The entire `if (clientSpeed !== 0)` block (break trap + KP5 path) was replaced with:
 
 ```typescript
 if (clientSpeed !== 0) {
@@ -212,7 +213,10 @@ if (clientSpeed !== 0) {
 }
 ```
 
-### Why this should work
+The Cmd9 stop-intent override was also removed. Cmd9 now echoes plain movement state
+again, and TAP-mode stop behavior is handled solely by suppressing Cmd8 interference.
+
+### Why this works
 
 - **KP8 taps (acceleration):** `FUN_004229a0` sets `actor+0x372=900` each tap. No echo
   interference. Physics drives toward 900. Mech reaches 32 kph. ✓
@@ -222,28 +226,19 @@ if (clientSpeed !== 0) {
 - **KP5 released (mech still moving):** `actor+0x372=0` persists (no new key event, no echo). Physics continues decelerating. ✓
 - **Mech fully stopped (clientSpeed=0):** Existing `combatSpeedMag=0` reset path unchanged. ✓
 - **KP8 after stop:** New key event sets `actor+0x372=90` again. No echo interference. ✓
+- **KP2 reverse:** Reverse key events own `actor+0x372` the same way; no break-trap echo fights the client. ✓
 
-### Risk / open questions
+### Verification
 
-1. **Does the break trap have a legitimate use?** — The original intent was to force
-   `DAT_004f1f7c` negative so the client switches from Cmd8→Cmd9. But if we never want
-   the Cmd8→Cmd9 transition in TAP mode (TAP mode is valid on its own), the break trap
-   is unnecessary. Worth checking whether removing it causes any stall in a
-   "cold start after initial login" scenario.
+Live validation on 2026-04-11 confirmed:
 
-2. **What if actor+0x372 is reset to 0 by some non-key-event code path?** — Ghidra shows
-   `FUN_0042bb00` (velocity gate in Cmd65 handler) calls `FUN_004229a0(0,1)` when physics
-   velocity=0. If we suppress the echo, that gate never fires from our packets. The velocity
-   gate only runs inside the Cmd65 handler (`FUN_0040d830`), so without a Cmd65 from us it
-   won't fire. This could be fine or could prevent some cleanup logic.
+1. KP8 TAP acceleration holds commanded speed without decaying after release.
+2. KP5 stop no longer re-accelerates after release.
+3. Reverse throttle behavior (KP2) persists correctly under the same no-echo rule.
+4. The server log no longer prints `breaking trap Cmd65`; Cmd8 logs `-> no echo (trust local key events)` instead.
 
-3. **HOLD mode (KP8 held → Cmd9 forever):** The `combatIntentStop` detection in the Cmd9
-   handler was designed for this. It hasn't been tested in HOLD mode because the user
-   reached full speed via TAP mode in all sessions. The combatIntentStop logic should be
-   tested independently once TAP mode is fixed.
-
-4. **KP2 reverse:** Not tested. Presumably symmetric. The break trap had reverse support
-   (`dir = Math.sign(clientSpeed)`). Removing the break trap may affect KP2 TAP mode.
+The remaining Cmd8 `clientSpeed === 0` reset path stays in place so the next throttle
+input after a full stop still starts from a clean state.
 
 ---
 
@@ -256,6 +251,7 @@ if (clientSpeed !== 0) {
 | `wasPreviouslyMoving` discriminant in Cmd8 | Correct concept but `combatSpeedMag` is never set in TAP mode → always false |
 | `combatIntentStop` speed-trend detection (Cmd9) | Only runs in HOLD mode (Cmd9 path); never fires in TAP mode |
 | Break trap echoing `speedMag=maxSpeedMag` | Re-accelerates after KP5 — the current bug |
+| Suppress Cmd8 echo whenever `clientSpeed != 0` | **Final fix.** Restores client-local throttle ownership and resolves KP5/KP2 regressions |
 
 ---
 
@@ -276,32 +272,26 @@ Start-Process "C:\MPBT\MPBTWIN.EXE" -ArgumentList "-pcgi","C:\MPBT\play.pcgi"
 1. Select CPLT-C1 mech, enter combat arena
 2. Tap KP8 ×10 (or hold until throttle=100%) → confirm 32 kph
 3. Tap KP5 → confirm throttle display = 0%
-4. Release KP5 → **mech should stay stopped** (currently re-accelerates to 32 kph)
-5. Tap KP8 again → confirm mech re-accelerates to 32 kph (regression check)
+4. Release KP5 → mech should stay stopped
+5. Tap KP8 again → confirm mech re-accelerates to 32 kph
+6. Tap/hold KP2 → confirm reverse speed persists correctly after release
 
 **Debug logging** — filter server.log for:
 ```
-cmd8 coasting | cmd9 moving | intentStop | breaking trap
+cmd8 coasting | cmd9 moving | breaking trap
 ```
 
 ---
 
-## 10. Codex Handoff Instructions
+## 10. Final Implementation
 
-The fix is in **one function** in one file. Here is the task:
+The working change is in `src/world/world-handlers.ts`, `handleCombatMovementFrame`:
 
-**File:** `src/world/world-handlers.ts`  
-**Function:** `handleCombatMovementFrame` (search for `if (cmd === 8)`)  
-**Lines:** ~779–842 (the `if (clientSpeed !== 0)` block inside the Cmd8 handler)
+- Cmd8 now returns early with no `Cmd65` echo whenever `clientSpeed != 0`.
+- Cmd8 keeps only the `clientSpeed === 0` stopped reset path.
+- Cmd9 no longer carries the `combatIntentStop` stop-intent override; it echoes plain
+  movement state again.
 
-**Task:** Replace the entire `if (clientSpeed !== 0) { ... }` block with a no-echo
-early-return (see Section 7 above). Remove the break trap and the `wasPreviouslyMoving`
-KP5 path. Keep only the `clientSpeed === 0` reset path unchanged.
-
-After the change, rebuild and confirm in server logs that:
-- Cmd8 entries no longer show `→ breaking trap`
-- KP5 stops the mech (no re-acceleration in logs)
-- KP8 taps still accelerate to 32 kph
-
-The `combatIntentStop` logic in the Cmd9 handler (lines ~875–890) should be left in place
-for future HOLD mode testing, but may also be worth removing if it is also causing issues.
+This leaves throttle ownership with the client in TAP mode, which matches the
+Ghidra-confirmed `FUN_004229a0` key-event path and fixes the server-side interference
+that was reasserting movement after stop.
