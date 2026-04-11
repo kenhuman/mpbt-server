@@ -259,7 +259,7 @@ input after a full stop still starts from a clean state.
 
 ```powershell
 Start-Service postgresql-x64-18
-$env:DATABASE_URL="postgres://mpbt:47711477acfb419395b97f982ee37a65@localhost:5432/mpbt"
+$env:DATABASE_URL="postgres://mpbt@localhost:5432/mpbt"
 cd C:\MPBT\mpbt-server
 npm run build && node dist/server.js
 
