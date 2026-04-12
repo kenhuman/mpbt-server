@@ -112,6 +112,19 @@ export function buildCmd62CombatStartPacket(seq = 0): Buffer {
   return buildGamePacket(62, Buffer.alloc(0), true, seq); // wire 0x5f
 }
 
+// ── Cmd63 / wire 0x60 / table index 63 ───────────────────────────────────────
+// CONFIRMED — handler FUN_00445870 — Arena scene init.
+//
+// Wire layout: NO PAYLOAD.
+//
+// Effect: sets DAT_0047ef60 bit 0x02 ("arena scene/UI ready"). RESEARCH.md
+// §19.9 notes this should arrive before Cmd62 applies its combat-active flags.
+
+/** Build a Cmd63 arena-scene-init packet. No payload. CONFIRMED. */
+export function buildCmd63ArenaSceneInitPacket(seq = 0): Buffer {
+  return buildGamePacket(63, Buffer.alloc(0), true, seq); // wire 0x60
+}
+
 // ── Cmd64 / wire 0x61 / table index 64 ───────────────────────────────────────
 // CONFIRMED — handler Combat_Cmd64_AddActor_v123 @ 0040d390 — Remote actor add.
 //

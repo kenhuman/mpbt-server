@@ -41,6 +41,7 @@ import {
   parseClientCmd21TextReply,
   parseClientCmd23LocationAction,
   parseClientCmd7,
+  splitInboundGameFrames,
   verifyInboundGameCRC,
 } from './protocol/game.js';
 import {
@@ -209,6 +210,15 @@ function handleWorldGameData(
 
   connLog.debug('[world] rx type-0 len=%d\n%s', payload.length, hexDump(payload));
 
+  const innerFrames = splitInboundGameFrames(payload);
+  if (innerFrames.length > 1) {
+    connLog.info('[world] SYNC payload contained %d inner frames', innerFrames.length);
+    for (const frame of innerFrames) {
+      handleWorldGameData(players, session, frame, connLog, capture);
+    }
+    return;
+  }
+
   // Frame: \x1b [seq+0x21] [cmd+0x21] [args] [0x20] [CRC×3] \x1b
   if (payload.length < 4 || payload[0] !== 0x1B) {
     connLog.debug('[world] short/non-ESC payload — ignoring');
@@ -299,7 +309,7 @@ function handleWorldGameData(
     // re-run the bootstrap from scratch — works even if combat was already
     // started.  Useful for iterating test scenarios without disconnecting.
     if (textCmd === '/fightrestart') {
-      if (session.phase !== 'world') {
+      if (session.phase !== 'world' && session.phase !== 'combat') {
         connLog.debug('[world] /fightrestart ignored in phase=%s', session.phase);
         return;
       }
@@ -312,10 +322,9 @@ function handleWorldGameData(
       session.combatJumpAltitude = undefined;
       session.combatJumpFuel = undefined;
       session.lastCombatFireActionAt = undefined;
-      session.combatRequireAction0ForFire = undefined;
       session.combatShotsAccepted = undefined;
-      session.combatShotsRejected = undefined;
-      session.combatShotsUngatedAccepted = undefined;
+      session.combatShotsAction0Correlated = undefined;
+      session.combatShotsDirectCmd10 = undefined;
       sendCombatBootstrapSequence(session, connLog, capture);
       return;
     }
@@ -328,6 +337,18 @@ function handleWorldGameData(
       textCmd === '/fightdmgbot' ||
       textCmd === '/fightstrictfire'
     ) {
+      const currentRoomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
+      const mapRoom = worldMapByRoomId.get(currentRoomId);
+      if (mapRoom?.type !== 'arena') {
+        connLog.warn(
+          '[world] %s rejected: room %d is not an arena (type=%s)',
+          textCmd,
+          currentRoomId,
+          mapRoom?.type ?? 'unknown',
+        );
+        session.combatVerificationMode = undefined;
+        return;
+      }
       if (textCmd === '/fightwin') {
         session.combatVerificationMode = 'autowin';
       } else if (textCmd === '/fightlose') {
@@ -701,18 +722,17 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     // Reset combat per-session counters so a reconnect starts fresh.
     if (
       session.combatShotsAccepted !== undefined ||
-      session.combatShotsRejected !== undefined ||
-      session.combatShotsUngatedAccepted !== undefined
+      session.combatShotsAction0Correlated !== undefined ||
+      session.combatShotsDirectCmd10 !== undefined
     ) {
       const durationMs = session.combatStartAt !== undefined
         ? Date.now() - session.combatStartAt
         : undefined;
       connLog.info(
-        '[world/combat] session summary: requireAction0=%s accepted=%d rejected=%d ungatedAccepted=%d duration=%s',
-        session.combatRequireAction0ForFire === true,
+        '[world/combat] session summary: accepted=%d action0Correlated=%d directCmd10=%d duration=%s',
         session.combatShotsAccepted ?? 0,
-        session.combatShotsRejected ?? 0,
-        session.combatShotsUngatedAccepted ?? 0,
+        session.combatShotsAction0Correlated ?? 0,
+        session.combatShotsDirectCmd10 ?? 0,
         durationMs !== undefined ? `${(durationMs / 1000).toFixed(1)}s` : 'n/a',
       );
     }
@@ -721,10 +741,9 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     session.combatVerificationMode = undefined;
     session.combatJumpFuel       = undefined;
     session.lastCombatFireActionAt = undefined;
-    session.combatRequireAction0ForFire = undefined;
     session.combatShotsAccepted = undefined;
-    session.combatShotsRejected = undefined;
-    session.combatShotsUngatedAccepted = undefined;
+    session.combatShotsAction0Correlated = undefined;
+    session.combatShotsDirectCmd10 = undefined;
     session.combatStartAt = undefined;
     capture.close();
   });

@@ -462,6 +462,7 @@ export function sendMechClassPicker(
       maxSpeedMag:    0,
       extraCritCount: 0,
       tonnage:        0,
+      armorLikeMaxValues: Array<number>(10).fill(0),
     };
   });
   connLog.info('[world] sending mech class picker');
@@ -504,6 +505,7 @@ export function sendMechChassisPicker(
       maxSpeedMag: 0,
       extraCritCount: 0,
       tonnage:    0,
+      armorLikeMaxValues: Array<number>(10).fill(0),
     };
   });
 
@@ -544,6 +546,7 @@ export function sendMechVariantPicker(
     maxSpeedMag: mech.maxSpeedMag,
     extraCritCount: mech.extraCritCount,
     tonnage:    mech.tonnage,
+    armorLikeMaxValues: mech.armorLikeMaxValues,
   }));
 
   connLog.info('[world] sending mech variant picker: chassis="%s" entries=%d', chassis, entries.length);

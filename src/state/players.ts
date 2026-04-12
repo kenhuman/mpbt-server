@@ -60,11 +60,13 @@ export interface ClientSession {
   botPositionTimer?: ReturnType<typeof setInterval>;
   /** Repeating setInterval that sends Cmd67 retaliatory damage to the player during combat. */
   botFireTimer?: ReturnType<typeof setInterval>;
+  /** One-shot timeout that advances a dead bot from fall animation into wreck state. */
+  botDeathTimer?: ReturnType<typeof setTimeout>;
   /** Repeating setInterval that drives prototype jump-jet ascent/descent updates. */
   combatJumpTimer?: ReturnType<typeof setInterval>;
   /** Repeating setInterval that regenerates jump-jet fuel while grounded. */
   combatJumpFuelRegenTimer?: ReturnType<typeof setInterval>;
-  /** Scripted bot hit points for the current single-client combat prototype. */
+  /** Aggregate scripted bot durability for logging and simple win gating. */
   botHealth?: number;
   /**
    * Server-side approximation of the player's remaining IS health.
@@ -156,14 +158,12 @@ export interface ClientSession {
   combatJumpFuel?: number;
   /** Timestamp (ms) of the last cmd12/action 0 fire trigger frame from client. */
   lastCombatFireActionAt?: number;
-  /** If true, cmd10 weapon-fire frames are accepted only after cmd12/action0. */
-  combatRequireAction0ForFire?: boolean;
   /** Count of cmd10 weapon-fire frames accepted in the current combat session. */
   combatShotsAccepted?: number;
-  /** Count of cmd10 weapon-fire frames rejected by the strict action0 gate. */
-  combatShotsRejected?: number;
-  /** Count of cmd10 shots accepted without a recent cmd12/action0 gate (relaxed mode). */
-  combatShotsUngatedAccepted?: number;
+  /** Count of cmd10 shots that arrived shortly after cmd12/action0. */
+  combatShotsAction0Correlated?: number;
+  /** Count of direct cmd10 shots that arrived without a recent cmd12/action0. */
+  combatShotsDirectCmd10?: number;
   /**
    * Mech ID override for the scripted bot opponent.  Set via `/botmech <id>`;
    * used instead of the player's own mech when bootstrapping combat.
@@ -175,6 +175,16 @@ export interface ClientSession {
   combatMaxSpeedMag?: number;
   /** Per-mech walk speedMag (mec_speed * 300), set at combat bootstrap. */
   combatWalkSpeedMag?: number;
+  /**
+   * Server-side remaining remote-armor values for the scripted bot.
+   * Order matches Cmd66 class-1 armor-like codes 0x15..0x1e.
+   */
+  combatBotArmorValues?: number[];
+  /**
+   * Server-side remaining remote internal-structure values for the scripted bot.
+   * Order matches Cmd66 class-2 internal codes 0x20..0x27.
+   */
+  combatBotInternalValues?: number[];
   /**
    * True while a KP5 stopping intent is inferred from clientSpeed trend in Cmd9.
    * When set, the Cmd65 echo sends speedMag=0 so actor+0x372 is driven to 0 by

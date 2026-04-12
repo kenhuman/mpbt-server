@@ -89,7 +89,10 @@ function decryptMec(buf: Buffer, nameLower: string): void {
  * @param mecPath   Absolute path to the .MEC file.
  * @param nameLower Lowercase mech name WITHOUT extension (e.g. "anh-1a").
  */
-function readMecFields(mecPath: string, nameLower: string): { mecSpeed: number; extraCritCount: number; tonnage: number } {
+function readMecFields(
+  mecPath: string,
+  nameLower: string,
+): { mecSpeed: number; extraCritCount: number; tonnage: number; armorLikeMaxValues: number[] } {
   const raw = fs.readFileSync(mecPath);
   if (raw.length < 0x3e) {
     throw new Error(`${mecPath}: too short for mec fields (${raw.length} < 0x3e)`);
@@ -100,6 +103,18 @@ function readMecFields(mecPath: string, nameLower: string): { mecSpeed: number; 
     mecSpeed:       buf.readUInt16LE(0x16),
     tonnage:        buf.readUInt16LE(0x18),
     extraCritCount: buf.readInt16LE(0x3c),
+    armorLikeMaxValues: [
+      buf.readUInt16LE(0x1a), // LA
+      buf.readUInt16LE(0x1c), // RA
+      buf.readUInt16LE(0x1e), // LL
+      buf.readUInt16LE(0x20), // RL
+      buf.readUInt16LE(0x22), // CT front
+      buf.readUInt16LE(0x24), // LT front
+      buf.readUInt16LE(0x26), // RT front
+      buf.readUInt16LE(0x28), // CT rear
+      buf.readUInt16LE(0x2a), // LT rear
+      buf.readUInt16LE(0x2c), // RT rear
+    ],
   };
 }
 
@@ -235,7 +250,8 @@ export function loadMechs(): MechEntry[] {
         );
       }
       const mecPath = path.join(mechDir, filename);
-      const { mecSpeed, extraCritCount, tonnage } = readMecFields(mecPath, typeString.toLowerCase());
+      const { mecSpeed, extraCritCount, tonnage, armorLikeMaxValues } =
+        readMecFields(mecPath, typeString.toLowerCase());
       return {
         id,
         mechType: 0,
@@ -247,6 +263,7 @@ export function loadMechs(): MechEntry[] {
         maxSpeedMag:  maxSpeedMagFromMecSpeed(mecSpeed),
         extraCritCount,
         tonnage,
+        armorLikeMaxValues,
       };
     });
 
