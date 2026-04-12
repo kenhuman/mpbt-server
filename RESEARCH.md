@@ -2311,7 +2311,7 @@ Confirmed call sites:
 
 | Action | Caller | Current read |
 |--------|--------|--------------|
-| `0` | `Combat_InputActionDispatch_v123` (`0x004231c0`), case `0x15` | Primary client-to-server weapon-fire request. It is gated by combat-ready state, selected target/weapon state (`DAT_004f1f42`/`DAT_004f1f44`), and heat/animation guards, then emits only `cmd 12, action 0`. Dynamic capture is still needed to prove whether this means selected weapon, selected TIC group, or all queued fire. |
+| `0` | `Combat_InputActionDispatch_v123` (`0x004231c0`), case `0x15` | Primary selected-weapon fire request. It is gated by combat-ready state, selected target/weapon state (`DAT_004f1f42`/`DAT_004f1f44`), and heat/animation guards, then emits `cmd 12, action 0`. Live 2026-04-12 TIC-A captures showed no matching `cmd12/action0` on NumLock group fire, so treat action `0` as the selected-weapon path rather than a required TIC gate. |
 | `4` | `Combat_JumpJetInputTick_v123` (`0x00422c50`) | Jump jet fire request. Requires jump input bit, remaining jump fuel/energy (`DAT_004f21a2 > 0x32`), no active jump flags, and not in a blocked animation state. |
 | `6` | `FUN_00448d80` | Jump/landing transition request. Sent when an airborne actor reaches ground contact and the local jump-state flags are cleared. |
 
@@ -2329,10 +2329,47 @@ Wire:  ESC '!'  [0x0C+0x21=0x2D]  [0x04+0x21=0x25]  [CRC]
 | `0x16`..`0x1f` | Select weapon slot `0`..`9` via `Combat_SelectWeaponSlot_v123`. |
 | `0x20` / `0x21` | Previous / next weapon slot. |
 | `0x23` / `0x24` / `0x25` | Toggle the currently selected weapon into TIC A/B/C (`DAT_004f2128`, `DAT_004f2150`, `DAT_004f2178`) and refresh the HUD via `FUN_00422860`. |
-| `0x3c` / `0x3d` / `0x3e` | Call `Combat_FireSelectedTicGroup_v123(..., group 0/1/2)`. This path computes local projectile/effect previews through `FUN_00427300`/`FUN_00427400` or `FUN_00424120`, but no separate network sender was found on this path. |
+| `0x3c` / `0x3d` / `0x3e` | Call `Combat_FireSelectedTicGroup_v123(..., group 0/1/2)`. 2026-04-12 live TIC-A captures now confirm this path does reach the wire, but as one flushed `cmd10` bundle per volley rather than `cmd12/action0` plus one representative `cmd10`. |
 | `0xb1`..`0xce` | Mouse/HUD grid toggles weapon membership for TIC columns; computes `weapon = (action - 0xb1) / 3`, `tic = (action - 0xb1) % 3`, updates the same TIC arrays, then reselects the weapon slot. |
 
-Current implication: the TIC/weapon UI is mostly local state, and the confirmed wire request is the compact `cmd 12, action 0` fire command. The likely server response chain now starts with `Cmd68` projectile/effect spawn, then `Cmd66`/`Cmd67` damage code/value updates and optional `Cmd70` actor animation/status. Dynamic capture is still needed to prove exact fire sequencing and selected-weapon/TIC semantics.
+**Live capture correction — bundled TIC volley format (2026-04-12):**
+
+- Screenshot `2026-04-12 06_10_32-Multiplayer BattleTech.png` confirms all five Jenner weapons were grouped into TIC A in the client HUD.
+- Live test input used NumLock (default TIC A fire); the client visibly rendered all Jenner weapons firing on each press.
+- Capture `captures/1775989470814_47d2b0eb-f274-4f0c-ad7d-cee803dc9bc4.txt` shows each NumLock volley as one direct `cmd10` payload of length `101`, with no preceding `cmd12/action0`.
+- The wire body is:
+
+```text
+ESC seq cmd10
+  [shot slot=0]
+  0x2b
+  [shot slot=1]
+  0x2b
+  [shot slot=2]
+  0x2b
+  [shot slot=3]
+  0x2b
+  [shot slot=4]
+  [crc x3]
+  ESC
+```
+
+- Each bundled shot subrecord is 18 bytes:
+
+```text
+[byte weaponSlot]
+[byte targetServerSlot + 1]
+[byte targetAttach + 1]
+[type1 angleSeedA]
+[type1 angleSeedB]
+[type3 impactX + COORD_BIAS]
+[type3 impactY + COORD_BIAS]
+[type2 impactZ]
+```
+
+- In the captured Jenner-vs-Jenner TIC-A volleys, the slot markers appear as `0x21 0x22 0x23 0x24 0x25`, confirming that one volley contained weapon slots `0..4` (SRM-4 + four Medium Lasers).
+
+Current implication: `cmd12/action0` is the selected-weapon fire path, while TIC A/B/C fire can arrive as a direct bundled `cmd10` volley with one shot subrecord per grouped weapon. The correct server response path is therefore per-subrecord `Cmd68` projectile/effect spawn plus per-hit `Cmd66`/`Cmd67` damage updates, with optional `Cmd70` animation/status after destruction.
 
 **Client shot-geometry writer — `Combat_WriteCmd10ShotGeometry_v123` (`0x0040e230`):**
 ```c
@@ -2348,6 +2385,52 @@ Frame_WriteType(2, z);
 ```
 
 This helper is only called through `Combat_FireSelectedTicGroup_v123` / `FUN_00449480` in the local fire-preview path, and it does **not** flush by itself. Treat it as a shot-geometry write helper until live capture proves when the frame is flushed relative to the compact `cmd 12/action 0` fire request.
+
+**2026-04-12 live capture update:** TIC-group fire does flush this helper's output, but as a bundled `cmd10` payload containing multiple 18-byte shot subrecords separated by literal `0x2b` bytes. The captured NumLock/TIC-A volleys did **not** include `cmd12/action0`, so a server that only parses the first subrecord will undercount grouped fire badly (for example, treating a Jenner TIC A alpha as SRM-4 only).
+
+**Attachment-table path behind `targetAttach` (2026-04-11 Ghidra pass):**
+
+- `targetAttach` is not a gameplay body-section enum. It is a model attachment id selected by the client targeting hit-test and stored in `DAT_004f4218`.
+- `FUN_00438e90` resets the current target globals, then repopulates:
+  - `DAT_004f56a6` = current target actor slot
+  - `DAT_004f4218` = current target attachment id
+- `FUN_00438ad0` and `FUN_0043f210` both call `FUN_0044ac10`, which performs the actual target-model hit-test and writes `DAT_004f56a4`; successful callers then copy `DAT_004f56a4 -> DAT_004f4218`.
+- `FUN_0044ac10` receives one attachment record plus the current aim ray / transform context. It does not return a Solaris damage code; it selects one attachment id and bounding extents for the hit geometry.
+
+Current model-table reads:
+
+- `FUN_0043b320(model, attachId, outXYZ)`:
+  - searches the model attachment-id byte list at `*(short **)(model + 0x20) + 0x1b`
+  - uses the per-attachment transform table at `*(int *)(model + 0x2c)` with stride `0x40`
+  - returns attachment world coordinates from offsets `+0x30/+0x34/+0x38`
+- `FUN_0043b2d0(model, attachId)`:
+  - searches the same attachment-id byte list
+  - uses a second per-attachment table at `*(int *)(model + 0x30)` with stride `10`
+  - returns the dword at offset `+6`, used for attachment-specific metadata/effect selection
+- `FUN_0043b210(model, attachId)`:
+  - searches the same attachment-id list
+  - checks the active-bit mask at `*(uint *)(model + 0x54)` for the matching attachment index
+
+Per-attachment record layout used by the hit-test path:
+
+- `FUN_00431df0` walks the record list pointed to by `*(short **)(model + 0x20)`.
+- Record count is the first `short`.
+- The per-record block starts at `*(int *)(base + 2)` and uses stride `100` bytes.
+- The first `short` of each record is the attachment id.
+- The hit-test code in `FUN_0044ac10` uses:
+  - `record + 0x0a` as a pointer to per-record geometry points
+  - `record + 0x04` as the point count
+  - three orientation-specific polygon groups around `record + 0x30`
+
+Practical implication:
+
+- Attachment ids like `1`, `19`, `31`, `33` are mesh attachment ids and are model-specific.
+- The networked remote-damage path still applies only the server-supplied `Cmd66` / `Cmd67` damage code/value pairs.
+- There is no confirmed client-side `targetAttach -> damageCode` mapper on the multiplayer receive path.
+- A server-side accuracy improvement should therefore be per-mech and spatial:
+  - extract attachment ids plus their world-space attachment coordinates via the `FUN_0043b320`-style table layout
+  - classify them into torso/arm/leg/head groups per chassis
+  - then map those groups to `Cmd66` class-1 / class-2 section codes
 
 **Channel / mode command — `FUN_0043d920()`:**
 ```
@@ -2925,17 +3008,18 @@ pointer.
 
 #### Ally Mode — ENTER Target Cycling
 
-ENTER target cycling in combat requires "ally mode" to be active. This is a **client-side
-toggle only** — the server cannot send it directly. The player must press `=` twice after
-entering combat:
+Earlier RE notes suggested ENTER target cycling required "ally mode" to be active via
+pressing `=` twice after entering combat. Live GUI validation on 2026-04-11 contradicted
+that for the current prototype/bootstrap path: the opponent became visible and plain
+`ENTER` could target it immediately, while `=` was bound to the tactical overhead map.
 
-| Press | Global written | Value |
-|-------|---------------|-------|
-| First `=` | `DAT_00479a48` | `0 → 1` |
-| Second `=` | `DAT_0047a7d4` | `|= 1` (ally mode ON) |
+Treat the older ally-mode inference as unresolved and lower-confidence until it is
+reproduced against a more faithful bootstrap or a fresh static trace of the targeting
+input path.
 
-With ally mode ON, ENTER cycles available targets using `DAT_004f54d8` (target slot index).
-The remote bot actor added at slot 1 by Cmd64 is cycled into the crosshair on ENTER press.
+Current live behavior to trust for M6 testing:
+- If the remote bot actor is visible, `ENTER` can target it directly.
+- `=` should not currently be relied on as a prerequisite targeting toggle.
 
 #### Complete Confirmed Combat Bootstrap Sequence
 

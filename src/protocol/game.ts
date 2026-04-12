@@ -202,6 +202,46 @@ export function verifyInboundGameCRC(payload: Buffer, combat = false): boolean {
   return expectedCRC === receivedCRC;
 }
 
+/**
+ * Split one ARIES SYNC payload into one or more ESC-delimited inner game frames.
+ *
+ * Some client paths can batch multiple inner frames into a single ARIES type-0
+ * payload. Each frame still uses the normal layout:
+ *   [0x1B] [seq] [cmd] ... [crc x3] [optional 0x1B]
+ *
+ * If no complete trailing ESC-delimited subframes are found, returns the
+ * original payload as a single candidate frame.
+ */
+export function splitInboundGameFrames(payload: Buffer): Buffer[] {
+  if (payload.length === 0 || payload[0] !== 0x1B) return [payload];
+
+  const frames: Buffer[] = [];
+  let start = 0;
+
+  while (start < payload.length && payload[start] === 0x1B) {
+    const nextEsc = payload.indexOf(0x1B, start + 1);
+    if (nextEsc === -1) break;
+    const frame = payload.subarray(start, nextEsc + 1);
+    if (frame.length >= 5) {
+      frames.push(frame);
+    }
+    start = nextEsc + 1;
+  }
+
+  if (frames.length === 0) {
+    return [payload];
+  }
+
+  if (start < payload.length) {
+    const tail = payload.subarray(start);
+    if (tail.length > 0) {
+      frames.push(tail);
+    }
+  }
+
+  return frames;
+}
+
 /** Encode a CRC value as 3 base-85 bytes (FUN_00402be0(2, crc)). */
 function encodeCRC(crc: number): Buffer {
   return encodeB85_2(crc);
@@ -292,6 +332,12 @@ export interface MechEntry {
    * CONFIRMED from RESEARCH.md §20 cross-validation table.
    */
   tonnage: number;
+  /**
+   * Armor-like section maxima read from decrypted .MEC offsets 0x1a..0x2c.
+   * Order matches Cmd66/67 class-1 codes 0x15..0x1e:
+   * [LA, RA, LL, RL, CT front, LT front, RT front, CT rear, LT rear, RT rear]
+   */
+  armorLikeMaxValues: number[];
 }
 
 /**
@@ -521,9 +567,12 @@ export interface ClientCmd9Moving extends ClientCmd8Coasting {
 /** Raw decoded fields from client cmd10 weapon-fire geometry. */
 export interface ClientCmd10WeaponFire {
   seq: number;
-  targetRaw: number;
+  /** Weapon slot/source slot written by Combat_WriteCmd10ShotGeometry_v123. */
   weaponSlot: number;
-  flag: number;
+  /** Target server slot, or -1 when no target is locked. */
+  targetSlot: number;
+  /** Target attachment site, or -1 when no attachment was resolved. */
+  targetAttach: number;
   angleSeedA: number;
   angleSeedB: number;
   impactXRaw: number;
@@ -573,31 +622,60 @@ export function parseClientCmd9Moving(payload: Buffer): ClientCmd9Moving | null 
   };
 }
 
-/** Parse a client-sent combat cmd10 weapon-fire frame. */
-export function parseClientCmd10WeaponFire(payload: Buffer): ClientCmd10WeaponFire | null {
-  if (payload.length < 24 || payload[0] !== 0x1B) return null;
-  if (payload[2] - 0x21 !== 10) return null;
-  let off = 3;
-  const targetRaw = payload[off] - 0x21; off += 1;
-  const weaponSlot = Math.max(0, payload[off] - 0x22); off += 1;
-  const flag = payload[off] - 0x22; off += 1;
+/** Parse one bundled shot subrecord inside a client-sent combat cmd10 frame. */
+function parseClientCmd10WeaponFireRecord(
+  payload: Buffer,
+  seq: number,
+  offset: number,
+): [ClientCmd10WeaponFire, number] | null {
+  let off = offset;
+  if (off + 18 > payload.length) return null;
+  const weaponSlot = payload[off] - 0x21; off += 1;
+  const targetSlot = payload[off] - 0x22; off += 1;
+  const targetAttach = payload[off] - 0x22; off += 1;
   let angleSeedA: number, angleSeedB: number, impactXRaw: number, impactYRaw: number, impactZ: number;
   [angleSeedA, off] = decodeArgType1(payload, off);
   [angleSeedB, off] = decodeArgType1(payload, off);
   [impactXRaw, off] = decodeArgType3(payload, off);
   [impactYRaw, off] = decodeArgType3(payload, off);
-  [impactZ,       ] = decodeArgType2(payload, off);
-  return {
-    seq: payload[1] - 0x21,
-    targetRaw,
+  [impactZ, off] = decodeArgType2(payload, off);
+  return [{
+    seq,
     weaponSlot,
-    flag,
+    targetSlot,
+    targetAttach,
     angleSeedA,
     angleSeedB,
     impactXRaw,
     impactYRaw,
     impactZ,
-  };
+  }, off];
+}
+
+/** Parse a client-sent combat cmd10 weapon-fire frame, including bundled TIC subrecords. */
+export function parseClientCmd10WeaponFire(payload: Buffer): ClientCmd10WeaponFire[] | null {
+  if (payload.length < 24 || payload[0] !== 0x1B) return null;
+  if (payload[2] - 0x21 !== 10) return null;
+
+  const seq = payload[1] - 0x21;
+  const hasTrailingEsc = payload[payload.length - 1] === 0x1B;
+  const crcOffset = payload.length - (hasTrailingEsc ? 4 : 3);
+  if (crcOffset <= 3) return null;
+
+  const shots: ClientCmd10WeaponFire[] = [];
+  let off = 3;
+  while (off < crcOffset) {
+    const parsed = parseClientCmd10WeaponFireRecord(payload, seq, off);
+    if (!parsed) return null;
+    const [shot, next] = parsed;
+    shots.push(shot);
+    off = next;
+    if (off === crcOffset) break;
+    if (payload[off] !== 0x2B) return null;
+    off += 1;
+  }
+
+  return shots.length > 0 ? shots : null;
 }
 
 /** Parse a client-sent combat cmd12 action frame. */

@@ -6,13 +6,19 @@
  * logic in world-handlers.ts.
  */
 
-// ── Scripted bot health ───────────────────────────────────────────────────────
+// ── Scripted combat durability ────────────────────────────────────────────────
 
-/** Server-side HP counter for the scripted single-client bot opponent. */
+/** Baseline server-side durability counter used for simple bot/player estimates. */
 export const BOT_INITIAL_HEALTH = 100;
 
-/** Prototype damage applied to the scripted bot for each cmd10 fire frame. */
-export const BOT_DAMAGE_PER_HIT = 20;
+/** Initial bot stand-off distance in combat world units (100m north). */
+export const BOT_SPAWN_DISTANCE = 100_000;
+
+/**
+ * Fallback per-weapon damage used when the firing mech's weapon loadout is not
+ * documented in BT-MAN yet. Chosen to approximate a medium weapon hit.
+ */
+export const BOT_FALLBACK_WEAPON_DAMAGE = 5;
 
 // ── Jump jets ──────────────────────────────────────────────────────────────────
 

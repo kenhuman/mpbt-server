@@ -41,8 +41,13 @@ import { storeMessage } from '../db/messages.js';
 import { updateCharacterMech } from '../db/characters.js';
 import { Logger }        from '../util/logger.js';
 import { CaptureLogger } from '../util/capture.js';
-import { buildMechExamineText } from '../data/mech-stats.js';
+import { buildMechExamineText, MECH_STATS } from '../data/mech-stats.js';
 import { mechInternalStateBytes } from '../data/mechs.js';
+import {
+  type CombatAttachmentHitSection,
+  getCombatModelIdForMechId,
+  resolveCombatAttachmentHitSection,
+} from '../data/mech-attachments.js';
 
 import {
   FALLBACK_MECH_ID,
@@ -81,7 +86,8 @@ import {
 } from './world-scene.js';
 import {
   BOT_INITIAL_HEALTH,
-  BOT_DAMAGE_PER_HIT,
+  BOT_SPAWN_DISTANCE,
+  BOT_FALLBACK_WEAPON_DAMAGE,
   JUMP_JET_ALTITUDE,
   JUMP_JET_STEP,
   JUMP_JET_TICK_MS,
@@ -107,6 +113,173 @@ function regenJumpFuelIfGrounded(session: ClientSession): void {
   session.combatJumpFuel = Math.min(JUMP_JET_FUEL_MAX, fuel + JUMP_JET_FUEL_REGEN_PER_FRAME);
 }
 
+const DEFAULT_BOT_ARMOR_VALUES = Array<number>(10).fill(10);
+const DEFAULT_BOT_INTERNAL_VALUES = Array<number>(8).fill(9);
+
+function sumValues(values: readonly number[]): number {
+  return values.reduce((sum, value) => sum + value, 0);
+}
+
+function getBotDurability(armorValues: readonly number[], internalValues: readonly number[]): number {
+  return sumValues(armorValues) + sumValues(internalValues);
+}
+
+function resolveBotHitSection(
+  mechId: number | undefined,
+  attach: number,
+  impactZ: number,
+): CombatAttachmentHitSection {
+  return resolveCombatAttachmentHitSection(mechId, attach, impactZ);
+}
+
+function shouldSpillUpperBodyHitToCenter(hitSection: CombatAttachmentHitSection): boolean {
+  return hitSection.armorIndex === 0
+    || hitSection.armorIndex === 1
+    || hitSection.armorIndex === 5
+    || hitSection.armorIndex === 6;
+}
+
+function isBotDestroyed(internalValues: readonly number[]): boolean {
+  const centerTorsoGone = (internalValues[4] ?? 0) <= 0;
+  const bothLegsGone = (internalValues[2] ?? 0) <= 0 && (internalValues[3] ?? 0) <= 0;
+  return centerTorsoGone || bothLegsGone;
+}
+
+function getWeaponDamageByName(weaponName: string | undefined): number | undefined {
+  switch (weaponName) {
+    case 'Machine Gun': return 2;
+    case 'Small Laser': return 3;
+    case 'SRM-2': return 4;
+    case 'Autocannon/2': return 2;
+    case 'Medium Laser': return 5;
+    case 'LRM-5': return 5;
+    case 'Autocannon/5': return 5;
+    case 'SRM-4': return 8;
+    case 'Large Laser': return 8;
+    case 'Autocannon/10': return 10;
+    case 'Particle Projector Cannon': return 10;
+    case 'LRM-10': return 10;
+    case 'SRM-6': return 12;
+    case 'LRM-15': return 15;
+    case 'Autocannon/20': return 20;
+    case 'LRM-20': return 20;
+    default: return undefined;
+  }
+}
+
+function getShotDamage(session: ClientSession, weaponSlot: number): { damage: number; weaponName?: string } {
+  const sourceMechId = session.selectedMechId ?? FALLBACK_MECH_ID;
+  const sourceMechType = WORLD_MECH_BY_ID.get(sourceMechId)?.typeString?.toUpperCase();
+  const weaponName = sourceMechType !== undefined
+    ? MECH_STATS.get(sourceMechType)?.armament[weaponSlot]
+    : undefined;
+  return {
+    damage: getWeaponDamageByName(weaponName) ?? BOT_FALLBACK_WEAPON_DAMAGE,
+    weaponName,
+  };
+}
+
+function applyDamageToBotSection(
+  armorValues: number[],
+  internalValues: number[],
+  hitSection: CombatAttachmentHitSection,
+  damage: number,
+): Array<{ damageCode: number; damageValue: number }> {
+  const updates: Array<{ damageCode: number; damageValue: number }> = [];
+  let remaining = Math.max(0, damage);
+
+  if (remaining <= 0) return updates;
+
+  const armorIndex = hitSection.armorIndex;
+  const internalIndex = hitSection.internalIndex;
+  const armorCurrent = armorValues[armorIndex] ?? 0;
+
+  if (armorCurrent > 0) {
+    const absorbedByArmor = Math.min(armorCurrent, remaining);
+    const armorValue = armorCurrent - absorbedByArmor;
+    armorValues[armorIndex] = armorValue;
+    updates.push({ damageCode: 0x15 + armorIndex, damageValue: armorValue });
+    remaining -= absorbedByArmor;
+  }
+
+  if (remaining > 0) {
+    const internalCurrent = internalValues[internalIndex] ?? 0;
+    const absorbedByInternal = Math.min(internalCurrent, remaining);
+    const internalValue = internalCurrent - absorbedByInternal;
+    internalValues[internalIndex] = internalValue;
+    updates.push({ damageCode: 0x20 + internalIndex, damageValue: internalValue });
+  }
+
+  return updates;
+}
+
+function resolveEffectiveHitSection(
+  mechId: number | undefined,
+  attach: number,
+  impactZ: number,
+  armorValues: readonly number[],
+  internalValues: readonly number[],
+): CombatAttachmentHitSection {
+  let hitSection = resolveBotHitSection(mechId, attach, impactZ);
+  const primaryArmorCurrent = armorValues[hitSection.armorIndex] ?? 0;
+  const primaryInternalCurrent = internalValues[hitSection.internalIndex] ?? 0;
+  if (
+    primaryArmorCurrent <= 0 &&
+    primaryInternalCurrent <= 0 &&
+    shouldSpillUpperBodyHitToCenter(hitSection)
+  ) {
+    hitSection = { armorIndex: 4, internalIndex: 4, label: 'ct-front-spill' };
+  }
+  return hitSection;
+}
+
+function stopBotCombatActions(session: ClientSession): void {
+  if (session.botPositionTimer !== undefined) {
+    clearInterval(session.botPositionTimer);
+    session.botPositionTimer = undefined;
+  }
+  if (session.botFireTimer !== undefined) {
+    clearInterval(session.botFireTimer);
+    session.botFireTimer = undefined;
+  }
+}
+
+function sendBotDeathTransition(
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+  reason: string,
+): void {
+  if (session.botDeathTimer !== undefined) {
+    clearTimeout(session.botDeathTimer);
+    session.botDeathTimer = undefined;
+  }
+
+  // Dynamic test result: subcommand 1 leaves the dead bot upright in the v1.23
+  // client, so try 8 as the pre-wreck collapse trigger before the confirmed 4
+  // wreck transition.
+  connLog.info('[world/combat] bot destroyed — sending collapse transition (%s)', reason);
+  send(
+    session.socket,
+    buildCmd70ActorTransitionPacket(1, 8, nextSeq(session)),
+    capture,
+    'CMD70_BOT_COLLAPSE',
+  );
+
+  session.botDeathTimer = setTimeout(() => {
+    session.botDeathTimer = undefined;
+    if (session.socket.destroyed || !session.socket.writable || session.phase !== 'combat') return;
+    connLog.info('[world/combat] bot wreck transition after fall (%s)', reason);
+    send(
+      session.socket,
+      buildCmd70ActorTransitionPacket(1, 4, nextSeq(session)),
+      capture,
+      'CMD70_BOT_WRECK',
+    );
+  }, 1200);
+  session.botDeathTimer.unref();
+}
+
 /**
  * Clear all repeating combat timers on a session.
  *
@@ -115,13 +288,10 @@ function regenJumpFuelIfGrounded(session: ClientSession): void {
  * connection).  Idempotent — safe to call multiple times.
  */
 export function stopCombatTimers(session: ClientSession): void {
-  if (session.botPositionTimer !== undefined) {
-    clearInterval(session.botPositionTimer);
-    session.botPositionTimer = undefined;
-  }
-  if (session.botFireTimer !== undefined) {
-    clearInterval(session.botFireTimer);
-    session.botFireTimer = undefined;
+  stopBotCombatActions(session);
+  if (session.botDeathTimer !== undefined) {
+    clearTimeout(session.botDeathTimer);
+    session.botDeathTimer = undefined;
   }
   if (session.combatJumpTimer !== undefined) {
     clearInterval(session.combatJumpTimer);
@@ -450,6 +620,14 @@ export function sendCombatBootstrapSequence(
   // 3. Cmd64 — add remote bot actor at slot 1.
   const botMechId   = session.combatBotMechId ?? mechId;
   const botMechEntry = WORLD_MECH_BY_ID.get(botMechId);
+  session.combatBotArmorValues = [...(botMechEntry?.armorLikeMaxValues ?? DEFAULT_BOT_ARMOR_VALUES)];
+  session.combatBotInternalValues = botMechEntry !== undefined
+    ? mechInternalStateBytes(botMechEntry.tonnage)
+    : [...DEFAULT_BOT_INTERNAL_VALUES];
+  session.botHealth = getBotDurability(
+    session.combatBotArmorValues,
+    session.combatBotInternalValues,
+  );
   const cmd64 = buildCmd64RemoteActorPacket(
     {
       slot:          1,
@@ -476,16 +654,20 @@ export function sendCombatBootstrapSequence(
   );
   send(socket, cmd65, capture, 'CMD65_INITIAL_POSITION');
 
-  // 5. Cmd65 — initial position for the bot (slot 1), 300000 units north (open arena space).
+  // 5. Cmd65 — initial position for the bot (slot 1), BOT_SPAWN_DISTANCE units
+  //    out to the north on the
+  //    arena floor. In the live protocol path here, x/y are the horizontal
+  //    world coordinates and z is altitude; putting the distance into z leaves the
+  //    actor effectively airborne/off-scene and breaks visibility/targeting.
   const cmd65Bot = buildCmd65PositionSyncPacket(
-    { slot: 1, x: 0, y: 0, z: 300000, facing: 0, throttle: 0, legVel: 0, speedMag: 0 },
+    { slot: 1, x: 0, y: BOT_SPAWN_DISTANCE, z: 0, facing: 0, throttle: 0, legVel: 0, speedMag: 0 },
     nextSeq(session),
   );
   send(socket, cmd65Bot, capture, 'CMD65_BOT_POSITION');
 
   // 6. Cmd62 — "all actors ready" / combat-start signal.
   //    Clears DAT_0047ef60 bit 0x20, which blocks SPACEBAR weapon fire.
-  //    MUST be sent after all Cmd64/Cmd65 packets.
+  //    Must be sent after all Cmd64/Cmd65 packets.
   const cmd62 = buildCmd62CombatStartPacket(nextSeq(session));
   send(socket, cmd62, capture, 'CMD62_COMBAT_START');
 
@@ -495,7 +677,7 @@ export function sendCombatBootstrapSequence(
     send(
       session.socket,
       buildCmd65PositionSyncPacket(
-        { slot: 1, x: 0, y: 0, z: 300000, facing: 0, throttle: 0, legVel: 0, speedMag: 0 },
+        { slot: 1, x: 0, y: BOT_SPAWN_DISTANCE, z: 0, facing: 0, throttle: 0, legVel: 0, speedMag: 0 },
         nextSeq(session),
       ),
       capture, 'CMD65_BOT_POSITION',
@@ -545,10 +727,9 @@ export function sendCombatBootstrapSequence(
 
   const verificationMode = session.combatVerificationMode;
   session.combatVerificationMode = undefined;
-  session.combatRequireAction0ForFire = verificationMode === 'strictfire';
   session.combatShotsAccepted = 0;
-  session.combatShotsRejected = 0;
-  session.combatShotsUngatedAccepted = 0;
+  session.combatShotsAction0Correlated = 0;
+  session.combatShotsDirectCmd10 = 0;
   if (verificationMode === 'autowin') {
     setTimeout(() => {
       if (session.socket.destroyed || !session.socket.writable) return;
@@ -560,20 +741,8 @@ export function sendCombatBootstrapSequence(
         capture,
         'CMD66_VERIFY_AUTOWIN',
       );
-      send(
-        session.socket,
-        buildCmd70ActorTransitionPacket(1, 4, nextSeq(session)),
-        capture,
-        'CMD70_VERIFY_AUTOWIN',
-      );
-      if (session.botPositionTimer !== undefined) {
-        clearInterval(session.botPositionTimer);
-        session.botPositionTimer = undefined;
-      }
-      if (session.botFireTimer !== undefined) {
-        clearInterval(session.botFireTimer);
-        session.botFireTimer = undefined;
-      }
+      stopBotCombatActions(session);
+      sendBotDeathTransition(session, connLog, capture, 'verify-autowin');
     }, VERIFY_DELAY_MS).unref();
   } else if (verificationMode === 'autolose') {
     setTimeout(() => {
@@ -622,13 +791,7 @@ export function sendCombatBootstrapSequence(
   } else if (verificationMode === 'strictfire') {
     setTimeout(() => {
       if (session.socket.destroyed || !session.socket.writable) return;
-      connLog.info('[world/combat] scripted verification: strictfire gate enabled');
-      send(
-        session.socket,
-        buildCmd3BroadcastPacket('Verification mode: strict fire gate enabled (cmd10 requires recent cmd12/action0).', nextSeq(session)),
-        capture,
-        'CMD3_VERIFY_STRICTFIRE',
-      );
+      connLog.info('[world/combat] scripted verification: strictfire observation mode (cmd12/action0 correlations logged; direct TIC cmd10 accepted)');
     }, VERIFY_DELAY_MS).unref();
   }
 
@@ -1034,8 +1197,8 @@ export function handleCombatWeaponFireFrame(
   connLog: Logger,
   capture: CaptureLogger,
 ): void {
-  const shot = parseClientCmd10WeaponFire(payload);
-  if (!shot) {
+  const shots = parseClientCmd10WeaponFire(payload);
+  if (!shots || shots.length === 0) {
     connLog.warn('[world/combat] cmd-10 weapon fire parse failed (len=%d)', payload.length);
     return;
   }
@@ -1045,84 +1208,116 @@ export function handleCombatWeaponFireFrame(
     ? undefined
     : now - session.lastCombatFireActionAt;
   const hasRecentFireAction = actionAgeMs !== undefined && actionAgeMs >= 0 && actionAgeMs <= FIRE_ACTION_WINDOW_MS;
-  if (session.combatRequireAction0ForFire === true && !hasRecentFireAction) {
-    session.combatShotsRejected = (session.combatShotsRejected ?? 0) + 1;
-    connLog.info(
-      '[world/combat] cmd-10 rejected by strict action0 gate (rejected=%d)',
-      session.combatShotsRejected,
-    );
-    return;
-  }
-  session.combatShotsAccepted = (session.combatShotsAccepted ?? 0) + 1;
+  const firePath = hasRecentFireAction ? 'selected-weapon' : 'direct-cmd10';
+  session.combatShotsAccepted = (session.combatShotsAccepted ?? 0) + shots.length;
   if (hasRecentFireAction) {
-    connLog.debug('[world/combat] cmd-10 correlated with cmd12/action0 (age=%dms)', actionAgeMs);
+    session.combatShotsAction0Correlated = (session.combatShotsAction0Correlated ?? 0) + shots.length;
+    connLog.debug(
+      '[world/combat] cmd10 %s path: correlated with cmd12/action0 (age=%dms records=%d)',
+      firePath,
+      actionAgeMs,
+      shots.length,
+    );
+    session.lastCombatFireActionAt = undefined;
   } else {
-    session.combatShotsUngatedAccepted = (session.combatShotsUngatedAccepted ?? 0) + 1;
-    connLog.debug('[world/combat] cmd-10 without recent cmd12/action0 gate (age=%s)', actionAgeMs === undefined ? 'n/a' : `${actionAgeMs}ms`);
+    session.combatShotsDirectCmd10 = (session.combatShotsDirectCmd10 ?? 0) + shots.length;
+    connLog.debug(
+      '[world/combat] cmd10 %s path: no recent cmd12/action0 (age=%s records=%d) — compatible with TIC fire geometry',
+      firePath,
+      actionAgeMs === undefined ? 'n/a' : `${actionAgeMs}ms`,
+      shots.length,
+    );
   }
-  session.lastCombatFireActionAt = undefined;
 
   if (session.botHealth === undefined) {
-    session.botHealth = BOT_INITIAL_HEALTH;
+    session.botHealth = getBotDurability(
+      session.combatBotArmorValues ?? DEFAULT_BOT_ARMOR_VALUES,
+      session.combatBotInternalValues ?? DEFAULT_BOT_INTERNAL_VALUES,
+    );
   }
   if (session.botHealth <= 0) {
     connLog.debug('[world/combat] cmd-10 shot ignored — bot already destroyed');
     return;
   }
 
-  session.botHealth = Math.max(0, session.botHealth - BOT_DAMAGE_PER_HIT);
-  connLog.info(
-    '[world/combat] cmd-10 weapon fire: targetRaw=%d weaponSlot=%d flag=%d botHealth=%d',
-    shot.targetRaw,
-    shot.weaponSlot,
-    shot.flag,
-    session.botHealth,
-  );
-
+  const botArmorValues = [...(session.combatBotArmorValues ?? DEFAULT_BOT_ARMOR_VALUES)];
+  const botInternalValues = [...(session.combatBotInternalValues ?? DEFAULT_BOT_INTERNAL_VALUES)];
+  const botMechId = session.combatBotMechId ?? session.selectedMechId;
+  const botModelId = getCombatModelIdForMechId(botMechId);
   send(session.socket, buildCmd71ResetEffectStatePacket(nextSeq(session)), capture, 'CMD71_RESET');
-  send(
-    session.socket,
-    buildCmd68ProjectileSpawnPacket(
-      {
-        sourceSlot:   0,
-        weaponSlot:   shot.weaponSlot,
-        targetRaw:    2, // bot actor slot 1 encoded as slot + 1
-        targetAttach: 0,
-        angleSeedA:   shot.angleSeedA,
-        angleSeedB:   shot.angleSeedB,
-        impactX:      shot.impactXRaw - COORD_BIAS,
-        impactY:      shot.impactYRaw - COORD_BIAS,
-        impactZ:      shot.impactZ,
-      },
-      nextSeq(session),
-    ),
-    capture,
-    'CMD68_PROJECTILE',
-  );
-  send(
-    session.socket,
-    buildCmd66ActorDamagePacket(1, 1, BOT_DAMAGE_PER_HIT, nextSeq(session)),
-    capture,
-    'CMD66_BOT_DAMAGE',
+  const shotSummaries: string[] = [];
+  let totalDamageUpdates = 0;
+
+  for (const shot of shots) {
+    const { damage: shotDamage, weaponName } = getShotDamage(session, shot.weaponSlot);
+    const hitSection = resolveEffectiveHitSection(
+      botMechId,
+      shot.targetAttach,
+      shot.impactZ,
+      botArmorValues,
+      botInternalValues,
+    );
+    const damageUpdates = applyDamageToBotSection(
+      botArmorValues,
+      botInternalValues,
+      hitSection,
+      shotDamage,
+    );
+
+    send(
+      session.socket,
+      buildCmd68ProjectileSpawnPacket(
+        {
+          sourceSlot:   0,
+          weaponSlot:   shot.weaponSlot,
+          targetRaw:    shot.targetSlot < 0 ? 0 : shot.targetSlot + 1,
+          targetAttach: shot.targetAttach < 0 ? 0 : shot.targetAttach + 1,
+          angleSeedA:   shot.angleSeedA,
+          angleSeedB:   shot.angleSeedB,
+          impactX:      shot.impactXRaw - COORD_BIAS,
+          impactY:      shot.impactYRaw - COORD_BIAS,
+          impactZ:      shot.impactZ,
+        },
+        nextSeq(session),
+      ),
+      capture,
+      'CMD68_PROJECTILE',
+    );
+    for (const update of damageUpdates) {
+      send(
+        session.socket,
+        buildCmd66ActorDamagePacket(1, update.damageCode, update.damageValue, nextSeq(session)),
+        capture,
+        'CMD66_BOT_DAMAGE',
+      );
+    }
+
+    totalDamageUpdates += damageUpdates.length;
+    shotSummaries.push(
+      `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${hitSection.label}:${shot.targetSlot}/${shot.targetAttach}`,
+    );
+  }
+
+  session.combatBotArmorValues = botArmorValues;
+  session.combatBotInternalValues = botInternalValues;
+  session.botHealth = getBotDurability(botArmorValues, botInternalValues);
+  connLog.info(
+    '[world/combat] cmd10 weapon fire accepted: firePath=%s records=%d weaponSlots=%s botMechId=%s botModelId=%s botHealth=%d updates=%d shots=[%s]',
+    firePath,
+    shots.length,
+    shots.map(shot => shot.weaponSlot).join('/'),
+    botMechId ?? 'n/a',
+    botModelId ?? 'n/a',
+    session.botHealth,
+    totalDamageUpdates,
+    shotSummaries.join(','),
   );
   send(session.socket, buildCmd71ResetEffectStatePacket(nextSeq(session)), capture, 'CMD71_CLOSE');
 
-  if (session.botHealth <= 0) {
-    connLog.info('[world/combat] bot destroyed — sending Cmd70 death animation');
-    send(
-      session.socket,
-      buildCmd70ActorTransitionPacket(1, 4, nextSeq(session)),
-      capture,
-      'CMD70_BOT_DEATH',
-    );
-    if (session.botPositionTimer !== undefined) {
-      clearInterval(session.botPositionTimer);
-      session.botPositionTimer = undefined;
-    }
-    if (session.botFireTimer !== undefined) {
-      clearInterval(session.botFireTimer);
-      session.botFireTimer = undefined;
-    }
+  if (isBotDestroyed(botInternalValues)) {
+    session.botHealth = 0;
+    stopBotCombatActions(session);
+    sendBotDeathTransition(session, connLog, capture, 'fatal-damage');
   }
 }
 
@@ -1140,9 +1335,36 @@ export function handleCombatActionFrame(
 
   if (action.action === 0) {
     session.lastCombatFireActionAt = Date.now();
-    connLog.debug('[world/combat] cmd-12 action=0 (fire trigger/TIC gate)');
-    // Keep the local effects state fresh before the following cmd10 shot frame.
+    connLog.debug('[world/combat] cmd-12 action=0 (selected-weapon fire trigger)');
+    // Keep the local effects state fresh before a possible selected-weapon cmd10.
     send(session.socket, buildCmd71ResetEffectStatePacket(nextSeq(session)), capture, 'CMD71_FIRE_GATE');
+    return;
+  }
+
+  if (action.action >= 0x16 && action.action <= 0x1f) {
+    connLog.debug('[world/combat] cmd-12 select weapon slot=%d (client-local HUD state)', action.action - 0x16);
+    return;
+  }
+
+  if (action.action === 0x20 || action.action === 0x21) {
+    connLog.debug('[world/combat] cmd-12 cycle weapon slot action=0x%s (client-local HUD state)', action.action.toString(16));
+    return;
+  }
+
+  if (action.action >= 0x23 && action.action <= 0x25) {
+    connLog.debug('[world/combat] cmd-12 toggle selected weapon into TIC=%d (client-local HUD state)', action.action - 0x23);
+    return;
+  }
+
+  if (action.action >= 0xb1 && action.action <= 0xce) {
+    const zeroBased = action.action - 0xb1;
+    const weaponSlot = Math.floor(zeroBased / 3);
+    const ticIndex = zeroBased % 3;
+    connLog.debug(
+      '[world/combat] cmd-12 HUD TIC toggle weapon slot=%d TIC=%d (client-local HUD state)',
+      weaponSlot,
+      ticIndex,
+    );
     return;
   }
 
