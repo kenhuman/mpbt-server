@@ -164,8 +164,12 @@ export interface ClientSession {
   combatJumpFuel?: number;
   /** Timestamp (ms) of the last cmd12/action 0 fire trigger frame from client. */
   lastCombatFireActionAt?: number;
+  /** Whether the current combat session requires recent cmd12/action0 before cmd10 fire. */
+  combatRequireAction0?: boolean;
   /** Count of cmd10 weapon-fire frames accepted in the current combat session. */
   combatShotsAccepted?: number;
+  /** Count of cmd10 weapon-fire frames rejected by the current combat policy. */
+  combatShotsRejected?: number;
   /** Count of cmd10 shots that arrived shortly after cmd12/action0. */
   combatShotsAction0Correlated?: number;
   /** Count of direct cmd10 shots that arrived without a recent cmd12/action0. */

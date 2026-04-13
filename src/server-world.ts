@@ -95,6 +95,7 @@ import {
   handleMapTravelReply,
   handleLocationAction,
   handleWorldTextCommand,
+  handleBotMechTextCommand,
   sendCombatBootstrapSequence,
   resetCombatState,
   stopCombatTimers,
@@ -320,6 +321,17 @@ function handleWorldGameData(
       return;
     }
     if (session.phase === 'combat') {
+      if (handleBotMechTextCommand(session, parsed.text, connLog, capture)) {
+        return;
+      }
+      if (textCmd === '/fight') {
+        connLog.debug(
+          '[world] /fight ignored: combatInitialized=%s phase=%s',
+          session.combatInitialized,
+          session.phase,
+        );
+        return;
+      }
       if (textCmd.length > 0) {
         connLog.debug('[world] cmd-4 text ignored during combat: %j', parsed.text);
       } else {
@@ -359,6 +371,15 @@ function handleWorldGameData(
         session.combatVerificationMode = 'dmgbot';
       } else if (textCmd === '/fightstrictfire') {
         session.combatVerificationMode = 'strictfire';
+        send(
+          session.socket,
+          buildCmd3BroadcastPacket(
+            'Strict fire gate armed: ungated SPACEBAR fire will be rejected until recent action0.',
+            nextSeq(session),
+          ),
+          capture,
+          'CMD3_STRICTFIRE_ARMED',
+        );
       } else if (textCmd === '/fighthead') {
         session.combatVerificationMode = 'headtest';
       } else {
@@ -732,6 +753,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     // Reset combat per-session counters so a reconnect starts fresh.
     if (
       session.combatShotsAccepted !== undefined ||
+      session.combatShotsRejected !== undefined ||
       session.combatShotsAction0Correlated !== undefined ||
       session.combatShotsDirectCmd10 !== undefined
     ) {
@@ -739,10 +761,12 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
         ? Date.now() - session.combatStartAt
         : undefined;
       connLog.info(
-        '[world/combat] session summary: accepted=%d action0Correlated=%d directCmd10=%d duration=%s',
+        '[world/combat] session summary: requireAction0=%s accepted=%d rejected=%d ungatedAccepted=%d action0Correlated=%d duration=%s',
+        session.combatRequireAction0 === true ? 'true' : 'false',
         session.combatShotsAccepted ?? 0,
-        session.combatShotsAction0Correlated ?? 0,
+        session.combatShotsRejected ?? 0,
         session.combatShotsDirectCmd10 ?? 0,
+        session.combatShotsAction0Correlated ?? 0,
         durationMs !== undefined ? `${(durationMs / 1000).toFixed(1)}s` : 'n/a',
       );
     }
@@ -758,7 +782,9 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     session.combatVerificationMode = undefined;
     session.combatJumpFuel       = undefined;
     session.lastCombatFireActionAt = undefined;
+    session.combatRequireAction0 = undefined;
     session.combatShotsAccepted = undefined;
+    session.combatShotsRejected = undefined;
     session.combatShotsAction0Correlated = undefined;
     session.combatShotsDirectCmd10 = undefined;
     session.combatStartAt = undefined;

@@ -109,12 +109,15 @@ import {
   THROTTLE_RUN_SCALE,
 } from './combat-config.js';
 
-function regenJumpFuelIfGrounded(session: ClientSession): void {
+function regenJumpFuelIfGrounded(
+  session: ClientSession,
+  amount = JUMP_JET_FUEL_REGEN_PER_FRAME,
+): void {
   if (session.combatJumpTimer !== undefined) return;
   if ((session.combatJumpAltitude ?? 0) > 0) return;
   const fuel = session.combatJumpFuel ?? JUMP_JET_FUEL_MAX;
   if (fuel >= JUMP_JET_FUEL_MAX) return;
-  session.combatJumpFuel = Math.min(JUMP_JET_FUEL_MAX, fuel + JUMP_JET_FUEL_REGEN_PER_FRAME);
+  session.combatJumpFuel = Math.min(JUMP_JET_FUEL_MAX, fuel + amount);
 }
 
 const DEFAULT_BOT_ARMOR_VALUES = Array<number>(10).fill(10);
@@ -508,7 +511,9 @@ export function resetCombatState(session: ClientSession): void {
   session.combatJumpAltitude = undefined;
   session.combatJumpFuel = undefined;
   session.lastCombatFireActionAt = undefined;
+  session.combatRequireAction0 = undefined;
   session.combatShotsAccepted = undefined;
+  session.combatShotsRejected = undefined;
   session.combatShotsAction0Correlated = undefined;
   session.combatShotsDirectCmd10 = undefined;
 }
@@ -912,7 +917,7 @@ export function sendCombatBootstrapSequence(
     session.combatJumpFuelRegenTimer = setInterval(() => {
       if (session.socket.destroyed || !session.socket.writable) return;
       const before = session.combatJumpFuel ?? JUMP_JET_FUEL_MAX;
-      regenJumpFuelIfGrounded(session);
+      regenJumpFuelIfGrounded(session, JUMP_JET_FUEL_REGEN_PER_TICK);
       const after = session.combatJumpFuel ?? before;
       if (after !== before) {
         connLog.debug('[world/combat] jump fuel regen: %d -> %d', before, after);
@@ -1013,7 +1018,9 @@ export function sendCombatBootstrapSequence(
 
     const verificationMode = session.combatVerificationMode;
     session.combatVerificationMode = undefined;
+    session.combatRequireAction0 = verificationMode === 'strictfire';
     session.combatShotsAccepted = 0;
+    session.combatShotsRejected = 0;
     session.combatShotsAction0Correlated = 0;
     session.combatShotsDirectCmd10 = 0;
     if (verificationMode === 'autowin') {
@@ -1098,7 +1105,7 @@ export function sendCombatBootstrapSequence(
     } else if (verificationMode === 'strictfire') {
       setTimeout(() => {
         if (session.socket.destroyed || !session.socket.writable) return;
-        connLog.info('[world/combat] scripted verification: strictfire observation mode (cmd12/action0 correlations logged; direct TIC cmd10 accepted)');
+        connLog.info('[world/combat] scripted verification: strictfire enforcement mode (ungated cmd10 rejected until recent cmd12/action0)');
       }, VERIFY_DELAY_MS).unref();
     } else if (verificationMode === 'headtest') {
       setTimeout(() => {
@@ -1184,37 +1191,7 @@ export function handleWorldTextCommand(
   const line = `${getDisplayName(session)}: ${clean}`;
   connLog.info('[world] cmd-4 text: %s', line);
 
-  // /botmech <id> — choose the mech ID for the scripted bot opponent.
-  // The ID is a numeric mech variant ID from the loaded mech list.  Persists
-  // across /fightrestart within the same connection.
-  const botmechMatch = clean.match(/^\/botmech\s+(\d+)$/i);
-  if (botmechMatch) {
-    const requestedId = parseInt(botmechMatch[1], 10);
-    const mechEntry   = WORLD_MECH_BY_ID.get(requestedId);
-    if (!mechEntry) {
-      connLog.warn('[world] /botmech: unknown mech_id=%d', requestedId);
-      send(
-        session.socket,
-        buildCmd3BroadcastPacket(
-          `Unknown mech_id ${requestedId}. Use /mechs to browse available mechs.`,
-          nextSeq(session),
-        ),
-        capture,
-        'CMD3_BOTMECH_UNKNOWN',
-      );
-    } else {
-      session.combatBotMechId = requestedId;
-      connLog.info('[world] /botmech: bot mech set to %s (id=%d)', mechEntry.typeString, requestedId);
-      send(
-        session.socket,
-        buildCmd3BroadcastPacket(
-          `Bot mech set to ${mechEntry.typeString} (id=${requestedId}). Use /fight or /fightrestart.`,
-          nextSeq(session),
-        ),
-        capture,
-        'CMD3_BOTMECH_ACK',
-      );
-    }
+  if (handleBotMechTextCommand(session, clean, connLog, capture)) {
     return;
   }
 
@@ -1239,6 +1216,48 @@ export function handleWorldTextCommand(
 
     sendToWorldSession(other, buildCmd3BroadcastPacket(line, nextSeq(other)), 'CMD3_CHAT_FANOUT');
   }
+}
+
+export function handleBotMechTextCommand(
+  session: ClientSession,
+  text: string,
+  connLog: Logger,
+  capture: CaptureLogger,
+): boolean {
+  const clean = text.replace(/\x1b/g, '?').trim();
+  const botmechMatch = clean.match(/^\/botmech\s+(\d+)$/i);
+  if (!botmechMatch) {
+    return false;
+  }
+
+  const requestedId = parseInt(botmechMatch[1], 10);
+  const mechEntry   = WORLD_MECH_BY_ID.get(requestedId);
+  if (!mechEntry) {
+    connLog.warn('[world] /botmech: unknown mech_id=%d', requestedId);
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket(
+        `Unknown mech_id ${requestedId}. Use /mechs to browse available mechs.`,
+        nextSeq(session),
+      ),
+      capture,
+      'CMD3_BOTMECH_UNKNOWN',
+    );
+    return true;
+  }
+
+  session.combatBotMechId = requestedId;
+  connLog.info('[world] /botmech: bot mech set to %s (id=%d)', mechEntry.typeString, requestedId);
+  send(
+    session.socket,
+    buildCmd3BroadcastPacket(
+      `Bot mech set to ${mechEntry.typeString} (id=${requestedId}). Use /fight or /fightrestart.`,
+      nextSeq(session),
+    ),
+    capture,
+    'CMD3_BOTMECH_ACK',
+  );
+  return true;
 }
 
 // ── Map travel ────────────────────────────────────────────────────────────────
@@ -1524,6 +1543,16 @@ export function handleCombatWeaponFireFrame(
     : now - session.lastCombatFireActionAt;
   const hasRecentFireAction = actionAgeMs !== undefined && actionAgeMs >= 0 && actionAgeMs <= FIRE_ACTION_WINDOW_MS;
   const firePath = hasRecentFireAction ? 'selected-weapon' : 'direct-cmd10';
+  if (session.combatRequireAction0 && !hasRecentFireAction) {
+    session.combatShotsRejected = (session.combatShotsRejected ?? 0) + shots.length;
+    connLog.info(
+      '[world/combat] cmd10 shot REJECTED: strict action0 gate (no recent cmd12/action0, age=%s records=%d)',
+      actionAgeMs === undefined ? 'n/a' : `${actionAgeMs}ms`,
+      shots.length,
+    );
+    return;
+  }
+
   session.combatShotsAccepted = (session.combatShotsAccepted ?? 0) + shots.length;
   if (hasRecentFireAction) {
     session.combatShotsAction0Correlated = (session.combatShotsAction0Correlated ?? 0) + shots.length;
