@@ -443,6 +443,10 @@ function handleWorldGameData(
 
   } else if (cmdIdx === 10) {
     if (session.phase === 'combat') {
+      if (!session.combatInitialized) {
+        connLog.debug('[world] cmd-10 weapon-fire ignored before combat initialization');
+        return;
+      }
       handleCombatWeaponFireFrame(players, session, payload, connLog, capture);
       return;
     }
