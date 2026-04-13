@@ -39,6 +39,9 @@ import {
   encodeString,
 } from './game.js';
 
+export const COMBAT_RESULT_VICTORY = 0;
+export const COMBAT_RESULT_LOSS = 1;
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /** World-coordinate bias added before type3 encoding. CONFIRMED §19.6.1. */
@@ -113,12 +116,16 @@ export function buildCmd62CombatStartPacket(seq = 0): Buffer {
 }
 
 // ── Cmd63 / wire 0x60 / table index 63 ───────────────────────────────────────
-// CONFIRMED — handler FUN_00445870 — Arena scene init.
+// CONFIRMED — handler FUN_00445870 — combat teardown / result-scene transition.
 //
 // Wire layout: NO PAYLOAD.
 //
-// Effect: sets DAT_0047ef60 bit 0x02 ("arena scene/UI ready"). RESEARCH.md
-// §19.9 notes this should arrive before Cmd62 applies its combat-active flags.
+// Current v1.23 read from Ghidra:
+//   • chooses a `scenes.dat` resource based on DAT_004e16d8 (`VICT` or `LOST`)
+//   • tears down combat-local state
+//   • transitions out of active combat mode
+//
+// The preceding result selector is handled by Cmd75.
 
 /** Build a Cmd63 arena-scene-init packet. No payload. CONFIRMED. */
 export function buildCmd63ArenaSceneInitPacket(seq = 0): Buffer {
@@ -639,4 +646,23 @@ export function buildCmd73ActorRatePacket(
     encodeAsByte(rateB),
   ]);
   return buildGamePacket(73, args, true, seq); // wire 0x6a
+}
+
+// ── Cmd75 / wire 0x6c / table index 75 ───────────────────────────────────────
+// CONFIRMED — handler FUN_00445820 — combat match result selector.
+//
+// Wire layout:
+//   result  byte  — 0 = `VICT`, 1 = `LOST`
+//
+// Current v1.23 read from Ghidra:
+//   • stores the byte in DAT_004e16d8
+//   • calls FUN_00449c00() to enter the pending result path
+//   • should be followed by Cmd63 to load the selected `scenes.dat` result scene
+
+/** Build a Cmd75 combat result selector packet. CONFIRMED by Ghidra. */
+export function buildCmd75CombatResultPacket(
+  result: 0 | 1,
+  seq = 0,
+): Buffer {
+  return buildGamePacket(75, encodeAsByte(result), true, seq); // wire 0x6c
 }

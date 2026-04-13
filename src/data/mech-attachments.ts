@@ -58,6 +58,7 @@ const MODEL_ID_BY_SUBTYPE = [
 const CT_FRONT: CombatAttachmentHitSection = { armorIndex: 4, internalIndex: 4, label: 'ct-front' };
 const LT_FRONT: CombatAttachmentHitSection = { armorIndex: 5, internalIndex: 5, label: 'lt-front' };
 const RT_FRONT: CombatAttachmentHitSection = { armorIndex: 6, internalIndex: 6, label: 'rt-front' };
+const HEAD: CombatAttachmentHitSection = { armorIndex: -1, internalIndex: 7, label: 'head' };
 const LEFT_ARM: CombatAttachmentHitSection = { armorIndex: 0, internalIndex: 0, label: 'left-arm' };
 const RIGHT_ARM: CombatAttachmentHitSection = { armorIndex: 1, internalIndex: 1, label: 'right-arm' };
 const LEFT_LEG: CombatAttachmentHitSection = { armorIndex: 2, internalIndex: 2, label: 'left-leg' };
@@ -318,6 +319,9 @@ function classifyUnknownAttachment(modelId: number | undefined, attach: number):
     const vertical = stats.meanCenter[0];
     const lateral = stats.meanCenter[1];
     const depthSpan = stats.meanSpan[2];
+    if (vertical > 55 && Math.abs(lateral) <= 18 && depthSpan < 220) {
+      return HEAD;
+    }
     if (vertical < -40 || depthSpan > 250) {
       return lateral <= 0
         ? { armorIndex: 2, internalIndex: 2, label: 'left-leg' }
@@ -357,6 +361,9 @@ export function resolveCombatAttachmentHitSection(
   const explicit = SECTION_BY_MODEL_AND_ATTACH.get(modelId ?? -1)?.get(attach)
     ?? SHARED_SECTION_BY_ATTACH.get(attach);
   if (explicit !== undefined) return explicit;
+  const classified = classifyUnknownAttachment(modelId, attach);
+  if (classified.label !== 'ct-front-fallback') return classified;
+  if (impactZ > 1100) return HEAD;
   if (impactZ > 600) return { armorIndex: 4, internalIndex: 4, label: 'ct-front' };
-  return classifyUnknownAttachment(modelId, attach);
+  return classified;
 }

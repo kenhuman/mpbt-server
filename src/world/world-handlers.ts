@@ -21,9 +21,10 @@ import {
   parseClientCmd8Coasting,
   parseClientCmd9Moving,
 } from '../protocol/game.js';
-import { buildCombatWelcomePacket }    from '../protocol/auth.js';
+import { buildCombatWelcomePacket, buildWelcomePacket }    from '../protocol/auth.js';
 import {
   buildCmd62CombatStartPacket,
+  buildCmd63ArenaSceneInitPacket,
   buildCmd64RemoteActorPacket,
   buildCmd72LocalBootstrapPacket,
   buildCmd65PositionSyncPacket,
@@ -32,6 +33,9 @@ import {
   buildCmd68ProjectileSpawnPacket,
   buildCmd70ActorTransitionPacket,
   buildCmd71ResetEffectStatePacket,
+  buildCmd75CombatResultPacket,
+  COMBAT_RESULT_LOSS,
+  COMBAT_RESULT_VICTORY,
   COORD_BIAS,
   MOTION_DIV,
   MOTION_NEUTRAL,
@@ -115,15 +119,79 @@ function regenJumpFuelIfGrounded(session: ClientSession): void {
 
 const DEFAULT_BOT_ARMOR_VALUES = Array<number>(10).fill(10);
 const DEFAULT_BOT_INTERNAL_VALUES = Array<number>(8).fill(9);
+const HEAD_ARMOR_VALUE = 9;
+const NO_ARMOR_INDEX = -1;
+const BASE_CRITICAL_STATE_COUNT = 0x15;
+const SENSOR_CRITICAL_CODE = 0x11;
+const LIFE_SUPPORT_CRITICAL_CODE = 0x12;
+const CRITICAL_STATE_DAMAGED = 1;
+const CRITICAL_STATE_DESTROYED = 2;
+const PLAYER_RESULT_DELAY_MS = 750;
+const BOT_RESULT_DELAY_MS = 1500;
+const COMBAT_DROP_DELAY_MS = 4000;
+const RESULT_WORLD_RESTORE_DELAY_MS = 10_500;
+const HEAD_RETALIATION_SECTION: CombatAttachmentHitSection = {
+  armorIndex: NO_ARMOR_INDEX,
+  internalIndex: 7,
+  label: 'head',
+};
+type CombatResultCode = 0 | 1;
+
+const LOCAL_RETALIATION_SECTIONS: readonly CombatAttachmentHitSection[] = [
+  { armorIndex: 0, internalIndex: 0, label: 'left-arm' },
+  { armorIndex: 5, internalIndex: 5, label: 'left-torso-front' },
+  { armorIndex: 8, internalIndex: 5, label: 'left-torso-rear' },
+  { armorIndex: 4, internalIndex: 4, label: 'center-torso-front' },
+  { armorIndex: 7, internalIndex: 4, label: 'center-torso-rear' },
+  { armorIndex: 6, internalIndex: 6, label: 'right-torso-front' },
+  { armorIndex: 9, internalIndex: 6, label: 'right-torso-rear' },
+  { armorIndex: 1, internalIndex: 1, label: 'right-arm' },
+  { armorIndex: 2, internalIndex: 2, label: 'left-leg' },
+  { armorIndex: 3, internalIndex: 3, label: 'right-leg' },
+  HEAD_RETALIATION_SECTION,
+] as const;
+
+type DamageCodeUpdate = { damageCode: number; damageValue: number };
 
 function sumValues(values: readonly number[]): number {
   return values.reduce((sum, value) => sum + value, 0);
 }
 
-function getBotDurability(armorValues: readonly number[], internalValues: readonly number[]): number {
+function getCombatDurability(armorValues: readonly number[], internalValues: readonly number[]): number {
   return sumValues(armorValues) + sumValues(internalValues);
 }
 
+function getTrackedCriticalStateCount(extraCritCount: number | undefined): number {
+  if (extraCritCount === undefined) return BASE_CRITICAL_STATE_COUNT;
+  if (extraCritCount < -20 || extraCritCount === -21) return BASE_CRITICAL_STATE_COUNT;
+  return Math.max(BASE_CRITICAL_STATE_COUNT, BASE_CRITICAL_STATE_COUNT + extraCritCount);
+}
+
+function createCriticalStateBytes(extraCritCount: number | undefined): number[] {
+  return Array<number>(getTrackedCriticalStateCount(extraCritCount)).fill(0);
+}
+
+function getHeadCriticalState(headInternalValue: number): number {
+  if (headInternalValue <= 0) return CRITICAL_STATE_DESTROYED;
+  if (headInternalValue < HEAD_ARMOR_VALUE) return CRITICAL_STATE_DAMAGED;
+  return 0;
+}
+
+function applyHeadCriticalStateUpdates(
+  criticalStateBytes: number[],
+  headInternalValue: number,
+): DamageCodeUpdate[] {
+  const targetState = getHeadCriticalState(headInternalValue);
+  if (targetState === 0) return [];
+
+  const updates: DamageCodeUpdate[] = [];
+  for (const damageCode of [SENSOR_CRITICAL_CODE, LIFE_SUPPORT_CRITICAL_CODE]) {
+    if ((criticalStateBytes[damageCode] ?? 0) >= targetState) continue;
+    criticalStateBytes[damageCode] = targetState;
+    updates.push({ damageCode, damageValue: targetState });
+  }
+  return updates;
+}
 function resolveBotHitSection(
   mechId: number | undefined,
   attach: number,
@@ -139,21 +207,10 @@ function shouldSpillUpperBodyHitToCenter(hitSection: CombatAttachmentHitSection)
     || hitSection.armorIndex === 6;
 }
 
-const INTERNAL_HEAD_INDEX = 0;
-const INTERNAL_CENTER_TORSO_INDEX = 1;
-const INTERNAL_LEFT_TORSO_INDEX = 2;
-const INTERNAL_RIGHT_TORSO_INDEX = 3;
-const INTERNAL_LEFT_ARM_INDEX = 4;
-const INTERNAL_RIGHT_ARM_INDEX = 5;
-const INTERNAL_LEFT_LEG_INDEX = 6;
-const INTERNAL_RIGHT_LEG_INDEX = 7;
-
-function isBotDestroyed(internalValues: readonly number[]): boolean {
-  const centerTorsoGone = (internalValues[INTERNAL_CENTER_TORSO_INDEX] ?? 0) <= 0;
-  const bothLegsGone =
-    (internalValues[INTERNAL_LEFT_LEG_INDEX] ?? 0) <= 0
-    && (internalValues[INTERNAL_RIGHT_LEG_INDEX] ?? 0) <= 0;
-  return centerTorsoGone || bothLegsGone;
+function isActorDestroyed(internalValues: readonly number[]): boolean {
+  const centerTorsoGone = (internalValues[4] ?? 0) <= 0;
+  const headGone = (internalValues[7] ?? 0) <= 0;
+  return centerTorsoGone || headGone;
 }
 
 function getWeaponDamageByName(weaponName: string | undefined): number | undefined {
@@ -190,26 +247,34 @@ function getShotDamage(session: ClientSession, weaponSlot: number): { damage: nu
   };
 }
 
-function applyDamageToBotSection(
+function applyDamageToSection(
   armorValues: number[],
   internalValues: number[],
   hitSection: CombatAttachmentHitSection,
   damage: number,
-): Array<{ damageCode: number; damageValue: number }> {
-  const updates: Array<{ damageCode: number; damageValue: number }> = [];
+  headArmor = 0,
+): { updates: DamageCodeUpdate[]; headArmor: number } {
+  const updates: DamageCodeUpdate[] = [];
   let remaining = Math.max(0, damage);
+  let nextHeadArmor = Math.max(0, headArmor);
 
-  if (remaining <= 0) return updates;
+  if (remaining <= 0) return { updates, headArmor: nextHeadArmor };
 
   const armorIndex = hitSection.armorIndex;
   const internalIndex = hitSection.internalIndex;
-  const armorCurrent = armorValues[armorIndex] ?? 0;
+  const armorCurrent = armorIndex >= 0
+    ? (armorValues[armorIndex] ?? 0)
+    : internalIndex === 7 ? nextHeadArmor : 0;
 
-  if (armorCurrent > 0) {
+  if (armorIndex >= 0 && armorCurrent > 0) {
     const absorbedByArmor = Math.min(armorCurrent, remaining);
     const armorValue = armorCurrent - absorbedByArmor;
     armorValues[armorIndex] = armorValue;
     updates.push({ damageCode: 0x15 + armorIndex, damageValue: armorValue });
+    remaining -= absorbedByArmor;
+  } else if (armorIndex < 0 && internalIndex === 7 && armorCurrent > 0) {
+    const absorbedByArmor = Math.min(armorCurrent, remaining);
+    nextHeadArmor = armorCurrent - absorbedByArmor;
     remaining -= absorbedByArmor;
   }
 
@@ -221,7 +286,34 @@ function applyDamageToBotSection(
     updates.push({ damageCode: 0x20 + internalIndex, damageValue: internalValue });
   }
 
-  return updates;
+  return { updates, headArmor: nextHeadArmor };
+}
+
+function chooseRetaliationHitSection(
+  session: ClientSession,
+  armorValues: readonly number[],
+  internalValues: readonly number[],
+  headArmor: number,
+): CombatAttachmentHitSection {
+  const start = session.combatRetaliationCursor ?? 0;
+  for (let offset = 0; offset < LOCAL_RETALIATION_SECTIONS.length; offset++) {
+    const idx = (start + offset) % LOCAL_RETALIATION_SECTIONS.length;
+    const section = LOCAL_RETALIATION_SECTIONS[idx];
+    if (
+      (section.armorIndex >= 0
+        ? (armorValues[section.armorIndex] ?? 0)
+        : section.internalIndex === 7 ? headArmor : 0) > 0
+      || (internalValues[section.internalIndex] ?? 0) > 0
+    ) {
+      session.combatRetaliationCursor = (idx + 1) % LOCAL_RETALIATION_SECTIONS.length;
+      return section;
+    }
+  }
+  const fallback = LOCAL_RETALIATION_SECTIONS[start % LOCAL_RETALIATION_SECTIONS.length]
+    ?? LOCAL_RETALIATION_SECTIONS[0];
+  session.combatRetaliationCursor = ((start % LOCAL_RETALIATION_SECTIONS.length) + 1)
+    % LOCAL_RETALIATION_SECTIONS.length;
+  return fallback;
 }
 
 function resolveEffectiveHitSection(
@@ -291,6 +383,79 @@ function sendBotDeathTransition(
   session.botDeathTimer.unref();
 }
 
+function queueCombatResultTransition(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+  resultCode: CombatResultCode,
+  reason: string,
+  delayMs: number,
+): void {
+  if (session.combatResultCode !== undefined) {
+    connLog.debug(
+      '[world/combat] match result already queued/sent (%s) — ignoring duplicate trigger (%s)',
+      session.combatResultCode === COMBAT_RESULT_VICTORY ? 'victory' : 'loss',
+      reason,
+    );
+    return;
+  }
+
+  session.combatResultCode = resultCode;
+  stopBotCombatActions(session);
+  connLog.info(
+    '[world/combat] queued match result=%s in %dms (%s)',
+    resultCode === COMBAT_RESULT_VICTORY ? 'victory' : 'loss',
+    delayMs,
+    reason,
+  );
+
+  session.combatResultTimer = setTimeout(() => {
+    session.combatResultTimer = undefined;
+    if (session.socket.destroyed || !session.socket.writable || session.phase !== 'combat') return;
+
+    const resultLabel = resultCode === COMBAT_RESULT_VICTORY ? 'victory' : 'loss';
+    connLog.info('[world/combat] sending Cmd75/Cmd63 result transition (%s)', resultLabel);
+    send(
+      session.socket,
+      buildCmd75CombatResultPacket(resultCode, nextSeq(session)),
+      capture,
+      `CMD75_RESULT_${resultLabel.toUpperCase()}`,
+    );
+    send(
+      session.socket,
+      buildCmd63ArenaSceneInitPacket(nextSeq(session)),
+      capture,
+      'CMD63_RESULT_SCENE',
+    );
+
+    if (session.combatWorldRestoreTimer !== undefined) {
+      clearTimeout(session.combatWorldRestoreTimer);
+      session.combatWorldRestoreTimer = undefined;
+    }
+    session.combatWorldRestoreTimer = setTimeout(() => {
+      session.combatWorldRestoreTimer = undefined;
+      if (session.socket.destroyed || !session.socket.writable || session.phase !== 'combat') return;
+
+      connLog.info('[world/combat] restoring world mode after result scene (%s)', resultLabel);
+      resetCombatState(session);
+      session.worldInitialized = true;
+      send(session.socket, buildWelcomePacket(), capture, 'WORLD_WELCOME_AFTER_RESULT');
+      sendSceneRefresh(
+        players,
+        session,
+        connLog,
+        capture,
+        resultCode === COMBAT_RESULT_VICTORY
+          ? 'Combat over: victory.'
+          : 'Combat over: defeat.',
+      );
+    }, RESULT_WORLD_RESTORE_DELAY_MS);
+    session.combatWorldRestoreTimer.unref();
+  }, delayMs);
+  session.combatResultTimer.unref();
+}
+
 /**
  * Clear all repeating combat timers on a session.
  *
@@ -304,6 +469,18 @@ export function stopCombatTimers(session: ClientSession): void {
     clearTimeout(session.botDeathTimer);
     session.botDeathTimer = undefined;
   }
+  if (session.combatResultTimer !== undefined) {
+    clearTimeout(session.combatResultTimer);
+    session.combatResultTimer = undefined;
+  }
+  if (session.combatWorldRestoreTimer !== undefined) {
+    clearTimeout(session.combatWorldRestoreTimer);
+    session.combatWorldRestoreTimer = undefined;
+  }
+  if (session.combatBootstrapTimer !== undefined) {
+    clearTimeout(session.combatBootstrapTimer);
+    session.combatBootstrapTimer = undefined;
+  }
   if (session.combatJumpTimer !== undefined) {
     clearInterval(session.combatJumpTimer);
     session.combatJumpTimer = undefined;
@@ -312,6 +489,28 @@ export function stopCombatTimers(session: ClientSession): void {
     clearInterval(session.combatJumpFuelRegenTimer);
     session.combatJumpFuelRegenTimer = undefined;
   }
+  session.combatResultCode = undefined;
+}
+
+export function resetCombatState(session: ClientSession): void {
+  stopCombatTimers(session);
+  session.combatInitialized = false;
+  session.phase = 'world';
+  session.botHealth = undefined;
+  session.playerHealth = undefined;
+  session.combatBotHeadArmor = undefined;
+  session.combatPlayerHeadArmor = undefined;
+  session.combatBotCriticalStateBytes = undefined;
+  session.combatPlayerArmorValues = undefined;
+  session.combatPlayerInternalValues = undefined;
+  session.combatPlayerCriticalStateBytes = undefined;
+  session.combatRetaliationCursor = undefined;
+  session.combatJumpAltitude = undefined;
+  session.combatJumpFuel = undefined;
+  session.lastCombatFireActionAt = undefined;
+  session.combatShotsAccepted = undefined;
+  session.combatShotsAction0Correlated = undefined;
+  session.combatShotsDirectCmd10 = undefined;
 }
 
 // ── ComStar messaging ─────────────────────────────────────────────────────────
@@ -538,6 +737,7 @@ export function handleRoomMenuSelection(
  *   • identity4    — empty; unknown purpose.
  */
 export function sendCombatBootstrapSequence(
+  players: PlayerRegistry,
   session: ClientSession,
   connLog: Logger,
   capture: CaptureLogger,
@@ -553,10 +753,16 @@ export function sendCombatBootstrapSequence(
   const mechEntry       = WORLD_MECH_BY_ID.get(mechId);
   const extraCritCount  = mechEntry?.extraCritCount ?? 0;
   const critBytes       = Math.max(0, extraCritCount + 21);
+  const playerCriticalStateBytes = createCriticalStateBytes(extraCritCount);
 
   // Store per-mech speedMag caps so Cmd8/9 handlers can apply them.
   session.combatMaxSpeedMag  = mechEntry?.maxSpeedMag  ?? 0;
   session.combatWalkSpeedMag = mechEntry?.walkSpeedMag ?? 0;
+  if (session.combatResultTimer !== undefined) {
+    clearTimeout(session.combatResultTimer);
+    session.combatResultTimer = undefined;
+  }
+  session.combatResultCode = undefined;
   if (session.combatJumpTimer !== undefined) {
     clearInterval(session.combatJumpTimer);
     session.combatJumpTimer = undefined;
@@ -568,7 +774,6 @@ export function sendCombatBootstrapSequence(
   session.combatJumpAltitude = 0;
   session.combatJumpFuel = JUMP_JET_FUEL_MAX;
   session.botHealth    = BOT_INITIAL_HEALTH;
-  session.playerHealth = BOT_INITIAL_HEALTH; // simplified IS counter (stops Cmd67 when ≤ 0)
 
   // 1. MMC SYNC — plain ARIES packet; no game-frame CRC.
   send(socket, buildCombatWelcomePacket(), capture, 'COMBAT_WELCOME_MMC');
@@ -577,237 +782,335 @@ export function sendCombatBootstrapSequence(
   // frames that arrive immediately use the correct CRC seed.
   session.phase = 'combat';
 
-  // 2. Cmd72 — local bootstrap (combat CRC seed applied by buildGamePacket).
-  const cmd72 = buildCmd72LocalBootstrapPacket(
-    {
-      scenarioTitle:      DEFAULT_SCENE_NAME,
-      localSlot:          0,
-      unknownByte0:       0,
-      terrainId:          1,      // ASSUMPTION: default terrain set
-      terrainResourceId:  0,      // ASSUMPTION: no additional resource
-      terrainPoints:      [],
-      arenaPoints:        [],
-      globalA:            2800,   // D=2800 → D²=7840000; equilibrium v = speed_target (RE: FUN_0042c830)
-      globalB:            0,
-      globalC:            0,
-      headingBias:        0,      // ASSUMPTION: 0 → MOTION_NEUTRAL after encode
-      identity0:          callsign.substring(0, 11),
-      identity1:          callsign.substring(0, 31),
-      identity2:          mechEntry?.typeString ?? '',   // mech variant string (e.g. "SDR-5V")
-      identity3:          session.allegiance   ?? '',   // house allegiance (e.g. "Davion")
-      identity4:          '',     // ASSUMPTION: unknown; empty safe
-      statusByte:         0,
-      initialX:           0,
-      initialY:           0,
-      extraType2Values:   [],
-      remainingActorCount: 1,     // 1 remote bot actor follows (Cmd64 below)
-      unknownType1Raw:    MOTION_NEUTRAL,
-      mech: {
-        mechId,
-        critStateExtraCount:  extraCritCount,
-        criticalStateBytes:   Array<number>(critBytes).fill(0),
-        extraStateBytes:      [],
-        armorLikeStateBytes:  Array<number>(11).fill(0),  // full armor
-        // internalStateBytes[i] must be non-zero for each IS slot index i
-        // referenced by a weapon (mec[0x8e+slot*2] == i per FUN_0042c200).
-        // Indices 4 and 7 are also required non-zero by the IS gate (FUN_0042bb00).
-        // Order: [arm, arm, side, side, CT, leg, leg, head] (§23.8, IS lookup RE).
-        internalStateBytes:   mechInternalStateBytes(mechEntry?.tonnage ?? 0),
-        // Empty ammoStateValues → client uses mec file defaults; avoids the
-        // "400/slot" display artefact from sending arbitrary capacity values.
-        // Per-mech ammo bin data will be wired in issue #80.
-        ammoStateValues:      [],  // let client use mec defaults
-        actorDisplayName:     callsign.substring(0, 31),
+  if (session.combatBootstrapTimer !== undefined) {
+    clearTimeout(session.combatBootstrapTimer);
+    session.combatBootstrapTimer = undefined;
+  }
+  connLog.info('[world] delaying combat bootstrap by %dms so DROP can display', COMBAT_DROP_DELAY_MS);
+  session.combatBootstrapTimer = setTimeout(() => {
+    session.combatBootstrapTimer = undefined;
+    if (session.socket.destroyed || !session.socket.writable || session.phase !== 'combat') return;
+
+    // 2. Cmd72 — local bootstrap (combat CRC seed applied by buildGamePacket).
+    const cmd72 = buildCmd72LocalBootstrapPacket(
+      {
+        scenarioTitle:      DEFAULT_SCENE_NAME,
+        localSlot:          0,
+        unknownByte0:       0,
+        terrainId:          1,      // ASSUMPTION: default terrain set
+        terrainResourceId:  0,      // ASSUMPTION: no additional resource
+        terrainPoints:      [],
+        arenaPoints:        [],
+        globalA:            2800,   // D=2800 → D²=7840000; equilibrium v = speed_target (RE: FUN_0042c830)
+        globalB:            0,
+        globalC:            0,
+        headingBias:        0,      // ASSUMPTION: 0 → MOTION_NEUTRAL after encode
+        identity0:          callsign.substring(0, 11),
+        identity1:          callsign.substring(0, 31),
+        identity2:          mechEntry?.typeString ?? '',
+        identity3:          session.allegiance   ?? '',
+        identity4:          '',
+        statusByte:         0,
+        initialX:           0,
+        initialY:           0,
+        extraType2Values:   [],
+        remainingActorCount: 1,
+        unknownType1Raw:    MOTION_NEUTRAL,
+        mech: {
+          mechId,
+          critStateExtraCount:  extraCritCount,
+          criticalStateBytes:   playerCriticalStateBytes.slice(0, critBytes),
+          extraStateBytes:      [],
+          armorLikeStateBytes:  Array<number>(11).fill(0),
+          // internalStateBytes[i] must be non-zero for each IS slot index i
+          // referenced by a weapon (mec[0x8e+slot*2] == i per FUN_0042c200).
+          // Indices 4 and 7 are also required non-zero by the IS gate (FUN_0042bb00).
+          // Order: [arm, arm, side, side, CT, leg, leg, head] (§23.8, IS lookup RE).
+          internalStateBytes:   mechInternalStateBytes(mechEntry?.tonnage ?? 0),
+          ammoStateValues:      [],
+          actorDisplayName:     callsign.substring(0, 31),
+        },
       },
-    },
-    nextSeq(session),
-  );
-
-  connLog.info('[world] sending Cmd72 combat bootstrap (mech_id=%d callsign="%s" type=%s allegiance=%s)',
-    mechId, callsign, mechEntry?.typeString ?? '?', session.allegiance ?? '?');
-  send(socket, cmd72, capture, 'CMD72_COMBAT_BOOTSTRAP');
-  session.combatStartAt = Date.now();
-
-  // 3. Cmd64 — add remote bot actor at slot 1.
-  const botMechId   = session.combatBotMechId ?? mechId;
-  const botMechEntry = WORLD_MECH_BY_ID.get(botMechId);
-  session.combatBotArmorValues = [...(botMechEntry?.armorLikeMaxValues ?? DEFAULT_BOT_ARMOR_VALUES)];
-  session.combatBotInternalValues = botMechEntry !== undefined
-    ? mechInternalStateBytes(botMechEntry.tonnage)
-    : [...DEFAULT_BOT_INTERNAL_VALUES];
-  session.botHealth = getBotDurability(
-    session.combatBotArmorValues,
-    session.combatBotInternalValues,
-  );
-  const cmd64 = buildCmd64RemoteActorPacket(
-    {
-      slot:          1,
-      actorTypeByte: 0,
-      identity0:     'Opponent',
-      identity1:     'Opponent',
-      identity2:     botMechEntry?.typeString ?? '',  // bot mech variant string
-      identity3:     '',
-      identity4:     '',
-      statusByte:    0,
-      mechId:        botMechId,
-    },
-    nextSeq(session),
-  );
-  send(socket, cmd64, capture, 'CMD64_BOT_ACTOR');
-  connLog.info('[world] bot actor: mech_id=%d type=%s', botMechId, botMechEntry?.typeString ?? '?');
-
-  // 4. Cmd65 — initial position for the local actor (slot 0) at the origin.
-  //    Gives the client something to render immediately after bootstrap.
-  //    facing/throttle/legVel/speedMag = 0 (stationary, no heading).
-  const cmd65 = buildCmd65PositionSyncPacket(
-    { slot: 0, x: 0, y: 0, z: 0, facing: 0, throttle: 0, legVel: 0, speedMag: 0 },
-    nextSeq(session),
-  );
-  send(socket, cmd65, capture, 'CMD65_INITIAL_POSITION');
-
-  // 5. Cmd65 — initial position for the bot (slot 1), BOT_SPAWN_DISTANCE units
-  //    out to the north on the
-  //    arena floor. In the live protocol path here, x/y are the horizontal
-  //    world coordinates and z is altitude; putting the distance into z leaves the
-  //    actor effectively airborne/off-scene and breaks visibility/targeting.
-  const cmd65Bot = buildCmd65PositionSyncPacket(
-    { slot: 1, x: 0, y: BOT_SPAWN_DISTANCE, z: 0, facing: 0, throttle: 0, legVel: 0, speedMag: 0 },
-    nextSeq(session),
-  );
-  send(socket, cmd65Bot, capture, 'CMD65_BOT_POSITION');
-
-  // 6. Cmd62 — "all actors ready" / combat-start signal.
-  //    Clears DAT_0047ef60 bit 0x20, which blocks SPACEBAR weapon fire.
-  //    Must be sent after all Cmd64/Cmd65 packets.
-  const cmd62 = buildCmd62CombatStartPacket(nextSeq(session));
-  send(socket, cmd62, capture, 'CMD62_COMBAT_START');
-
-  // Keep bot stationary by re-sending its position every second.
-  session.botPositionTimer = setInterval(() => {
-    if (session.socket.destroyed || !session.socket.writable) return;
-    send(
-      session.socket,
-      buildCmd65PositionSyncPacket(
-        { slot: 1, x: 0, y: BOT_SPAWN_DISTANCE, z: 0, facing: 0, throttle: 0, legVel: 0, speedMag: 0 },
-        nextSeq(session),
-      ),
-      capture, 'CMD65_BOT_POSITION',
+      nextSeq(session),
     );
-  }, 1000);
-  session.botPositionTimer.unref();
 
-  // Passive jump fuel regeneration while grounded/idle.
-  session.combatJumpFuelRegenTimer = setInterval(() => {
+    connLog.info('[world] sending Cmd72 combat bootstrap (mech_id=%d callsign="%s" type=%s allegiance=%s)',
+      mechId, callsign, mechEntry?.typeString ?? '?', session.allegiance ?? '?');
+    send(socket, cmd72, capture, 'CMD72_COMBAT_BOOTSTRAP');
+    session.combatStartAt = Date.now();
+
+    // 3. Cmd64 — add remote bot actor at slot 1.
+    const botMechId   = session.combatBotMechId ?? mechId;
+    const botMechEntry = WORLD_MECH_BY_ID.get(botMechId);
+    const botCriticalStateBytes = createCriticalStateBytes(botMechEntry?.extraCritCount);
+    session.combatBotArmorValues = [...(botMechEntry?.armorLikeMaxValues ?? DEFAULT_BOT_ARMOR_VALUES)];
+    session.combatBotInternalValues = botMechEntry !== undefined
+      ? mechInternalStateBytes(botMechEntry.tonnage)
+      : [...DEFAULT_BOT_INTERNAL_VALUES];
+    session.combatBotCriticalStateBytes = botCriticalStateBytes;
+    session.combatBotHeadArmor = HEAD_ARMOR_VALUE;
+    session.botHealth = getCombatDurability(
+      session.combatBotArmorValues,
+      session.combatBotInternalValues,
+    ) + (session.combatBotHeadArmor ?? 0);
+    session.combatPlayerArmorValues = [...(mechEntry?.armorLikeMaxValues ?? DEFAULT_BOT_ARMOR_VALUES)];
+    session.combatPlayerInternalValues = mechEntry !== undefined
+      ? mechInternalStateBytes(mechEntry.tonnage)
+      : [...DEFAULT_BOT_INTERNAL_VALUES];
+    session.combatPlayerCriticalStateBytes = playerCriticalStateBytes;
+    session.combatPlayerHeadArmor = HEAD_ARMOR_VALUE;
+    session.playerHealth = getCombatDurability(
+      session.combatPlayerArmorValues,
+      session.combatPlayerInternalValues,
+    ) + (session.combatPlayerHeadArmor ?? 0);
+    session.combatRetaliationCursor = 0;
+    const cmd64 = buildCmd64RemoteActorPacket(
+      {
+        slot:          1,
+        actorTypeByte: 0,
+        identity0:     'Opponent',
+        identity1:     'Opponent',
+        identity2:     botMechEntry?.typeString ?? '',
+        identity3:     '',
+        identity4:     '',
+        statusByte:    0,
+        mechId:        botMechId,
+      },
+      nextSeq(session),
+    );
+    send(socket, cmd64, capture, 'CMD64_BOT_ACTOR');
+    connLog.info('[world] bot actor: mech_id=%d type=%s', botMechId, botMechEntry?.typeString ?? '?');
+
+    const cmd65 = buildCmd65PositionSyncPacket(
+      { slot: 0, x: 0, y: 0, z: 0, facing: 0, throttle: 0, legVel: 0, speedMag: 0 },
+      nextSeq(session),
+    );
+    send(socket, cmd65, capture, 'CMD65_INITIAL_POSITION');
+
+    const cmd65Bot = buildCmd65PositionSyncPacket(
+      { slot: 1, x: 0, y: BOT_SPAWN_DISTANCE, z: 0, facing: 0, throttle: 0, legVel: 0, speedMag: 0 },
+      nextSeq(session),
+    );
+    send(socket, cmd65Bot, capture, 'CMD65_BOT_POSITION');
+
+    const cmd62 = buildCmd62CombatStartPacket(nextSeq(session));
+    send(socket, cmd62, capture, 'CMD62_COMBAT_START');
+
+    session.botPositionTimer = setInterval(() => {
+      if (session.socket.destroyed || !session.socket.writable) return;
+      send(
+        session.socket,
+        buildCmd65PositionSyncPacket(
+          { slot: 1, x: 0, y: BOT_SPAWN_DISTANCE, z: 0, facing: 0, throttle: 0, legVel: 0, speedMag: 0 },
+          nextSeq(session),
+        ),
+        capture, 'CMD65_BOT_POSITION',
+      );
+    }, 1000);
+    session.botPositionTimer.unref();
+
+    session.combatJumpFuelRegenTimer = setInterval(() => {
+      if (session.socket.destroyed || !session.socket.writable) return;
+      const before = session.combatJumpFuel ?? JUMP_JET_FUEL_MAX;
+      regenJumpFuelIfGrounded(session);
+      const after = session.combatJumpFuel ?? before;
+      if (after !== before) {
+        connLog.debug('[world/combat] jump fuel regen: %d -> %d', before, after);
+      }
+    }, JUMP_JET_FUEL_REGEN_INTERVAL_MS);
+    session.combatJumpFuelRegenTimer.unref();
+
+    // Bot fires back at the player every BOT_FIRE_INTERVAL_MS milliseconds.
+    // Stops once the server-side per-location local durability state shows the
+    // player has been structurally destroyed.
+    session.botFireTimer = setInterval(() => {
     if (session.socket.destroyed || !session.socket.writable) return;
-    const before = session.combatJumpFuel ?? JUMP_JET_FUEL_MAX;
-    regenJumpFuelIfGrounded(session);
-    const after = session.combatJumpFuel ?? before;
-    if (after !== before) {
-      connLog.debug('[world/combat] jump fuel regen: %d -> %d', before, after);
-    }
-  }, JUMP_JET_FUEL_REGEN_INTERVAL_MS);
-  session.combatJumpFuelRegenTimer.unref();
 
-  // Bot fires back at the player every BOT_FIRE_INTERVAL_MS milliseconds.
-  // Stops once server-side playerHealth estimate reaches 0 (client handles
-  // the actual death/results screen via local IS simulation — see §23.6).
-  session.botFireTimer = setInterval(() => {
-    if (session.socket.destroyed || !session.socket.writable) return;
-
-    // Server-side health gate — stop retaliating after estimated player death.
-    if ((session.playerHealth ?? 0) <= 0) {
+    const playerArmorValues = [...(session.combatPlayerArmorValues ?? DEFAULT_BOT_ARMOR_VALUES)];
+    const playerInternalValues = [...(session.combatPlayerInternalValues ?? DEFAULT_BOT_INTERNAL_VALUES)];
+    const playerCriticalStateBytes = [...(session.combatPlayerCriticalStateBytes ?? createCriticalStateBytes(mechEntry?.extraCritCount))];
+    const playerHeadArmor = session.combatPlayerHeadArmor ?? HEAD_ARMOR_VALUE;
+    if (isActorDestroyed(playerInternalValues)) {
       clearInterval(session.botFireTimer);
       session.botFireTimer = undefined;
       connLog.info('[world/combat] player IS depleted (server-side estimate) — bot stopped firing');
+      queueCombatResultTransition(
+        players,
+        session,
+        connLog,
+        capture,
+        COMBAT_RESULT_LOSS,
+        'player already structurally destroyed',
+        PLAYER_RESULT_DELAY_MS,
+      );
       return;
     }
 
-    session.playerHealth = Math.max(0, (session.playerHealth ?? 0) - BOT_RETALIATION_DAMAGE);
-    connLog.debug(
-      '[world/combat] bot fires Cmd67: damage=%d playerHealth=%d',
+    const hitSection = verificationMode === 'headtest'
+      ? HEAD_RETALIATION_SECTION
+      : chooseRetaliationHitSection(session, playerArmorValues, playerInternalValues, playerHeadArmor);
+    const damageResult = applyDamageToSection(
+      playerArmorValues,
+      playerInternalValues,
+      hitSection,
       BOT_RETALIATION_DAMAGE,
+      playerHeadArmor,
+    );
+    session.combatPlayerArmorValues = playerArmorValues;
+    session.combatPlayerInternalValues = playerInternalValues;
+    const headCriticalUpdates =
+      hitSection.internalIndex === 7 && damageResult.updates.some(update => update.damageCode === 0x27)
+        ? applyHeadCriticalStateUpdates(playerCriticalStateBytes, playerInternalValues[7] ?? 0)
+        : [];
+    session.combatPlayerCriticalStateBytes = playerCriticalStateBytes;
+    session.combatPlayerHeadArmor = damageResult.headArmor;
+    session.playerHealth = getCombatDurability(playerArmorValues, playerInternalValues);
+    session.playerHealth += damageResult.headArmor;
+    const allUpdates = [...damageResult.updates, ...headCriticalUpdates];
+    const armorRemaining = hitSection.armorIndex >= 0
+      ? `${playerArmorValues[hitSection.armorIndex] ?? 0}`
+      : `${damageResult.headArmor}`;
+    connLog.debug(
+      '[world/combat] bot fires Cmd67: damage=%d hit=%s playerHealth=%d armor=%s internal=%d updates=%s',
+      BOT_RETALIATION_DAMAGE,
+      hitSection.label,
       session.playerHealth,
+      armorRemaining,
+      playerInternalValues[hitSection.internalIndex] ?? 0,
+      allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join(',') || 'none',
     );
-    send(
-      session.socket,
-      buildCmd67LocalDamagePacket(1, BOT_RETALIATION_DAMAGE, nextSeq(session)),
-      capture, 'CMD67_BOT_RETALIATION',
-    );
-  }, BOT_FIRE_INTERVAL_MS);
-  session.botFireTimer.unref();
-
-  const verificationMode = session.combatVerificationMode;
-  session.combatVerificationMode = undefined;
-  session.combatShotsAccepted = 0;
-  session.combatShotsAction0Correlated = 0;
-  session.combatShotsDirectCmd10 = 0;
-  if (verificationMode === 'autowin') {
-    setTimeout(() => {
-      if (session.socket.destroyed || !session.socket.writable) return;
-      connLog.info('[world/combat] scripted verification: autowin');
-      session.botHealth = 0;
+    for (const update of allUpdates) {
       send(
         session.socket,
-        buildCmd66ActorDamagePacket(1, 1, 999, nextSeq(session)),
+        buildCmd67LocalDamagePacket(update.damageCode, update.damageValue, nextSeq(session)),
         capture,
-        'CMD66_VERIFY_AUTOWIN',
+        `CMD67_BOT_RETALIATION_${update.damageCode.toString(16)}`,
       );
-      stopBotCombatActions(session);
-      sendBotDeathTransition(session, connLog, capture, 'verify-autowin');
-    }, VERIFY_DELAY_MS).unref();
-  } else if (verificationMode === 'autolose') {
-    setTimeout(() => {
-      if (session.socket.destroyed || !session.socket.writable) return;
-      connLog.info('[world/combat] scripted verification: autolose');
-      session.playerHealth = 0;
-      send(
-        session.socket,
-        buildCmd67LocalDamagePacket(1, 999, nextSeq(session)),
+    }
+    if (isActorDestroyed(playerInternalValues)) {
+      clearInterval(session.botFireTimer);
+      session.botFireTimer = undefined;
+      const fatalReason = (playerInternalValues[7] ?? 0) <= 0
+        ? 'head destroyed'
+        : 'center torso destroyed';
+      connLog.info(
+        '[world/combat] player IS depleted by hit=%s (%s, server-side section tracking) — bot stopped firing',
+        hitSection.label,
+        fatalReason,
+      );
+      queueCombatResultTransition(
+        players,
+        session,
+        connLog,
         capture,
-        'CMD67_VERIFY_AUTOLOSE',
+        COMBAT_RESULT_LOSS,
+        fatalReason,
+        PLAYER_RESULT_DELAY_MS,
       );
-      if (session.botFireTimer !== undefined) {
-        clearInterval(session.botFireTimer);
-        session.botFireTimer = undefined;
-      }
-    }, VERIFY_DELAY_MS).unref();
-  } else if (verificationMode === 'dmglocal' || verificationMode === 'dmgbot') {
-    const sendSweep = (): void => {
-      if (session.socket.destroyed || !session.socket.writable) return;
-      connLog.info('[world/combat] scripted verification: %s sweep', verificationMode);
+    }
+    }, BOT_FIRE_INTERVAL_MS);
+    session.botFireTimer.unref();
 
-      VERIFY_DAMAGE_CODES.forEach((code, idx) => {
-        setTimeout(() => {
-          if (session.socket.destroyed || !session.socket.writable) return;
-          if (verificationMode === 'dmglocal') {
-            send(
-              session.socket,
-              buildCmd67LocalDamagePacket(code, 5, nextSeq(session)),
-              capture,
-              `CMD67_VERIFY_SWEEP_${code}`,
-            );
-          } else {
-            send(
-              session.socket,
-              buildCmd66ActorDamagePacket(1, code, 5, nextSeq(session)),
-              capture,
-              `CMD66_VERIFY_SWEEP_${code}`,
-            );
-          }
-        }, idx * VERIFY_SWEEP_STEP_MS).unref();
-      });
-    };
+    const verificationMode = session.combatVerificationMode;
+    session.combatVerificationMode = undefined;
+    session.combatShotsAccepted = 0;
+    session.combatShotsAction0Correlated = 0;
+    session.combatShotsDirectCmd10 = 0;
+    if (verificationMode === 'autowin') {
+      setTimeout(() => {
+        if (session.socket.destroyed || !session.socket.writable) return;
+        connLog.info('[world/combat] scripted verification: autowin');
+        session.botHealth = 0;
+        send(
+          session.socket,
+          buildCmd66ActorDamagePacket(1, 1, 999, nextSeq(session)),
+          capture,
+          'CMD66_VERIFY_AUTOWIN',
+        );
+        stopBotCombatActions(session);
+        sendBotDeathTransition(session, connLog, capture, 'verify-autowin');
+        queueCombatResultTransition(
+          players,
+          session,
+          connLog,
+          capture,
+          COMBAT_RESULT_VICTORY,
+          'verify-autowin',
+          BOT_RESULT_DELAY_MS,
+        );
+      }, VERIFY_DELAY_MS).unref();
+    } else if (verificationMode === 'autolose') {
+      setTimeout(() => {
+        if (session.socket.destroyed || !session.socket.writable) return;
+        connLog.info('[world/combat] scripted verification: autolose');
+        session.playerHealth = 0;
+        session.combatPlayerHeadArmor = 0;
+        session.combatPlayerArmorValues = Array<number>(10).fill(0);
+        session.combatPlayerInternalValues = Array<number>(8).fill(0);
+        send(
+          session.socket,
+          buildCmd67LocalDamagePacket(1, 999, nextSeq(session)),
+          capture,
+          'CMD67_VERIFY_AUTOLOSE',
+        );
+        if (session.botFireTimer !== undefined) {
+          clearInterval(session.botFireTimer);
+          session.botFireTimer = undefined;
+        }
+        queueCombatResultTransition(
+          players,
+          session,
+          connLog,
+          capture,
+          COMBAT_RESULT_LOSS,
+          'verify-autolose',
+          PLAYER_RESULT_DELAY_MS,
+        );
+      }, VERIFY_DELAY_MS).unref();
+    } else if (verificationMode === 'dmglocal' || verificationMode === 'dmgbot') {
+      const sendSweep = (): void => {
+        if (session.socket.destroyed || !session.socket.writable) return;
+        connLog.info('[world/combat] scripted verification: %s sweep', verificationMode);
 
-    setTimeout(sendSweep, VERIFY_DELAY_MS).unref();
-  } else if (verificationMode === 'strictfire') {
-    setTimeout(() => {
-      if (session.socket.destroyed || !session.socket.writable) return;
-      connLog.info('[world/combat] scripted verification: strictfire observation mode (cmd12/action0 correlations logged; direct TIC cmd10 accepted)');
-    }, VERIFY_DELAY_MS).unref();
-  }
+        VERIFY_DAMAGE_CODES.forEach((code, idx) => {
+          setTimeout(() => {
+            if (session.socket.destroyed || !session.socket.writable) return;
+            if (verificationMode === 'dmglocal') {
+              send(
+                session.socket,
+                buildCmd67LocalDamagePacket(code, 5, nextSeq(session)),
+                capture,
+                `CMD67_VERIFY_SWEEP_${code}`,
+              );
+            } else {
+              send(
+                session.socket,
+                buildCmd66ActorDamagePacket(1, code, 5, nextSeq(session)),
+                capture,
+                `CMD66_VERIFY_SWEEP_${code}`,
+              );
+            }
+          }, idx * VERIFY_SWEEP_STEP_MS).unref();
+        });
+      };
 
-  session.combatInitialized = true;
-  connLog.info('[world] combat entry complete for "%s"', callsign);
+      setTimeout(sendSweep, VERIFY_DELAY_MS).unref();
+    } else if (verificationMode === 'strictfire') {
+      setTimeout(() => {
+        if (session.socket.destroyed || !session.socket.writable) return;
+        connLog.info('[world/combat] scripted verification: strictfire observation mode (cmd12/action0 correlations logged; direct TIC cmd10 accepted)');
+      }, VERIFY_DELAY_MS).unref();
+    } else if (verificationMode === 'headtest') {
+      setTimeout(() => {
+        if (session.socket.destroyed || !session.socket.writable) return;
+        connLog.info('[world/combat] scripted verification: head-only retaliation mode (bot Cmd67 hits forced to head until head destruction)');
+      }, VERIFY_DELAY_MS).unref();
+    }
+
+    session.combatInitialized = true;
+    connLog.info('[world] combat entry complete for "%s"', callsign);
+  }, COMBAT_DROP_DELAY_MS);
+  session.combatBootstrapTimer.unref();
 }
 
 // ── Text commands ─────────────────────────────────────────────────────────────
@@ -1203,6 +1506,7 @@ export function handleCombatMovementFrame(
 }
 
 export function handleCombatWeaponFireFrame(
+  players: PlayerRegistry,
   session: ClientSession,
   payload: Buffer,
   connLog: Logger,
@@ -1241,10 +1545,10 @@ export function handleCombatWeaponFireFrame(
   }
 
   if (session.botHealth === undefined) {
-    session.botHealth = getBotDurability(
+    session.botHealth = getCombatDurability(
       session.combatBotArmorValues ?? DEFAULT_BOT_ARMOR_VALUES,
       session.combatBotInternalValues ?? DEFAULT_BOT_INTERNAL_VALUES,
-    );
+    ) + (session.combatBotHeadArmor ?? HEAD_ARMOR_VALUE);
   }
   if (session.botHealth <= 0) {
     connLog.debug('[world/combat] cmd-10 shot ignored — bot already destroyed');
@@ -1253,6 +1557,8 @@ export function handleCombatWeaponFireFrame(
 
   const botArmorValues = [...(session.combatBotArmorValues ?? DEFAULT_BOT_ARMOR_VALUES)];
   const botInternalValues = [...(session.combatBotInternalValues ?? DEFAULT_BOT_INTERNAL_VALUES)];
+  const botCriticalStateBytes = [...(session.combatBotCriticalStateBytes ?? createCriticalStateBytes(WORLD_MECH_BY_ID.get(session.combatBotMechId ?? session.selectedMechId ?? FALLBACK_MECH_ID)?.extraCritCount))];
+  let botHeadArmor = session.combatBotHeadArmor ?? HEAD_ARMOR_VALUE;
   const botMechId = session.combatBotMechId ?? session.selectedMechId;
   const botModelId = getCombatModelIdForMechId(botMechId);
   send(session.socket, buildCmd71ResetEffectStatePacket(nextSeq(session)), capture, 'CMD71_RESET');
@@ -1268,12 +1574,19 @@ export function handleCombatWeaponFireFrame(
       botArmorValues,
       botInternalValues,
     );
-    const damageUpdates = applyDamageToBotSection(
+    const damageResult = applyDamageToSection(
       botArmorValues,
       botInternalValues,
       hitSection,
       shotDamage,
+      botHeadArmor,
     );
+    const criticalUpdates =
+      hitSection.internalIndex === 7 && damageResult.updates.some(update => update.damageCode === 0x27)
+        ? applyHeadCriticalStateUpdates(botCriticalStateBytes, botInternalValues[7] ?? 0)
+        : [];
+    botHeadArmor = damageResult.headArmor;
+    const allUpdates = [...damageResult.updates, ...criticalUpdates];
 
     send(
       session.socket,
@@ -1294,7 +1607,7 @@ export function handleCombatWeaponFireFrame(
       capture,
       'CMD68_PROJECTILE',
     );
-    for (const update of damageUpdates) {
+    for (const update of allUpdates) {
       send(
         session.socket,
         buildCmd66ActorDamagePacket(1, update.damageCode, update.damageValue, nextSeq(session)),
@@ -1303,15 +1616,18 @@ export function handleCombatWeaponFireFrame(
       );
     }
 
-    totalDamageUpdates += damageUpdates.length;
+    totalDamageUpdates += allUpdates.length;
     shotSummaries.push(
-      `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${hitSection.label}:${shot.targetSlot}/${shot.targetAttach}`,
+      `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${hitSection.label}:${shot.targetSlot}/${shot.targetAttach}:headArmor=${botHeadArmor}:updates=${allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join('/') || 'none'}`,
     );
   }
 
   session.combatBotArmorValues = botArmorValues;
   session.combatBotInternalValues = botInternalValues;
-  session.botHealth = getBotDurability(botArmorValues, botInternalValues);
+  session.combatBotCriticalStateBytes = botCriticalStateBytes;
+  session.combatBotHeadArmor = botHeadArmor;
+  session.botHealth = getCombatDurability(botArmorValues, botInternalValues);
+  session.botHealth += botHeadArmor;
   connLog.info(
     '[world/combat] cmd10 weapon fire accepted: firePath=%s records=%d weaponSlots=%s botMechId=%s botModelId=%s botHealth=%d updates=%d shots=[%s]',
     firePath,
@@ -1325,10 +1641,19 @@ export function handleCombatWeaponFireFrame(
   );
   send(session.socket, buildCmd71ResetEffectStatePacket(nextSeq(session)), capture, 'CMD71_CLOSE');
 
-  if (isBotDestroyed(botInternalValues)) {
+  if (isActorDestroyed(botInternalValues)) {
     session.botHealth = 0;
     stopBotCombatActions(session);
     sendBotDeathTransition(session, connLog, capture, 'fatal-damage');
+    queueCombatResultTransition(
+      players,
+      session,
+      connLog,
+      capture,
+      COMBAT_RESULT_VICTORY,
+      'bot structurally destroyed',
+      BOT_RESULT_DELAY_MS,
+    );
   }
 }
 

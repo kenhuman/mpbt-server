@@ -472,21 +472,23 @@ export function parseClientCmd7(
 }
 
 /**
- * Parse a client-sent world cmd-4 free-text frame.
- * RPS sender path: FUN_0040d280 -> FUN_00403100
- * Wire layout (args after cmd byte):
- *   [type1 2B: textLen] [raw text bytes]
- * Returns null if the frame is malformed or truncated.
+ * Parse a client-sent cmd-4 free-text frame.
+ *
+ * World chat uses a 2-byte type-1 length. Combat chat uses a 1-byte length
+ * followed immediately by the text bytes.
  */
 export function parseClientCmd4(
   payload: Buffer,
+  combat = false,
 ): { seq: number; text: string } | null {
-  if (payload.length < 9 || payload[0] !== 0x1B) return null;
+  if (payload.length < 8 || payload[0] !== 0x1B) return null;
   const seq = payload[1] - 0x21;
   const cmd = payload[2] - 0x21;
   if (cmd !== 4) return null;
 
-  const [textLen, offset] = decodeArgType1(payload, 3);
+  const [textLen, offset] = combat
+    ? [payload[3] - 0x21, 4]
+    : decodeArgType1(payload, 3);
   const textEnd = offset + textLen;
   // Client frames end with 3 CRC bytes; trailing ESC is optional (verifyInboundGameCRC §3).
   if (textLen < 0 || textEnd + 3 > payload.length) return null;

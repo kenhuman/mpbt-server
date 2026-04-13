@@ -62,6 +62,12 @@ export interface ClientSession {
   botFireTimer?: ReturnType<typeof setInterval>;
   /** One-shot timeout that advances a dead bot from fall animation into wreck state. */
   botDeathTimer?: ReturnType<typeof setTimeout>;
+  /** One-shot timeout that sends the combat match result / result-scene transition. */
+  combatResultTimer?: ReturnType<typeof setTimeout>;
+  /** One-shot timeout that returns the client from the result scene back to world mode. */
+  combatWorldRestoreTimer?: ReturnType<typeof setTimeout>;
+  /** One-shot timeout that delays Cmd72+ combat bootstrap so DROP can display first. */
+  combatBootstrapTimer?: ReturnType<typeof setTimeout>;
   /** Repeating setInterval that drives prototype jump-jet ascent/descent updates. */
   combatJumpTimer?: ReturnType<typeof setInterval>;
   /** Repeating setInterval that regenerates jump-jet fuel while grounded. */
@@ -70,8 +76,8 @@ export interface ClientSession {
   botHealth?: number;
   /**
    * Server-side approximation of the player's remaining IS health.
-   * Decremented each time the bot fires Cmd67 damage. When ≤ 0 the bot stops
-   * firing — the client handles the actual death/results screen locally.
+   * Recomputed from the player's per-section armor/internal values after each
+   * bot retaliation tick. Used for high-level logging and summary only.
    */
   playerHealth?: number;
   /**
@@ -127,7 +133,7 @@ export interface ClientSession {
   selectedMechSlot?: number;
 
   /** Optional scripted combat verification mode consumed on the next /fight bootstrap. */
-  combatVerificationMode?: 'autowin' | 'autolose' | 'dmglocal' | 'dmgbot' | 'strictfire';
+  combatVerificationMode?: 'autowin' | 'autolose' | 'dmglocal' | 'dmgbot' | 'strictfire' | 'headtest';
 
   /**
    * Pending mech slot chosen in the mech-select dialog, held until the
@@ -185,6 +191,39 @@ export interface ClientSession {
    * Order matches Cmd66 class-2 internal codes 0x20..0x27.
    */
   combatBotInternalValues?: number[];
+  /**
+    * Server-side tracked remote critical/system states for the scripted bot.
+    * Indexes match Cmd66 class-0 damage codes (0x00..), with at least the base
+    * 0x15 critical slots retained so head systems can be updated consistently.
+    */
+  combatBotCriticalStateBytes?: number[];
+  /** Server-side remaining head armor for the scripted bot (RE-backed hardcoded value 9). */
+  combatBotHeadArmor?: number;
+  /**
+   * Server-side remaining local-armor values for the player.
+   * Order matches Cmd66/67 class-1 codes 0x15..0x1e.
+   */
+  combatPlayerArmorValues?: number[];
+  /**
+   * Server-side remaining local internal-structure values for the player.
+   * Order matches Cmd66/67 class-2 internal codes 0x20..0x27.
+   */
+  combatPlayerInternalValues?: number[];
+  /**
+   * Server-side tracked local critical/system states for the player.
+   * Indexes match Cmd67 class-0 damage codes (0x00..), with the head-related
+   * sensor/life-support slots mirrored from client evidence.
+    */
+  combatPlayerCriticalStateBytes?: number[];
+  /** Server-side remaining head armor for the player (RE-backed hardcoded value 9). */
+  combatPlayerHeadArmor?: number;
+  /** Last queued/sent combat result code (0 = victory, 1 = loss). */
+  combatResultCode?: 0 | 1;
+  /**
+   * Round-robin cursor for choosing the next retaliation hit section while the
+   * local actor still has multiple intact sections.
+   */
+  combatRetaliationCursor?: number;
   /**
    * True while a KP5 stopping intent is inferred from clientSpeed trend in Cmd9.
    * When set, the Cmd65 echo sends speedMag=0 so actor+0x372 is driven to 0 by
