@@ -528,6 +528,10 @@ function handleWorldGameData(
     handleComstarTextReply(players, session, parsed.dialogId, parsed.text, connLog, capture);
 
   } else if (cmdIdx === 15) {
+    if (session.phase !== 'world') {
+      connLog.debug('[world] cmd-15 ignored outside world phase: phase=%s', session.phase);
+      return;
+    }
     const parsed = parseClientCmd15DuelTerms(payload);
     if (!parsed) {
       connLog.warn('[world] cmd-15 duel terms parse failed');
