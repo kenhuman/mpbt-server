@@ -8,6 +8,7 @@
 
 import {
   buildCmd3BroadcastPacket,
+  buildCmd17DuelTermsPacket,
   buildCmd4SceneInitPacket,
   buildCmd5CursorNormalPacket,
   buildCmd11PlayerEventPacket,
@@ -60,6 +61,7 @@ import {
   DEFAULT_MAP_ROOM_ID,
   DEFAULT_SCENE_NAME,
   SOLARIS_ROOM_BY_ID,
+  worldCaptures,
   worldMapByRoomId,
   getSolarisRoomExits,
   getSolarisRoomName,
@@ -124,6 +126,7 @@ const DEFAULT_BOT_ARMOR_VALUES = Array<number>(10).fill(10);
 const DEFAULT_BOT_INTERNAL_VALUES = Array<number>(8).fill(9);
 const HEAD_ARMOR_VALUE = 9;
 const NO_ARMOR_INDEX = -1;
+const DUEL_STAKE_MAX = 9_999_999;
 const BASE_CRITICAL_STATE_COUNT = 0x15;
 const SENSOR_CRITICAL_CODE = 0x11;
 const LIFE_SUPPORT_CRITICAL_CODE = 0x12;
@@ -510,12 +513,677 @@ export function resetCombatState(session: ClientSession): void {
   session.combatRetaliationCursor = undefined;
   session.combatJumpAltitude = undefined;
   session.combatJumpFuel = undefined;
+  session.combatEjectArmed = undefined;
   session.lastCombatFireActionAt = undefined;
   session.combatRequireAction0 = undefined;
   session.combatShotsAccepted = undefined;
   session.combatShotsRejected = undefined;
   session.combatShotsAction0Correlated = undefined;
   session.combatShotsDirectCmd10 = undefined;
+}
+
+function getActiveDuelPeer(
+  players: PlayerRegistry,
+  session: ClientSession,
+): ClientSession | undefined {
+  const combatSession = players.getCombatSession(session.combatSessionId);
+  if (combatSession?.mode !== 'duel' || combatSession.state !== 'active') {
+    return undefined;
+  }
+
+  const peer = session.combatPeerSessionId ? players.get(session.combatPeerSessionId) : undefined;
+  if (!peer || peer.socket.destroyed || peer.phase !== 'combat' || !peer.combatInitialized) {
+    return undefined;
+  }
+  return peer;
+}
+
+function refreshWorldSceneIfPossible(
+  players: PlayerRegistry,
+  session: ClientSession | undefined,
+  connLog: Logger,
+  message: string,
+): boolean {
+  if (!session || session.phase !== 'world' || !session.worldInitialized || session.socket.destroyed) {
+    return false;
+  }
+  const capture = worldCaptures.get(session.id);
+  if (!capture) {
+    return false;
+  }
+  sendSceneRefresh(players, session, connLog, capture, message);
+  return true;
+}
+
+function normalizeDuelStakeValue(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(DUEL_STAKE_MAX, Math.trunc(value)));
+}
+
+export function sendStagedDuelTermsPanel(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const combatSession = players.getCombatSession(session.combatSessionId);
+  if (combatSession?.mode !== 'duel' || combatSession.state !== 'staged') {
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket('No staged duel is ready for duel terms.', nextSeq(session)),
+      capture,
+      'CMD3_DUEL_TERMS_UNAVAILABLE',
+    );
+    return;
+  }
+
+  const [participantAId, participantBId] = combatSession.participantSessionIds;
+  const participantA = players.get(participantAId);
+  const participantB = players.get(participantBId);
+  const [stakeA, stakeB] = combatSession.duelStakeValues;
+  const roomName = getSolarisRoomName(combatSession.worldMapRoomId);
+
+  send(
+    session.socket,
+    buildCmd17DuelTermsPacket(
+      {
+        mode:         0,
+        participantA: participantA ? getDisplayName(participantA) : 'Pilot A',
+        participantB: participantB ? getDisplayName(participantB) : 'Pilot B',
+        stakeA,
+        stakeB,
+        contextA:     roomName,
+        contextB:     DEFAULT_SCENE_NAME,
+        flagA:        0,
+        flagB:        0,
+      },
+      nextSeq(session),
+    ),
+    capture,
+    'CMD17_DUEL_TERMS',
+  );
+  connLog.info(
+    '[world/duel] opened duel terms panel session=%s viewer="%s" stakes=%d/%d',
+    combatSession.id,
+    getDisplayName(session),
+    stakeA,
+    stakeB,
+  );
+}
+
+export function handleDuelTermsSubmit(
+  players: PlayerRegistry,
+  session: ClientSession,
+  stakeA: number,
+  stakeB: number,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const combatSession = players.getCombatSession(session.combatSessionId);
+  if (combatSession?.mode !== 'duel' || combatSession.state !== 'staged') {
+    connLog.warn('[world/duel] cmd15 ignored: no staged duel for "%s"', getDisplayName(session));
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket('No staged duel is active for submitted duel terms.', nextSeq(session)),
+      capture,
+      'CMD3_DUEL_TERMS_STALE',
+    );
+    return;
+  }
+
+  const normalizedStakeA = normalizeDuelStakeValue(stakeA);
+  const normalizedStakeB = normalizeDuelStakeValue(stakeB);
+  if (normalizedStakeA !== stakeA || normalizedStakeB !== stakeB) {
+    connLog.warn(
+      '[world/duel] normalized out-of-range duel stakes for "%s": %d/%d -> %d/%d',
+      getDisplayName(session),
+      stakeA,
+      stakeB,
+      normalizedStakeA,
+      normalizedStakeB,
+    );
+  }
+
+  combatSession.duelStakeValues = [normalizedStakeA, normalizedStakeB];
+  combatSession.duelTermsUpdatedBySessionId = session.id;
+  combatSession.duelTermsUpdatedAt = Date.now();
+
+  const [participantAId, participantBId] = combatSession.participantSessionIds;
+  const participantA = players.get(participantAId);
+  const participantB = players.get(participantBId);
+  const summary = `Duel terms updated: ${participantA ? getDisplayName(participantA) : 'Pilot A'}=${normalizedStakeA} cb, ${participantB ? getDisplayName(participantB) : 'Pilot B'}=${normalizedStakeB} cb. Use Duel Terms to review or /fight to start.`;
+
+  connLog.info(
+    '[world/duel] cmd15 duel terms submit session=%s by="%s" stakes=%d/%d',
+    combatSession.id,
+    getDisplayName(session),
+    normalizedStakeA,
+    normalizedStakeB,
+  );
+
+  send(
+    session.socket,
+    buildCmd3BroadcastPacket(summary, nextSeq(session)),
+    capture,
+    'CMD3_DUEL_TERMS_UPDATED',
+  );
+
+  const peer = session.combatPeerSessionId ? players.get(session.combatPeerSessionId) : undefined;
+  if (peer && peer.phase === 'world' && peer.worldInitialized && !peer.socket.destroyed) {
+    sendToWorldSession(
+      peer,
+      buildCmd3BroadcastPacket(summary, nextSeq(peer)),
+      'CMD3_DUEL_TERMS_UPDATED',
+    );
+  }
+}
+
+function mirrorDuelRemotePosition(
+  players: PlayerRegistry,
+  session: ClientSession,
+  label: string,
+): void {
+  const peer = getActiveDuelPeer(players, session);
+  if (!peer) {
+    return;
+  }
+
+  sendToWorldSession(
+    peer,
+    buildCmd65PositionSyncPacket(
+      {
+        slot:     1,
+        x:        session.combatX ?? 0,
+        y:        session.combatY ?? 0,
+        z:        session.combatJumpAltitude ?? 0,
+        facing:   ((session.combatHeadingRaw ?? MOTION_NEUTRAL) - MOTION_NEUTRAL) * MOTION_DIV,
+        throttle: session.combatThrottle ?? 0,
+        legVel:   session.combatLegVel ?? 0,
+        speedMag: session.combatSpeedMag ?? 0,
+      },
+      nextSeq(peer),
+    ),
+    label,
+  );
+}
+
+function stopSessionActiveCombatLoops(session: ClientSession): void {
+  if (session.combatBootstrapTimer !== undefined) {
+    clearTimeout(session.combatBootstrapTimer);
+    session.combatBootstrapTimer = undefined;
+  }
+  if (session.combatJumpTimer !== undefined) {
+    clearInterval(session.combatJumpTimer);
+    session.combatJumpTimer = undefined;
+  }
+  if (session.combatJumpFuelRegenTimer !== undefined) {
+    clearInterval(session.combatJumpFuelRegenTimer);
+    session.combatJumpFuelRegenTimer = undefined;
+  }
+}
+
+function clearCombatEjectArm(session: ClientSession, connLog: Logger, reason: string): void {
+  if (!session.combatEjectArmed) {
+    return;
+  }
+  session.combatEjectArmed = false;
+  connLog.debug('[world/combat] cleared eject arm (%s)', reason);
+}
+
+function maybeFinalizeDuelCombatSession(
+  players: PlayerRegistry,
+  combatSessionId: string,
+  participants: readonly ClientSession[],
+  connLog: Logger,
+): void {
+  const combatSession = players.getCombatSession(combatSessionId);
+  if (combatSession?.mode !== 'duel') {
+    return;
+  }
+  if (!participants.every(participant => participant.socket.destroyed || participant.phase === 'world')) {
+    return;
+  }
+
+  for (const participant of participants) {
+    if (participant.combatSessionId === combatSessionId) {
+      participant.combatSessionId = undefined;
+    }
+  }
+  if (participants.length === 2) {
+    const [playerA, playerB] = participants;
+    if (playerA.combatPeerSessionId === playerB.id) {
+      playerA.combatPeerSessionId = undefined;
+    }
+    if (playerB.combatPeerSessionId === playerA.id) {
+      playerB.combatPeerSessionId = undefined;
+    }
+  }
+
+  players.removeCombatSession(combatSessionId);
+  connLog.info('[world/duel] finalized duel session=%s after combat restore', combatSessionId);
+}
+
+function sendDuelDeathTransition(
+  winner: ClientSession,
+  loser: ClientSession,
+  connLog: Logger,
+  reason: string,
+): void {
+  if (winner.botDeathTimer !== undefined) {
+    clearTimeout(winner.botDeathTimer);
+    winner.botDeathTimer = undefined;
+  }
+  if (loser.botDeathTimer !== undefined) {
+    clearTimeout(loser.botDeathTimer);
+    loser.botDeathTimer = undefined;
+  }
+
+  connLog.info(
+    '[world/duel] player destroyed — sending collapse transition winner="%s" loser="%s" (%s)',
+    getDisplayName(winner),
+    getDisplayName(loser),
+    reason,
+  );
+  if (!winner.socket.destroyed && winner.socket.writable && winner.phase === 'combat') {
+    sendToWorldSession(
+      winner,
+      buildCmd70ActorTransitionPacket(1, 8, nextSeq(winner)),
+      'CMD70_DUEL_REMOTE_COLLAPSE',
+    );
+  }
+  if (!loser.socket.destroyed && loser.socket.writable && loser.phase === 'combat') {
+    sendToWorldSession(
+      loser,
+      buildCmd70ActorTransitionPacket(0, 8, nextSeq(loser)),
+      'CMD70_DUEL_LOCAL_COLLAPSE',
+    );
+  }
+
+  const deathTimer = setTimeout(() => {
+    if (!winner.socket.destroyed && winner.socket.writable && winner.phase === 'combat') {
+      sendToWorldSession(
+        winner,
+        buildCmd70ActorTransitionPacket(1, 4, nextSeq(winner)),
+        'CMD70_DUEL_REMOTE_WRECK',
+      );
+    }
+    if (!loser.socket.destroyed && loser.socket.writable && loser.phase === 'combat') {
+      sendToWorldSession(
+        loser,
+        buildCmd70ActorTransitionPacket(0, 4, nextSeq(loser)),
+        'CMD70_DUEL_LOCAL_WRECK',
+      );
+    }
+    winner.botDeathTimer = undefined;
+    loser.botDeathTimer = undefined;
+  }, 1200);
+  winner.botDeathTimer = deathTimer;
+  loser.botDeathTimer = deathTimer;
+  deathTimer.unref();
+}
+
+function queueDuelCombatResultTransition(
+  players: PlayerRegistry,
+  winner: ClientSession,
+  loser: ClientSession,
+  connLog: Logger,
+  reason: string,
+  delayMs: number,
+): void {
+  const combatSessionId = winner.combatSessionId;
+  if (!combatSessionId || loser.combatSessionId !== combatSessionId) {
+    return;
+  }
+
+  const combatSession = players.getCombatSession(combatSessionId);
+  if (combatSession?.mode !== 'duel') {
+    return;
+  }
+  if (winner.combatResultCode !== undefined || loser.combatResultCode !== undefined) {
+    connLog.debug('[world/duel] result already queued/sent for session=%s — ignoring duplicate (%s)', combatSessionId, reason);
+    return;
+  }
+
+  combatSession.state = 'completed';
+  winner.combatResultCode = COMBAT_RESULT_VICTORY;
+  loser.combatResultCode = COMBAT_RESULT_LOSS;
+  winner.combatEjectArmed = false;
+  loser.combatEjectArmed = false;
+  stopSessionActiveCombatLoops(winner);
+  stopSessionActiveCombatLoops(loser);
+  connLog.info(
+    '[world/duel] queued match result winner="%s" loser="%s" in %dms (%s)',
+    getDisplayName(winner),
+    getDisplayName(loser),
+    delayMs,
+    reason,
+  );
+
+  const participants = [winner, loser] as const;
+  const scheduleResult = (
+    participant: ClientSession,
+    opponent: ClientSession,
+    resultCode: CombatResultCode,
+  ): void => {
+    participant.combatResultTimer = setTimeout(() => {
+      participant.combatResultTimer = undefined;
+      if (participant.socket.destroyed || !participant.socket.writable || participant.phase !== 'combat') {
+        maybeFinalizeDuelCombatSession(players, combatSessionId, participants, connLog);
+        return;
+      }
+
+      const resultLabel = resultCode === COMBAT_RESULT_VICTORY ? 'victory' : 'loss';
+      sendToWorldSession(
+        participant,
+        buildCmd75CombatResultPacket(resultCode, nextSeq(participant)),
+        `CMD75_DUEL_RESULT_${resultLabel.toUpperCase()}`,
+      );
+      sendToWorldSession(
+        participant,
+        buildCmd63ArenaSceneInitPacket(nextSeq(participant)),
+        'CMD63_DUEL_RESULT_SCENE',
+      );
+
+      if (participant.combatWorldRestoreTimer !== undefined) {
+        clearTimeout(participant.combatWorldRestoreTimer);
+        participant.combatWorldRestoreTimer = undefined;
+      }
+      participant.combatWorldRestoreTimer = setTimeout(() => {
+        participant.combatWorldRestoreTimer = undefined;
+        if (participant.socket.destroyed || !participant.socket.writable || participant.phase !== 'combat') {
+          maybeFinalizeDuelCombatSession(players, combatSessionId, participants, connLog);
+          return;
+        }
+
+        resetCombatState(participant);
+        participant.worldInitialized = true;
+        participant.duelTermsAvailable = false;
+        participant.combatSessionId = undefined;
+        participant.combatPeerSessionId = undefined;
+        sendToWorldSession(
+          participant,
+          buildWelcomePacket(),
+          `WORLD_WELCOME_AFTER_DUEL_${resultLabel.toUpperCase()}`,
+        );
+        const participantCapture = worldCaptures.get(participant.id);
+        if (participantCapture) {
+          sendSceneRefresh(
+            players,
+            participant,
+            connLog,
+            participantCapture,
+            resultCode === COMBAT_RESULT_VICTORY
+              ? `Duel over: victory vs ${getDisplayName(opponent)}.`
+              : `Duel over: defeat vs ${getDisplayName(opponent)}.`,
+          );
+        }
+        notifyRoomArrival(players, participant, connLog);
+        maybeFinalizeDuelCombatSession(players, combatSessionId, participants, connLog);
+      }, RESULT_WORLD_RESTORE_DELAY_MS);
+      participant.combatWorldRestoreTimer.unref();
+    }, delayMs);
+    participant.combatResultTimer.unref();
+  };
+
+  scheduleResult(winner, loser, COMBAT_RESULT_VICTORY);
+  scheduleResult(loser, winner, COMBAT_RESULT_LOSS);
+}
+
+function requestDuelEjection(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+): boolean {
+  const duelPeer = getActiveDuelPeer(players, session);
+  if (!duelPeer) {
+    return false;
+  }
+
+  if (!session.combatEjectArmed) {
+    session.combatEjectArmed = true;
+    connLog.info('[world/duel] eject armed for "%s" (awaiting confirm)', getDisplayName(session));
+    return true;
+  }
+
+  session.combatEjectArmed = false;
+  clearCombatEjectArm(duelPeer, connLog, 'opponent ejected');
+  connLog.info('[world/duel] ejection confirmed for "%s"', getDisplayName(session));
+  session.playerHealth = 0;
+  if (session.combatPlayerArmorValues !== undefined) {
+    session.combatPlayerArmorValues = session.combatPlayerArmorValues.map(() => 0);
+  }
+  if (session.combatPlayerInternalValues !== undefined) {
+    session.combatPlayerInternalValues = session.combatPlayerInternalValues.map(() => 0);
+  }
+  session.combatPlayerHeadArmor = 0;
+  sendDuelDeathTransition(duelPeer, session, connLog, 'opponent ejected');
+  queueDuelCombatResultTransition(
+    players,
+    duelPeer,
+    session,
+    connLog,
+    'opponent ejected',
+    BOT_RESULT_DELAY_MS,
+  );
+  return true;
+}
+
+export function tryStartStagedDuelCombat(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+): boolean {
+  const combatSession = players.getCombatSession(session.combatSessionId);
+  if (combatSession?.mode !== 'duel') {
+    return false;
+  }
+  if (combatSession.state !== 'staged') {
+    connLog.debug('[world/duel] ignoring staged-combat start for session=%s state=%s', combatSession.id, combatSession.state);
+    return true;
+  }
+
+  const [sessionAId, sessionBId] = combatSession.participantSessionIds;
+  const playerA = players.get(sessionAId);
+  const playerB = players.get(sessionBId);
+  if (!playerA || !playerB) {
+    clearSessionDuelState(players, session, connLog, 'participant unavailable');
+    return true;
+  }
+  if (
+    playerA.socket.destroyed ||
+    playerB.socket.destroyed ||
+    playerA.phase !== 'world' ||
+    playerB.phase !== 'world' ||
+    !playerA.worldInitialized ||
+    !playerB.worldInitialized
+  ) {
+    clearSessionDuelState(players, session, connLog, 'participant unavailable');
+    return true;
+  }
+  const participants = [
+    { local: playerA, peer: playerB, localX: 0, localY: 0, remoteX: 0, remoteY: BOT_SPAWN_DISTANCE },
+    { local: playerB, peer: playerA, localX: 0, localY: BOT_SPAWN_DISTANCE, remoteX: 0, remoteY: 0 },
+  ];
+
+  for (const participant of participants) {
+    resetCombatState(participant.local);
+    const mechId = participant.local.selectedMechId ?? FALLBACK_MECH_ID;
+    const mechEntry = WORLD_MECH_BY_ID.get(mechId);
+    const playerCriticalStateBytes = createCriticalStateBytes(mechEntry?.extraCritCount ?? 0);
+    participant.local.combatMaxSpeedMag = mechEntry?.maxSpeedMag ?? 0;
+    participant.local.combatWalkSpeedMag = mechEntry?.walkSpeedMag ?? 0;
+    participant.local.combatX = participant.localX;
+    participant.local.combatY = participant.localY;
+    participant.local.combatHeadingRaw = MOTION_NEUTRAL;
+    participant.local.combatThrottle = 0;
+    participant.local.combatLegVel = 0;
+    participant.local.combatSpeedMag = 0;
+    participant.local.combatJumpAltitude = 0;
+    participant.local.combatJumpFuel = JUMP_JET_FUEL_MAX;
+    participant.local.combatPlayerArmorValues = [...(mechEntry?.armorLikeMaxValues ?? DEFAULT_BOT_ARMOR_VALUES)];
+    participant.local.combatPlayerInternalValues = mechEntry !== undefined
+      ? mechInternalStateBytes(mechEntry.tonnage)
+      : [...DEFAULT_BOT_INTERNAL_VALUES];
+    participant.local.combatPlayerCriticalStateBytes = playerCriticalStateBytes;
+    participant.local.combatPlayerHeadArmor = HEAD_ARMOR_VALUE;
+    participant.local.playerHealth = getCombatDurability(
+      participant.local.combatPlayerArmorValues,
+      participant.local.combatPlayerInternalValues,
+    ) + HEAD_ARMOR_VALUE;
+    participant.local.combatVerificationMode = undefined;
+    participant.local.combatRequireAction0 = false;
+    participant.local.combatShotsAccepted = 0;
+    participant.local.combatShotsRejected = 0;
+    participant.local.combatShotsAction0Correlated = 0;
+    participant.local.combatShotsDirectCmd10 = 0;
+    participant.local.duelTermsAvailable = false;
+    participant.local.phase = 'combat';
+  }
+
+  for (const participant of participants) {
+    notifyRoomDeparture(players, participant.local, connLog);
+    sendToWorldSession(participant.local, buildCombatWelcomePacket(), 'COMBAT_WELCOME_MMC');
+  }
+
+  combatSession.state = 'active';
+  combatSession.startedAt = Date.now();
+  connLog.info(
+    '[world/duel] starting active duel session=%s players="%s" vs "%s"',
+    combatSession.id,
+    getDisplayName(playerA),
+    getDisplayName(playerB),
+  );
+
+  const bootstrapTimer = setTimeout(() => {
+    for (const participant of participants) {
+      if (
+        participant.local.socket.destroyed ||
+        !participant.local.socket.writable ||
+        participant.local.phase !== 'combat'
+      ) {
+        return;
+      }
+
+      const localMechId = participant.local.selectedMechId ?? FALLBACK_MECH_ID;
+      const localMechEntry = WORLD_MECH_BY_ID.get(localMechId);
+      const localExtraCritCount = localMechEntry?.extraCritCount ?? 0;
+      const localCritBytes = Math.max(0, localExtraCritCount + 21);
+      const localCriticalStateBytes = createCriticalStateBytes(localExtraCritCount);
+      const peerMechId = participant.peer.selectedMechId ?? FALLBACK_MECH_ID;
+      const peerMechEntry = WORLD_MECH_BY_ID.get(peerMechId);
+      const localCallsign = getDisplayName(participant.local);
+      const peerCallsign = getDisplayName(participant.peer);
+
+      sendToWorldSession(
+        participant.local,
+        buildCmd72LocalBootstrapPacket(
+          {
+            scenarioTitle:      `${DEFAULT_SCENE_NAME} Duel`,
+            localSlot:          0,
+            unknownByte0:       0,
+            terrainId:          1,
+            terrainResourceId:  0,
+            terrainPoints:      [],
+            arenaPoints:        [],
+            globalA:            2800,
+            globalB:            0,
+            globalC:            0,
+            headingBias:        0,
+            identity0:          localCallsign.substring(0, 11),
+            identity1:          localCallsign.substring(0, 31),
+            identity2:          localMechEntry?.typeString ?? '',
+            identity3:          participant.local.allegiance ?? '',
+            identity4:          '',
+            statusByte:         0,
+            initialX:           participant.localX,
+            initialY:           participant.localY,
+            extraType2Values:   [],
+            remainingActorCount: 1,
+            unknownType1Raw:    MOTION_NEUTRAL,
+            mech: {
+              mechId:                localMechId,
+              critStateExtraCount:   localExtraCritCount,
+              criticalStateBytes:    localCriticalStateBytes.slice(0, localCritBytes),
+              extraStateBytes:       [],
+              armorLikeStateBytes:   Array<number>(11).fill(0),
+              internalStateBytes:    mechInternalStateBytes(localMechEntry?.tonnage ?? 0),
+              ammoStateValues:       [],
+              actorDisplayName:      localCallsign.substring(0, 31),
+            },
+          },
+          nextSeq(participant.local),
+        ),
+        'CMD72_DUEL_BOOTSTRAP',
+      );
+      participant.local.combatStartAt = Date.now();
+
+      sendToWorldSession(
+        participant.local,
+        buildCmd64RemoteActorPacket(
+          {
+            slot:          1,
+            actorTypeByte: 0,
+            identity0:     peerCallsign.substring(0, 11),
+            identity1:     peerCallsign.substring(0, 31),
+            identity2:     peerMechEntry?.typeString ?? '',
+            identity3:     participant.peer.allegiance ?? '',
+            identity4:     '',
+            statusByte:    0,
+            mechId:        peerMechId,
+          },
+          nextSeq(participant.local),
+        ),
+        'CMD64_DUEL_REMOTE_ACTOR',
+      );
+
+      sendToWorldSession(
+        participant.local,
+        buildCmd65PositionSyncPacket(
+          {
+            slot:     0,
+            x:        participant.localX,
+            y:        participant.localY,
+            z:        0,
+            facing:   0,
+            throttle: 0,
+            legVel:   0,
+            speedMag: 0,
+          },
+          nextSeq(participant.local),
+        ),
+        'CMD65_DUEL_LOCAL_POSITION',
+      );
+      sendToWorldSession(
+        participant.local,
+        buildCmd65PositionSyncPacket(
+          {
+            slot:     1,
+            x:        participant.remoteX,
+            y:        participant.remoteY,
+            z:        0,
+            facing:   0,
+            throttle: 0,
+            legVel:   0,
+            speedMag: 0,
+          },
+          nextSeq(participant.local),
+        ),
+        'CMD65_DUEL_REMOTE_POSITION',
+      );
+      sendToWorldSession(
+        participant.local,
+        buildCmd62CombatStartPacket(nextSeq(participant.local)),
+        'CMD62_DUEL_COMBAT_START',
+      );
+      participant.local.combatInitialized = true;
+    }
+  }, COMBAT_DROP_DELAY_MS);
+  playerA.combatBootstrapTimer = bootstrapTimer;
+  playerB.combatBootstrapTimer = bootstrapTimer;
+  bootstrapTimer.unref();
+  return true;
 }
 
 // ── ComStar messaging ─────────────────────────────────────────────────────────
@@ -1122,6 +1790,337 @@ export function sendCombatBootstrapSequence(
 
 // ── Text commands ─────────────────────────────────────────────────────────────
 
+function findSameRoomDuelTarget(
+  players: PlayerRegistry,
+  session: ClientSession,
+  requestedName: string,
+): ClientSession | undefined {
+  const normalized = requestedName.trim().toLowerCase();
+  if (normalized.length === 0) {
+    return undefined;
+  }
+
+  return players.inRoom(session.roomId).find(other =>
+    other.id !== session.id &&
+    other.phase === 'world' &&
+    other.worldInitialized &&
+    !other.socket.destroyed &&
+    getDisplayName(other).toLowerCase() === normalized,
+  );
+}
+
+export function clearSessionDuelState(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+  reason: string,
+): void {
+  const outgoingTargetId = session.outgoingDuelInviteTargetSessionId;
+  if (outgoingTargetId) {
+    const target = players.get(outgoingTargetId);
+    if (target?.pendingDuelInviteFromSessionId === session.id) {
+      target.pendingDuelInviteFromSessionId = undefined;
+      if (target.phase === 'world' && target.worldInitialized && !target.socket.destroyed) {
+        sendToWorldSession(
+          target,
+          buildCmd3BroadcastPacket(
+            `Duel request from ${getDisplayName(session)} cleared: ${reason}.`,
+            nextSeq(target),
+          ),
+          'CMD3_DUEL_REQUEST_CLEARED',
+        );
+      }
+    }
+    session.outgoingDuelInviteTargetSessionId = undefined;
+  }
+
+  const incomingFromId = session.pendingDuelInviteFromSessionId;
+  if (incomingFromId) {
+    const challenger = players.get(incomingFromId);
+    if (challenger?.outgoingDuelInviteTargetSessionId === session.id) {
+      challenger.outgoingDuelInviteTargetSessionId = undefined;
+      if (challenger.phase === 'world' && challenger.worldInitialized && !challenger.socket.destroyed) {
+        sendToWorldSession(
+          challenger,
+          buildCmd3BroadcastPacket(
+            `Duel request to ${getDisplayName(session)} cleared: ${reason}.`,
+            nextSeq(challenger),
+          ),
+          'CMD3_DUEL_REQUEST_CLEARED',
+        );
+      }
+    }
+    session.pendingDuelInviteFromSessionId = undefined;
+  }
+
+  const combatSession = players.getCombatSession(session.combatSessionId);
+  if (combatSession?.mode === 'duel') {
+    const peerId = combatSession.participantSessionIds.find(id => id !== session.id);
+    const peer = peerId ? players.get(peerId) : undefined;
+    const peerCanReceiveResult = !!peer
+      && combatSession.state === 'active'
+      && reason === 'player disconnected'
+      && peer.phase === 'combat'
+      && peer.combatInitialized
+      && !peer.socket.destroyed
+      && peer.socket.writable;
+
+    if (peerCanReceiveResult && peer) {
+      clearCombatEjectArm(peer, connLog, 'opponent disconnected');
+      stopSessionActiveCombatLoops(session);
+      session.combatEjectArmed = false;
+      queueDuelCombatResultTransition(
+        players,
+        peer,
+        session,
+        connLog,
+        'opponent disconnected',
+        PLAYER_RESULT_DELAY_MS,
+      );
+      connLog.info('[world/duel] disconnect converted to duel result winner="%s" loser="%s"', getDisplayName(peer), getDisplayName(session));
+      session.pendingDuelInviteFromSessionId = undefined;
+      session.outgoingDuelInviteTargetSessionId = undefined;
+      return;
+    }
+
+    if (peer) {
+      if (peer.combatSessionId === combatSession.id) {
+        peer.combatSessionId = undefined;
+      }
+      if (peer.combatPeerSessionId === session.id) {
+        peer.combatPeerSessionId = undefined;
+      }
+      peer.duelTermsAvailable = false;
+      if (combatSession.state === 'active' && peer.phase === 'combat') {
+        resetCombatState(peer);
+        peer.worldInitialized = true;
+        sendToWorldSession(peer, buildWelcomePacket(), 'WORLD_WELCOME_AFTER_DUEL_ABORT');
+        const peerCapture = worldCaptures.get(peer.id);
+        if (peerCapture) {
+          sendSceneRefresh(
+            players,
+            peer,
+            connLog,
+            peerCapture,
+            `Duel with ${getDisplayName(session)} aborted: ${reason}.`,
+          );
+        }
+        notifyRoomArrival(players, peer, connLog);
+      } else if (peer.phase === 'world' && peer.worldInitialized && !peer.socket.destroyed) {
+        if (!refreshWorldSceneIfPossible(
+          players,
+          peer,
+          connLog,
+          `Staged duel with ${getDisplayName(session)} cleared: ${reason}.`,
+        )) {
+          sendToWorldSession(
+            peer,
+            buildCmd3BroadcastPacket(
+              `Staged duel with ${getDisplayName(session)} cleared: ${reason}.`,
+              nextSeq(peer),
+            ),
+            'CMD3_DUEL_SESSION_CLEARED',
+          );
+        }
+      }
+    }
+    players.removeCombatSession(combatSession.id);
+    connLog.info('[world/duel] cleared duel session=%s state=%s reason=%s', combatSession.id, combatSession.state, reason);
+  }
+
+  session.combatSessionId = undefined;
+  session.combatPeerSessionId = undefined;
+  session.duelTermsAvailable = false;
+}
+
+function handleDuelTextCommand(
+  players: PlayerRegistry,
+  session: ClientSession,
+  text: string,
+  connLog: Logger,
+  capture: CaptureLogger,
+): boolean {
+  const clean = text.replace(/\x1b/g, '?').trim();
+  const lower = clean.toLowerCase();
+  const sendLocalNotice = (message: string, label: string): void => {
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket(message, nextSeq(session)),
+      capture,
+      label,
+    );
+  };
+
+  if (lower === '/duelstatus') {
+    if (session.combatSessionId) {
+      const peer = session.combatPeerSessionId ? players.get(session.combatPeerSessionId) : undefined;
+      sendLocalNotice(
+        `Staged duel active with ${peer ? getDisplayName(peer) : 'unknown opponent'} (session=${session.combatSessionId}).`,
+        'CMD3_DUEL_STATUS',
+      );
+      return true;
+    }
+    if (session.outgoingDuelInviteTargetSessionId) {
+      const target = players.get(session.outgoingDuelInviteTargetSessionId);
+      sendLocalNotice(
+        `Outgoing duel request pending for ${target ? getDisplayName(target) : 'unknown player'}.`,
+        'CMD3_DUEL_STATUS',
+      );
+      return true;
+    }
+    if (session.pendingDuelInviteFromSessionId) {
+      const challenger = players.get(session.pendingDuelInviteFromSessionId);
+      sendLocalNotice(
+        `Incoming duel request pending from ${challenger ? getDisplayName(challenger) : 'unknown player'}.`,
+        'CMD3_DUEL_STATUS',
+      );
+      return true;
+    }
+    sendLocalNotice('No duel request or staged duel is active.', 'CMD3_DUEL_STATUS');
+    return true;
+  }
+
+  if (lower === '/duelcancel') {
+    const hadCombatSession = !!session.combatSessionId;
+    if (
+      !session.outgoingDuelInviteTargetSessionId &&
+      !session.pendingDuelInviteFromSessionId &&
+      !session.combatSessionId
+    ) {
+      sendLocalNotice('No duel request or staged duel to clear.', 'CMD3_DUEL_CANCEL_EMPTY');
+      return true;
+    }
+    clearSessionDuelState(players, session, connLog, 'cancelled');
+    if (
+      hadCombatSession &&
+      refreshWorldSceneIfPossible(players, session, connLog, 'Duel request/session cleared.')
+    ) {
+      return true;
+    }
+    sendLocalNotice('Duel request/session cleared.', 'CMD3_DUEL_CANCELLED');
+    return true;
+  }
+
+  if (lower === '/declineduel') {
+    if (!session.pendingDuelInviteFromSessionId) {
+      sendLocalNotice('No incoming duel request to decline.', 'CMD3_DUEL_DECLINE_EMPTY');
+      return true;
+    }
+    clearSessionDuelState(players, session, connLog, 'declined');
+    sendLocalNotice('Duel request declined.', 'CMD3_DUEL_DECLINED');
+    return true;
+  }
+
+  if (lower === '/acceptduel') {
+    const challenger = session.pendingDuelInviteFromSessionId
+      ? players.get(session.pendingDuelInviteFromSessionId)
+      : undefined;
+    const currentRoomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
+    const mapRoom = worldMapByRoomId.get(currentRoomId);
+    if (mapRoom?.type !== 'arena') {
+      sendLocalNotice('Duel requests only work in arena rooms.', 'CMD3_DUEL_NOT_ARENA');
+      return true;
+    }
+    if (!challenger || challenger.socket.destroyed || challenger.phase !== 'world' || !challenger.worldInitialized) {
+      clearSessionDuelState(players, session, connLog, 'challenger unavailable');
+      sendLocalNotice('Duel request expired: challenger is no longer available.', 'CMD3_DUEL_ACCEPT_STALE');
+      return true;
+    }
+    if (challenger.roomId !== session.roomId || challenger.outgoingDuelInviteTargetSessionId !== session.id) {
+      clearSessionDuelState(players, session, connLog, 'challenger moved away');
+      sendLocalNotice('Duel request expired: challenger is no longer in this arena room.', 'CMD3_DUEL_ACCEPT_STALE');
+      return true;
+    }
+    if (session.combatSessionId || challenger.combatSessionId) {
+      sendLocalNotice('A staged duel is already active for one of the players.', 'CMD3_DUEL_ACCEPT_BUSY');
+      return true;
+    }
+
+    const combatSession = players.createDuelCombatSession(challenger, session);
+    challenger.outgoingDuelInviteTargetSessionId = undefined;
+    session.pendingDuelInviteFromSessionId = undefined;
+    challenger.combatSessionId = combatSession.id;
+    challenger.combatPeerSessionId = session.id;
+    challenger.duelTermsAvailable = true;
+    session.combatSessionId = combatSession.id;
+    session.combatPeerSessionId = challenger.id;
+    session.duelTermsAvailable = true;
+    connLog.info(
+      '[world/duel] staged duel session=%s room=%s players="%s" vs "%s"',
+      combatSession.id,
+      combatSession.roomId,
+      getDisplayName(challenger),
+      getDisplayName(session),
+    );
+    const localAcceptMessage =
+      `Duel accepted. Staged PvP session ready with ${getDisplayName(challenger)}. Use Duel Terms to review stakes or /fight to start.`;
+    const peerAcceptMessage =
+      `${getDisplayName(session)} accepted your duel. Staged PvP session ready. Use Duel Terms to review stakes or /fight to start.`;
+    if (!refreshWorldSceneIfPossible(players, session, connLog, localAcceptMessage)) {
+      sendLocalNotice(localAcceptMessage, 'CMD3_DUEL_ACCEPTED');
+    }
+    if (!refreshWorldSceneIfPossible(players, challenger, connLog, peerAcceptMessage)) {
+      sendToWorldSession(
+        challenger,
+        buildCmd3BroadcastPacket(
+          peerAcceptMessage,
+          nextSeq(challenger),
+        ),
+        'CMD3_DUEL_ACCEPTED',
+      );
+    }
+    return true;
+  }
+
+  const duelMatch = clean.match(/^\/duel\s+(.+)$/i);
+  if (!duelMatch) {
+    return false;
+  }
+
+  const currentRoomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
+  const mapRoom = worldMapByRoomId.get(currentRoomId);
+  if (mapRoom?.type !== 'arena') {
+    sendLocalNotice('Duel requests only work in arena rooms.', 'CMD3_DUEL_NOT_ARENA');
+    return true;
+  }
+  if (session.combatSessionId) {
+    sendLocalNotice('Clear the current staged duel before sending another challenge.', 'CMD3_DUEL_BUSY');
+    return true;
+  }
+  if (session.outgoingDuelInviteTargetSessionId || session.pendingDuelInviteFromSessionId) {
+    sendLocalNotice('Clear the current duel request before sending another challenge.', 'CMD3_DUEL_BUSY');
+    return true;
+  }
+
+  const requestedName = duelMatch[1].trim();
+  const target = findSameRoomDuelTarget(players, session, requestedName);
+  if (!target) {
+    sendLocalNotice(`No player named "${requestedName}" is standing in this room.`, 'CMD3_DUEL_TARGET_UNKNOWN');
+    return true;
+  }
+  if (target.combatSessionId || target.outgoingDuelInviteTargetSessionId || target.pendingDuelInviteFromSessionId) {
+    sendLocalNotice(`${getDisplayName(target)} is already busy with another duel request/session.`, 'CMD3_DUEL_TARGET_BUSY');
+    return true;
+  }
+
+  session.outgoingDuelInviteTargetSessionId = target.id;
+  target.pendingDuelInviteFromSessionId = session.id;
+  connLog.info('[world/duel] challenge sent: from="%s" to="%s"', getDisplayName(session), getDisplayName(target));
+  sendLocalNotice(
+    `Duel request sent to ${getDisplayName(target)}. They can /acceptduel or /declineduel.`,
+    'CMD3_DUEL_SENT',
+  );
+  sendToWorldSession(
+    target,
+    buildCmd3BroadcastPacket(
+      `${getDisplayName(session)} challenged you to a duel. Type /acceptduel or /declineduel.`,
+      nextSeq(target),
+    ),
+    'CMD3_DUEL_INCOMING',
+  );
+  return true;
+}
+
 export function handleWorldTextCommand(
   players: PlayerRegistry,
   session: ClientSession,
@@ -1142,6 +2141,10 @@ export function handleWorldTextCommand(
 
   if (clean.toLowerCase() === '/mechbay' || clean.toLowerCase() === '/mechs') {
     sendMechClassPicker(session, connLog, capture);
+    return;
+  }
+
+  if (handleDuelTextCommand(players, session, clean, connLog, capture)) {
     return;
   }
 
@@ -1223,6 +2226,9 @@ export function handleBotMechTextCommand(
   text: string,
   connLog: Logger,
   capture: CaptureLogger,
+  options: {
+    suppressBroadcast?: boolean;
+  } = {},
 ): boolean {
   const clean = text.replace(/\x1b/g, '?').trim();
   const botmechMatch = clean.match(/^\/botmech\s+(\d+)$/i);
@@ -1234,29 +2240,33 @@ export function handleBotMechTextCommand(
   const mechEntry   = WORLD_MECH_BY_ID.get(requestedId);
   if (!mechEntry) {
     connLog.warn('[world] /botmech: unknown mech_id=%d', requestedId);
-    send(
-      session.socket,
-      buildCmd3BroadcastPacket(
-        `Unknown mech_id ${requestedId}. Use /mechs to browse available mechs.`,
-        nextSeq(session),
-      ),
-      capture,
-      'CMD3_BOTMECH_UNKNOWN',
-    );
+    if (!options.suppressBroadcast) {
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket(
+          `Unknown mech_id ${requestedId}. Use /mechs to browse available mechs.`,
+          nextSeq(session),
+        ),
+        capture,
+        'CMD3_BOTMECH_UNKNOWN',
+      );
+    }
     return true;
   }
 
   session.combatBotMechId = requestedId;
   connLog.info('[world] /botmech: bot mech set to %s (id=%d)', mechEntry.typeString, requestedId);
-  send(
-    session.socket,
-    buildCmd3BroadcastPacket(
-      `Bot mech set to ${mechEntry.typeString} (id=${requestedId}). Use /fight or /fightrestart.`,
-      nextSeq(session),
-    ),
-    capture,
-    'CMD3_BOTMECH_ACK',
-  );
+  if (!options.suppressBroadcast) {
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket(
+        `Bot mech set to ${mechEntry.typeString} (id=${requestedId}). Use /fight or /fightrestart.`,
+        nextSeq(session),
+      ),
+      capture,
+      'CMD3_BOTMECH_ACK',
+    );
+  }
   return true;
 }
 
@@ -1305,6 +2315,7 @@ export function handleMapTravelReply(
     return;
   }
 
+  clearSessionDuelState(players, session, connLog, `left ${getSolarisRoomName(session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID)}`);
   notifyRoomDeparture(players, session, connLog);
   session.roomId = newRoomId;
   setSessionRoomPosition(session, selectedRoomId);
@@ -1364,6 +2375,7 @@ export function handleLocationAction(
     targetRoomId,
   );
 
+  clearSessionDuelState(players, session, connLog, `left ${getSolarisRoomName(currentRoomId)}`);
   notifyRoomDeparture(players, session, connLog);
   session.roomId = mapRoomKey(targetRoomId);
   setSessionRoomPosition(session, targetRoomId);
@@ -1433,11 +2445,19 @@ export function notifyRoomDeparture(
 // ── Combat movement / action frames ───────────────────────────────────────────
 
 export function handleCombatMovementFrame(
+  players: PlayerRegistry,
   session: ClientSession,
   payload: Buffer,
   connLog: Logger,
   capture: CaptureLogger,
 ): void {
+  if (session.combatResultCode !== undefined) {
+    connLog.debug('[world/combat] cmd8/cmd9 ignored while result transition is pending');
+    return;
+  }
+
+  clearCombatEjectArm(session, connLog, 'movement input');
+
   const cmd = payload[2] - 0x21;
 
   if (cmd === 8) {
@@ -1451,6 +2471,7 @@ export function handleCombatMovementFrame(
     const clientSpeed       = frame.rotationRaw - MOTION_NEUTRAL;
 
     if (clientSpeed !== 0) {
+      mirrorDuelRemotePosition(players, session, 'CMD65_DUEL_REMOTE_COAST');
       connLog.debug(
         '[world/combat] cmd8 coasting: x=%d y=%d heading=%d clientSpeed=%d -> no echo (trust local key events)',
         session.combatX, session.combatY, frame.headingRaw, clientSpeed,
@@ -1461,6 +2482,7 @@ export function handleCombatMovementFrame(
     // clientSpeed === 0 → mech has fully stopped; reset so the next KP8 press
     // is treated as a fresh startup (breaks the trap correctly).
     session.combatSpeedMag  = 0;
+    mirrorDuelRemotePosition(players, session, 'CMD65_DUEL_REMOTE_STOP');
     connLog.debug(
       '[world/combat] cmd8 coasting: x=%d y=%d heading=%d clientSpeed=0 suppressing echo (stopped)',
       session.combatX, session.combatY, frame.headingRaw,
@@ -1521,6 +2543,7 @@ export function handleCombatMovementFrame(
       capture,
       'CMD65_MOVEMENT',
     );
+    mirrorDuelRemotePosition(players, session, 'CMD65_DUEL_REMOTE_MOVEMENT');
   }
 }
 
@@ -1531,6 +2554,13 @@ export function handleCombatWeaponFireFrame(
   connLog: Logger,
   capture: CaptureLogger,
 ): void {
+  if (session.combatResultCode !== undefined) {
+    connLog.debug('[world/combat] cmd10 ignored while result transition is pending');
+    return;
+  }
+
+  clearCombatEjectArm(session, connLog, 'weapon fire');
+
   const shots = parseClientCmd10WeaponFire(payload);
   if (!shots || shots.length === 0) {
     connLog.warn('[world/combat] cmd-10 weapon fire parse failed (len=%d)', payload.length);
@@ -1545,7 +2575,7 @@ export function handleCombatWeaponFireFrame(
   const firePath = hasRecentFireAction ? 'selected-weapon' : 'direct-cmd10';
   if (session.combatRequireAction0 && !hasRecentFireAction) {
     session.combatShotsRejected = (session.combatShotsRejected ?? 0) + shots.length;
-    connLog.info(
+    connLog.debug(
       '[world/combat] cmd10 shot REJECTED: strict action0 gate (no recent cmd12/action0, age=%s records=%d)',
       actionAgeMs === undefined ? 'n/a' : `${actionAgeMs}ms`,
       shots.length,
@@ -1571,6 +2601,146 @@ export function handleCombatWeaponFireFrame(
       actionAgeMs === undefined ? 'n/a' : `${actionAgeMs}ms`,
       shots.length,
     );
+  }
+
+  const duelSession = players.getCombatSession(session.combatSessionId);
+  if (duelSession?.mode === 'duel') {
+    const duelPeer = getActiveDuelPeer(players, session);
+    if (!duelPeer) {
+      connLog.debug(
+        '[world/combat] duel cmd10 ignored: session=%s state=%s peer unavailable',
+        duelSession.id,
+        duelSession.state,
+      );
+      return;
+    }
+
+    const duelPeerMechId = duelPeer.selectedMechId ?? FALLBACK_MECH_ID;
+    const duelPeerMechEntry = WORLD_MECH_BY_ID.get(duelPeerMechId);
+    const duelPeerArmorValues = [...(duelPeer.combatPlayerArmorValues ?? duelPeerMechEntry?.armorLikeMaxValues ?? DEFAULT_BOT_ARMOR_VALUES)];
+    const duelPeerInternalValues = [...(duelPeer.combatPlayerInternalValues ?? (duelPeerMechEntry ? mechInternalStateBytes(duelPeerMechEntry.tonnage) : DEFAULT_BOT_INTERNAL_VALUES))];
+    const duelPeerCriticalStateBytes = [...(duelPeer.combatPlayerCriticalStateBytes ?? createCriticalStateBytes(duelPeerMechEntry?.extraCritCount))];
+    let duelPeerHeadArmor = duelPeer.combatPlayerHeadArmor ?? HEAD_ARMOR_VALUE;
+    send(session.socket, buildCmd71ResetEffectStatePacket(nextSeq(session)), capture, 'CMD71_RESET');
+    sendToWorldSession(duelPeer, buildCmd71ResetEffectStatePacket(nextSeq(duelPeer)), 'CMD71_DUEL_REMOTE_RESET');
+    const shotSummaries: string[] = [];
+    let totalDamageUpdates = 0;
+
+    for (const shot of shots) {
+      const { damage: shotDamage, weaponName } = getShotDamage(session, shot.weaponSlot);
+      const hitSection = resolveEffectiveHitSection(
+        duelPeerMechId,
+        shot.targetAttach,
+        shot.impactZ,
+        duelPeerArmorValues,
+        duelPeerInternalValues,
+      );
+      const damageResult = applyDamageToSection(
+        duelPeerArmorValues,
+        duelPeerInternalValues,
+        hitSection,
+        shotDamage,
+        duelPeerHeadArmor,
+      );
+      const criticalUpdates =
+        hitSection.internalIndex === 7 && damageResult.updates.some(update => update.damageCode === 0x27)
+          ? applyHeadCriticalStateUpdates(duelPeerCriticalStateBytes, duelPeerInternalValues[7] ?? 0)
+          : [];
+      duelPeerHeadArmor = damageResult.headArmor;
+      const allUpdates = [...damageResult.updates, ...criticalUpdates];
+
+      send(
+        session.socket,
+        buildCmd68ProjectileSpawnPacket(
+          {
+            sourceSlot:   0,
+            weaponSlot:   shot.weaponSlot,
+            targetRaw:    shot.targetSlot < 0 ? 0 : shot.targetSlot + 1,
+            targetAttach: shot.targetAttach < 0 ? 0 : shot.targetAttach + 1,
+            angleSeedA:   shot.angleSeedA,
+            angleSeedB:   shot.angleSeedB,
+            impactX:      shot.impactXRaw - COORD_BIAS,
+            impactY:      shot.impactYRaw - COORD_BIAS,
+            impactZ:      shot.impactZ,
+          },
+          nextSeq(session),
+        ),
+        capture,
+        'CMD68_PROJECTILE',
+      );
+      sendToWorldSession(
+        duelPeer,
+        buildCmd68ProjectileSpawnPacket(
+          {
+            sourceSlot:   1,
+            weaponSlot:   shot.weaponSlot,
+            targetRaw:    shot.targetSlot < 0 ? 0 : 10,
+            targetAttach: shot.targetAttach < 0 ? 0 : shot.targetAttach + 1,
+            angleSeedA:   shot.angleSeedA,
+            angleSeedB:   shot.angleSeedB,
+            impactX:      shot.impactXRaw - COORD_BIAS,
+            impactY:      shot.impactYRaw - COORD_BIAS,
+            impactZ:      shot.impactZ,
+          },
+          nextSeq(duelPeer),
+        ),
+        'CMD68_DUEL_REMOTE_PROJECTILE',
+      );
+      for (const update of allUpdates) {
+        send(
+          session.socket,
+          buildCmd66ActorDamagePacket(1, update.damageCode, update.damageValue, nextSeq(session)),
+          capture,
+          'CMD66_DUEL_REMOTE_DAMAGE',
+        );
+        sendToWorldSession(
+          duelPeer,
+          buildCmd67LocalDamagePacket(update.damageCode, update.damageValue, nextSeq(duelPeer)),
+          'CMD67_DUEL_LOCAL_DAMAGE',
+        );
+      }
+
+      totalDamageUpdates += allUpdates.length;
+      shotSummaries.push(
+        `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${hitSection.label}:peerHealth=${duelPeer.playerHealth ?? 'n/a'}:headArmor=${duelPeerHeadArmor}:updates=${allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join('/') || 'none'}`,
+      );
+    }
+
+    duelPeer.combatPlayerArmorValues = duelPeerArmorValues;
+    duelPeer.combatPlayerInternalValues = duelPeerInternalValues;
+    duelPeer.combatPlayerCriticalStateBytes = duelPeerCriticalStateBytes;
+    duelPeer.combatPlayerHeadArmor = duelPeerHeadArmor;
+    duelPeer.playerHealth = getCombatDurability(duelPeerArmorValues, duelPeerInternalValues) + duelPeerHeadArmor;
+
+    send(session.socket, buildCmd71ResetEffectStatePacket(nextSeq(session)), capture, 'CMD71_CLOSE');
+    sendToWorldSession(duelPeer, buildCmd71ResetEffectStatePacket(nextSeq(duelPeer)), 'CMD71_DUEL_REMOTE_CLOSE');
+    connLog.info(
+      '[world/combat] duel cmd10 accepted: firePath=%s attacker="%s" defender="%s" defenderHealth=%d records=%d updates=%d shots=[%s]',
+      firePath,
+      getDisplayName(session),
+      getDisplayName(duelPeer),
+      duelPeer.playerHealth,
+      shots.length,
+      totalDamageUpdates,
+      shotSummaries.join(','),
+    );
+
+    if (isActorDestroyed(duelPeerInternalValues)) {
+      duelPeer.playerHealth = 0;
+      const fatalReason = (duelPeerInternalValues[7] ?? 0) <= 0
+        ? 'head destroyed'
+        : 'center torso destroyed';
+      sendDuelDeathTransition(session, duelPeer, connLog, fatalReason);
+      queueDuelCombatResultTransition(
+        players,
+        session,
+        duelPeer,
+        connLog,
+        fatalReason,
+        BOT_RESULT_DELAY_MS,
+      );
+    }
+    return;
   }
 
   if (session.botHealth === undefined) {
@@ -1687,16 +2857,32 @@ export function handleCombatWeaponFireFrame(
 }
 
 export function handleCombatActionFrame(
+  players: PlayerRegistry,
   session: ClientSession,
   payload: Buffer,
   connLog: Logger,
   capture: CaptureLogger,
 ): void {
+  if (session.combatResultCode !== undefined) {
+    connLog.debug('[world/combat] cmd12 ignored while result transition is pending');
+    return;
+  }
+
   const action = parseClientCmd12Action(payload);
   if (!action) {
     connLog.warn('[world/combat] cmd-12 action parse failed (len=%d)', payload.length);
     return;
   }
+
+  if (action.action === 0x11) {
+    if (requestDuelEjection(players, session, connLog)) {
+      return;
+    }
+    connLog.debug('[world/combat] cmd-12 action=0x11 (eject) observed outside active duel');
+    return;
+  }
+
+  clearCombatEjectArm(session, connLog, `action ${action.action}`);
 
   if (action.action === 0) {
     session.lastCombatFireActionAt = Date.now();
@@ -1773,6 +2959,7 @@ export function handleCombatActionFrame(
         capture,
         tag,
       );
+      mirrorDuelRemotePosition(players, session, `DUEL_${tag}`);
     };
 
     // Emit the first ascent step immediately so jump feedback is visible without delay.
@@ -1852,6 +3039,7 @@ export function handleCombatActionFrame(
       capture,
       'CMD65_JUMP_LAND',
     );
+    mirrorDuelRemotePosition(players, session, 'DUEL_CMD65_JUMP_LAND');
     return;
   }
 

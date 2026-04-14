@@ -38,6 +38,7 @@ import {
   parseClientCmd4,
   parseClientCmd5SceneAction,
   parseClientCmd10MapReply,
+  parseClientCmd15DuelTerms,
   parseClientCmd21TextReply,
   parseClientCmd23LocationAction,
   parseClientCmd7,
@@ -96,6 +97,10 @@ import {
   handleLocationAction,
   handleWorldTextCommand,
   handleBotMechTextCommand,
+  clearSessionDuelState,
+  handleDuelTermsSubmit,
+  tryStartStagedDuelCombat,
+  sendStagedDuelTermsPanel,
   sendCombatBootstrapSequence,
   resetCombatState,
   stopCombatTimers,
@@ -315,13 +320,28 @@ function handleWorldGameData(
         connLog.debug('[world] /fightrestart ignored in phase=%s', session.phase);
         return;
       }
+      if (players.getCombatSession(session.combatSessionId)?.mode === 'duel') {
+        connLog.info('[world] /fightrestart ignored during duel session=%s', session.combatSessionId);
+        if (session.phase === 'world') {
+          send(
+            session.socket,
+            buildCmd3BroadcastPacket(
+              'Duel combat restart is not wired yet. Clear the duel and stage a new challenge instead.',
+              nextSeq(session),
+            ),
+            capture,
+            'CMD3_DUEL_FIGHTRESTART_BLOCKED',
+          );
+        }
+        return;
+      }
       connLog.info('[world] /fightrestart: stopping timers and resetting combat state');
       resetCombatState(session);
       sendCombatBootstrapSequence(players, session, connLog, capture);
       return;
     }
     if (session.phase === 'combat') {
-      if (handleBotMechTextCommand(session, parsed.text, connLog, capture)) {
+      if (handleBotMechTextCommand(session, parsed.text, connLog, capture, { suppressBroadcast: true })) {
         return;
       }
       if (textCmd === '/fight') {
@@ -359,6 +379,13 @@ function handleWorldGameData(
           mapRoom?.type ?? 'unknown',
         );
         session.combatVerificationMode = undefined;
+        return;
+      }
+      const stagedDuel = players.getCombatSession(session.combatSessionId);
+      if (stagedDuel?.mode === 'duel') {
+        if (tryStartStagedDuelCombat(players, session, connLog)) {
+          connLog.info('[world] %s: triggered shared duel bootstrap session=%s', textCmd, stagedDuel.id);
+        }
         return;
       }
       if (textCmd === '/fightwin') {
@@ -421,6 +448,13 @@ function handleWorldGameData(
           currentRoomId, mapRoom?.type ?? 'unknown');
         return;
       }
+      const stagedDuel = players.getCombatSession(session.combatSessionId);
+      if (stagedDuel?.mode === 'duel') {
+        if (tryStartStagedDuelCombat(players, session, connLog)) {
+          connLog.info('[world] cmd-5 Fight button: triggered shared duel bootstrap session=%s', stagedDuel.id);
+        }
+        return;
+      }
       if (!session.combatInitialized && session.phase === 'world') {
         connLog.info('[world] cmd-5 Fight button: triggering combat bootstrap room=%d', currentRoomId);
         sendCombatBootstrapSequence(players, session, connLog, capture);
@@ -437,6 +471,14 @@ function handleWorldGameData(
         return;
       }
       sendMechClassPicker(session, connLog, capture);
+      return;
+    }
+    if (parsed.actionType === 7) {
+      if (session.phase !== 'world') {
+        connLog.warn('[world] cmd-5 duel terms ignored outside world phase: phase=%s', session.phase);
+        return;
+      }
+      sendStagedDuelTermsPanel(players, session, connLog, capture);
       return;
     }
     connLog.warn('[world] cmd-5 unsupported scene action type=%d', parsed.actionType);
@@ -484,6 +526,22 @@ function handleWorldGameData(
       return;
     }
     handleComstarTextReply(players, session, parsed.dialogId, parsed.text, connLog, capture);
+
+  } else if (cmdIdx === 15) {
+    if (session.phase !== 'world' || !session.worldInitialized) {
+      connLog.debug(
+        '[world] cmd-15 duel terms ignored outside initialized world phase: phase=%s worldInitialized=%s',
+        session.phase,
+        session.worldInitialized === true ? 'true' : 'false',
+      );
+      return;
+    }
+    const parsed = parseClientCmd15DuelTerms(payload);
+    if (!parsed) {
+      connLog.warn('[world] cmd-15 duel terms parse failed');
+      return;
+    }
+    handleDuelTermsSubmit(players, session, parsed.stakeA, parsed.stakeB, connLog, capture);
 
   } else if (cmdIdx === 23) {
     const parsed = parseClientCmd23LocationAction(payload);
@@ -580,9 +638,9 @@ function handleWorldGameData(
     }
     // Combat-mode inbound frame (client sends Cmd8/Cmd9 for movement; weapon fire uses Cmd10).
     if (cmdIdx === 8 || cmdIdx === 9) {
-      handleCombatMovementFrame(session, payload, connLog, capture);
+      handleCombatMovementFrame(players, session, payload, connLog, capture);
     } else if (cmdIdx === 12) {
-      handleCombatActionFrame(session, payload, connLog, capture);
+      handleCombatActionFrame(players, session, payload, connLog, capture);
     } else if (cmdIdx === 20) {
       // Cmd20 — "examine self": correct combat-mode response is unconfirmed.
       // Sending the lobby-phase buildCmd20Packet here (world CRC seed) caused
@@ -741,6 +799,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
       '[world] client disconnected (phase=%s, bytes=%d)',
       session.phase, session.bytesReceived,
     );
+    clearSessionDuelState(players, session, connLog, 'player disconnected');
     if (session.worldInitialized) {
       notifyRoomDeparture(players, session, connLog);
     }

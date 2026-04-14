@@ -2,6 +2,7 @@
  * Per-connection player session state.
  */
 
+import { randomUUID } from 'crypto';
 import type { Socket } from 'net';
 
 export type SessionPhase =
@@ -12,6 +13,31 @@ export type SessionPhase =
   | 'world'         // in the game world (RPS/arena) after REDIRECT
   | 'combat'        // in a combat arena; client uses combat dispatch table
   | 'closing';      // disconnect in progress
+
+export interface CombatSession {
+  /** Unique combat-session ID for a staged or active PvP match. */
+  id: string;
+  /** Combat mode this shared session represents. */
+  mode: 'duel';
+  /** Server-side room key where the duel was staged. */
+  roomId: string;
+  /** World-map room ID where the duel was staged. */
+  worldMapRoomId: number;
+  /** The two world-session IDs participating in the duel. */
+  participantSessionIds: [string, string];
+  /** Current lifecycle state of the duel session. */
+  state: 'staged' | 'active' | 'completed';
+  /** Creation timestamp in ms since epoch. */
+  createdAt: number;
+  /** Start timestamp once combat bootstrap begins. */
+  startedAt?: number;
+  /** Shared duel stake values in participant order [A, B]. */
+  duelStakeValues: [number, number];
+  /** Most recent participant who submitted duel terms. */
+  duelTermsUpdatedBySessionId?: string;
+  /** Timestamp of the most recent duel-terms submission. */
+  duelTermsUpdatedAt?: number;
+}
 
 /**
  * NOTE — cross-session writes and CaptureLogger:
@@ -131,6 +157,16 @@ export interface ClientSession {
    * Set on world-server sessions; undefined on lobby sessions.
    */
   selectedMechSlot?: number;
+  /** Session ID of the player who most recently challenged this player to a duel. */
+  pendingDuelInviteFromSessionId?: string;
+  /** Session ID of the player this session has challenged to a duel. */
+  outgoingDuelInviteTargetSessionId?: string;
+  /** Shared PvP combat-session ID once a duel has been staged or started. */
+  combatSessionId?: string;
+  /** Opponent session ID for the staged or active PvP combat session. */
+  combatPeerSessionId?: string;
+  /** True only while the world scene should advertise the staged-duel terms action. */
+  duelTermsAvailable?: boolean;
 
   /** Optional scripted combat verification mode consumed on the next /fight bootstrap. */
   combatVerificationMode?: 'autowin' | 'autolose' | 'dmglocal' | 'dmgbot' | 'strictfire' | 'headtest';
@@ -162,6 +198,8 @@ export interface ClientSession {
   combatJumpAltitude?: number;
   /** Prototype jump-jet fuel percentage (0..100). */
   combatJumpFuel?: number;
+  /** True after the first-stage eject control is armed; a second eject request confirms ejection. */
+  combatEjectArmed?: boolean;
   /** Timestamp (ms) of the last cmd12/action 0 fire trigger frame from client. */
   lastCombatFireActionAt?: number;
   /** Whether the current combat session requires recent cmd12/action0 before cmd10 fire. */
@@ -269,6 +307,7 @@ export interface ClientSession {
 
 export class PlayerRegistry {
   private sessions = new Map<string, ClientSession>();
+  private combatSessions = new Map<string, CombatSession>();
 
   add(session: ClientSession): void {
     this.sessions.set(session.id, session);
@@ -276,6 +315,37 @@ export class PlayerRegistry {
 
   get(id: string): ClientSession | undefined {
     return this.sessions.get(id);
+  }
+
+  getCombatSession(id: string | undefined): CombatSession | undefined {
+    if (!id) return undefined;
+    return this.combatSessions.get(id);
+  }
+
+  findCombatSessionByParticipant(sessionId: string): CombatSession | undefined {
+    return [...this.combatSessions.values()].find(session =>
+      session.participantSessionIds.includes(sessionId),
+    );
+  }
+
+  createDuelCombatSession(sessionA: ClientSession, sessionB: ClientSession): CombatSession {
+    const combatSession: CombatSession = {
+      id:                  randomUUID(),
+      mode:                'duel',
+      roomId:              sessionA.roomId,
+      worldMapRoomId:      sessionA.worldMapRoomId ?? sessionB.worldMapRoomId ?? 0,
+      participantSessionIds: [sessionA.id, sessionB.id],
+      state:               'staged',
+      createdAt:           Date.now(),
+      duelStakeValues:     [0, 0],
+    };
+    this.combatSessions.set(combatSession.id, combatSession);
+    return combatSession;
+  }
+
+  removeCombatSession(id: string | undefined): void {
+    if (!id) return;
+    this.combatSessions.delete(id);
   }
 
   remove(id: string): void {

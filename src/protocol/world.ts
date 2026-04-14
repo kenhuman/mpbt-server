@@ -384,6 +384,57 @@ export function buildCmd14PersonnelRecordPacket(
   return buildGamePacket(14, buildCmd14Args(opts), false, seq);
 }
 
+// ── Cmd 17 — Scene-Action Response Family / Duel Terms ──────────────────────
+// CONFIRMED subtype 3 handler: World_HandleCmd5SceneActionSubtype3_v123 @ 0x0041e5b0.
+//
+// Subtype 3 payload layout:
+//   [byte: panel_mode]
+//   [Frame_ReadArg: participant_a]
+//   [Frame_ReadArg: participant_b]
+//   [type4: stake_a]
+//   [type4: stake_b]
+//   [Frame_ReadArg: context_a]
+//   [Frame_ReadArg: context_b]
+//   [byte: flag_a]
+//   [byte: flag_b]
+//
+// The client renders a dedicated duel-terms editor and submits cmd15 with the two
+// type4 stake values when the panel is editable.
+
+export interface Cmd17DuelTermsOptions {
+  mode?: number;
+  participantA: string;
+  participantB: string;
+  stakeA?: number;
+  stakeB?: number;
+  contextA?: string;
+  contextB?: string;
+  flagA?: number;
+  flagB?: number;
+}
+
+function buildCmd17DuelTermsArgs(opts: Cmd17DuelTermsOptions): Buffer {
+  return Buffer.concat([
+    encodeAsByte(opts.mode ?? 0),
+    encodeString(opts.participantA.slice(0, 84)),
+    encodeString(opts.participantB.slice(0, 84)),
+    encodeB85_4(opts.stakeA ?? 0),
+    encodeB85_4(opts.stakeB ?? 0),
+    encodeString((opts.contextA ?? '').slice(0, 84)),
+    encodeString((opts.contextB ?? '').slice(0, 84)),
+    encodeAsByte(opts.flagA ?? 0),
+    encodeAsByte(opts.flagB ?? 0),
+  ]);
+}
+
+/** Build a Cmd17 subtype-3 duel-terms panel packet. */
+export function buildCmd17DuelTermsPacket(
+  opts: Cmd17DuelTermsOptions,
+  seq = 0,
+): Buffer {
+  return buildGamePacket(17, buildCmd17DuelTermsArgs(opts), false, seq);
+}
+
 // ── Cmd 40 — Open Inner Sphere Map ──────────────────────────────────────────
 // CONFIRMED: MapOpenInnerSphere (FUN_0040ecb0).
 //

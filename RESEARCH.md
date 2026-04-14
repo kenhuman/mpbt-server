@@ -2637,6 +2637,71 @@ returns the string on line `N` of `MPBT.MSG`).
 | `0x1b3` | `Description: operate in cooperation with the %s military` |
 | `0x1b4` | `Initial planet:` |
 
+**Subtype 3 — Duel terms editor (`0x0041e5b0` / `0x0041eac0`)**
+
+Follow-up Ghidra tracing on 2026-04-14 confirms that opcode-17 subtype `3` is not
+just a generic accept/decline panel. The retail client has a dedicated duel-terms
+UI and a dedicated outbound submit path.
+
+Key functions:
+
+| Function | Address | Role |
+|----------|---------|------|
+| `World_HandleCmd5SceneActionSubtype3_v123` | `0x0041e5b0` | Builds the subtype-3 duel modal from the server payload |
+| `World_HandleDuelTermsEditorInput_v123` | `0x0041eac0` | Editable duel-stakes input callback |
+| `World_SendCmd29SceneOfferChoice_v123` | `0x0041e2a0` | Generic world-opcode-17 choice helper used by non-duel offer/review panels |
+
+Observed subtype-3 payload shape:
+
+- byte `0`: panel mode
+- string `A`
+- string `B`
+- `type4` stake/value `A`
+- `type4` stake/value `B`
+- string `C`
+- string `D`
+- byte `flagA`
+- byte `flagB`
+
+Static UI behavior from `0x0041e5b0`:
+
+- The handler renders two participant-oriented lines using server-provided strings,
+  then two independent numeric wager/stake lines using the two `type4` values.
+- The panel tracks exactly two editable numeric fields in `DAT_004d9988` and
+  `DAT_004d998c`.
+- Mode `0` enters an editable duel-terms state (`panelState = 0x12`) and installs
+  `World_HandleDuelTermsEditorInput_v123`.
+- Mode `1` is read-only details / review and installs a close-only callback instead
+  of the duel editor.
+
+`World_HandleDuelTermsEditorInput_v123` confirms the duel-specific client submit path:
+
+- Enter sends `cmd15` by calling `FUN_00401b50(0x0f)`.
+- The payload is exactly two `type4` values, written via:
+  - `FUN_00401470(4, DAT_004d9988)`
+  - `FUN_00401470(4, DAT_004d998c)`
+- After sending `cmd15`, the client shows `MPBT.MSG[0x115]`, which is the local
+  “duel submitted” confirmation text.
+- ESC closes the modal and sends `cmd11`, not `cmd29`.
+
+Input affordances in the duel editor:
+
+- direct digit entry and Backspace edit the active stake
+- the numeric value is clamped to `0..9,999,999`
+- an ANSI-arrow sequence (`ESC [ A/B/C/D`) is handled locally:
+  - `C` / `D` switch between the two duel stake fields
+  - `A` / `B` add or subtract `100` from the active field
+
+Current implication for server work:
+
+- Supporting the retail duel-terms UX requires a real `cmd15` handler with two
+  submitted wager values.
+- A subtype-3 implementation that only models a yes/no accept path will not match
+  the client's actual sanctioned-duel editor behavior.
+- This RE pass did **not** yet reveal a separate sanctioned-vs-casual branch beyond
+  the duel-terms panel itself; that distinction likely lives in the server-driven
+  `cmd5 actionId -> opcode17 subtype` mapping and/or the follow-up server responses.
+
 **Remaining open item**
 The concrete scene-specific mapping from outbound `cmd5 actionId` values to opcode
 `17` subtypes cannot be resolved by static RE alone — the server embeds the action

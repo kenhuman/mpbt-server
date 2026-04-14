@@ -597,6 +597,13 @@ export interface ClientCmd12Action {
   action: number;
 }
 
+/** Raw decoded fields from client cmd15 duel-terms submit. */
+export interface ClientCmd15DuelTerms {
+  seq: number;
+  stakeA: number;
+  stakeB: number;
+}
+
 /** Parse a client-sent combat cmd8 coasting movement frame. */
 export function parseClientCmd8Coasting(payload: Buffer): ClientCmd8Coasting | null {
   if (payload.length < 21 || payload[0] !== 0x1B) return null;
@@ -696,6 +703,24 @@ export function parseClientCmd12Action(payload: Buffer): ClientCmd12Action | nul
   return {
     seq: payload[1] - 0x21,
     action: payload[3] - 0x21,
+  };
+}
+
+/** Parse a client-sent world cmd15 duel-terms submit frame. */
+export function parseClientCmd15DuelTerms(payload: Buffer): ClientCmd15DuelTerms | null {
+  if (payload.length < 16 || payload[0] !== 0x1B) return null;
+  if (payload[2] - 0x21 !== 15) return null;
+
+  let offset = 3;
+  let stakeA = 0;
+  let stakeB = 0;
+  [stakeA, offset] = decodeArgType4(payload, offset);
+  [stakeB] = decodeArgType4(payload, offset);
+
+  return {
+    seq: payload[1] - 0x21,
+    stakeA,
+    stakeB,
   };
 }
 
