@@ -54,8 +54,7 @@ import {
 import { PlayerRegistry, ClientSession } from './state/players.js';
 import { launchRegistry } from './state/launch.js';
 import {
-  claimUndeliveredMessages,
-  markDelivered,
+  countSavedUnreadMessages,
 } from './db/messages.js';
 import { Logger } from './util/logger.js';
 import { CaptureLogger } from './util/capture.js';
@@ -66,10 +65,20 @@ import {
   allocateWorldRosterId,
   DEFAULT_MAP_ROOM_ID,
   ALL_ROSTER_LIST_ID,
+  COMSTAR_SEND_TARGET_MENU_ID,
+  COMSTAR_ACCESS_ACTION_TYPE,
   INQUIRY_MENU_ID,
+  MATCH_RESULTS_MENU_LIST_ID,
+  NEWS_CATEGORY_MENU_ID,
+  NEWSGRID_ARTICLE_LIST_ID,
+  TIER_RANKING_CHOOSER_LIST_ID,
+  CLASS_RANKING_CHOOSER_LIST_ID,
+  TIER_RANKING_RESULTS_LIST_ID,
+  CLASS_RANKING_RESULTS_LIST_ID,
   PERSONNEL_LIST_ID,
   PERSONNEL_MORE_ID,
   SOLARIS_TRAVEL_CONTEXT_ID,
+  TERMINAL_MENU_LIST_ID,
   getSolarisRoomName,
   setSessionRoomPosition,
   worldMapByRoomId,
@@ -81,6 +90,7 @@ import {
   mapRoomKey,
   getComstarId,
   findWorldTargetBySelectionId,
+  sendComstarAccessMenu,
   sendInquiryMenu,
   sendPersonnelRecord,
   buildSceneInitForSession,
@@ -92,6 +102,15 @@ import {
 } from './world/world-scene.js';
 import {
   handleComstarTextReply,
+  handleComstarAccessSelection,
+  handleComstarIncomingPromptCmd20,
+  handleComstarSendTargetSelection,
+  handleMatchResultsSelection,
+  handleNewsCategorySelection,
+  handleNewsgridArticleSelection,
+  handleTierRankingChooserSelection,
+  handleClassRankingChooserSelection,
+  handleRankingResultsSelection,
   handleRoomMenuSelection,
   handleMapTravelReply,
   handleLocationAction,
@@ -103,14 +122,18 @@ import {
   sendStagedDuelTermsPanel,
   sendCombatBootstrapSequence,
   resetCombatState,
+  savePendingIncomingComstarPrompt,
   stopCombatTimers,
   notifyRoomArrival,
   notifyRoomDeparture,
   handleCombatMovementFrame,
   handleCombatWeaponFireFrame,
   handleCombatActionFrame,
+  handleCombatEjectRequest,
+  handleCombatKeepalivePacket,
   handleMechPickerCmd7,
   handleMechPickerCmd20,
+  handleActiveScrollListMore,
 } from './world/world-handlers.js';
 
 const WELCOME_TEXT = 'Welcome to the game world.';
@@ -157,6 +180,7 @@ async function handleWorldLogin(
   session.accountId       = launch.accountId;
   session.displayName     = launch.displayName;
   session.allegiance      = launch.allegiance;
+  session.cbills          = launch.cbills;
   session.selectedMechId   = launch.mechId;
   session.selectedMechSlot = launch.mechSlot;
   connLog.info(
@@ -263,32 +287,30 @@ function handleWorldGameData(
     session.worldInitialized = true;
     notifyRoomArrival(players, session, connLog);
 
-    // Deliver any ComStar messages that arrived while this player was offline.
+    // Notify about unread ComStar messages that are waiting in the Postgres-backed inbox.
     const recipientAccountId = session.accountId;
     if (recipientAccountId !== undefined) {
-      claimUndeliveredMessages(recipientAccountId)
-        .then((pending) => {
-          if (pending.length === 0) return;
-          connLog.info('[world] delivering %d pending ComStar message(s)', pending.length);
-          const deliveredIds: number[] = [];
-          for (const msg of pending) {
-            if (session.socket.destroyed) break;
-            session.socket.write(
-              buildCmd36MessageViewPacket(msg.sender_comstar_id, msg.body, nextSeq(session)),
+      countSavedUnreadMessages(recipientAccountId)
+        .then((unreadCount) => {
+          if (unreadCount <= 0) return;
+          connLog.info('[world] %d unread ComStar message(s) waiting', unreadCount);
+          if (!session.socket.destroyed && session.socket.writable) {
+            send(
+              session.socket,
+              buildCmd3BroadcastPacket(
+                unreadCount === 1
+                  ? 'You have 1 unread ComStar message waiting.'
+                  : `You have ${unreadCount} unread ComStar messages waiting.`,
+                nextSeq(session),
+              ),
+              capture,
+              'CMD3_COMSTAR_WAITING',
             );
-            deliveredIds.push(msg.id);
           }
-          if (deliveredIds.length > 0) {
-            markDelivered(deliveredIds).catch((err: unknown) => {
-              const e = err instanceof Error ? err.message : String(err);
-              connLog.error('[world] failed to mark ComStar messages delivered: %s', e);
-            });
-          }
-          connLog.info('[world] delivered %d ComStar message(s)', deliveredIds.length);
         })
         .catch((err: unknown) => {
           const msg = err instanceof Error ? err.message : String(err);
-          connLog.error('[world] failed to claim/deliver pending ComStar messages: %s', msg);
+          connLog.error('[world] failed to query unread ComStar messages: %s', msg);
         });
     }
 
@@ -465,6 +487,13 @@ function handleWorldGameData(
       return;
     }
     if (parsed.actionType === 6) {
+      if (session.phase === 'combat') {
+        if (handleCombatEjectRequest(players, session, connLog, 'cmd-5 action=6')) {
+          return;
+        }
+        connLog.warn('[world] cmd-5 combat action type=6 ignored outside active duel');
+        return;
+      }
       // "Mech Bay" button — open the 3-step mech picker.
       if (session.phase !== 'world') {
         connLog.warn('[world] cmd-5 mech bay ignored outside world phase: phase=%s', session.phase);
@@ -479,6 +508,14 @@ function handleWorldGameData(
         return;
       }
       sendStagedDuelTermsPanel(players, session, connLog, capture);
+      return;
+    }
+    if (parsed.actionType === COMSTAR_ACCESS_ACTION_TYPE) {
+      if (session.phase !== 'world') {
+        connLog.warn('[world] cmd-5 ComStar access ignored outside world phase: phase=%s', session.phase);
+        return;
+      }
+      sendComstarAccessMenu(session, connLog, capture);
       return;
     }
     connLog.warn('[world] cmd-5 unsupported scene action type=%d', parsed.actionType);
@@ -513,6 +550,9 @@ function handleWorldGameData(
       const [slotPlusOne] = decodeArgType4(payload, 3);
       const requestedSlot = Number.isFinite(slotPlusOne) ? slotPlusOne - 1 : 0;
       selection = Math.max(0, requestedSlot);
+    }
+    if (handleComstarIncomingPromptCmd20(session, selection, connLog, capture)) {
+      return;
     }
     if (handleMechPickerCmd20(session, selection, connLog, capture)) {
       return;
@@ -550,6 +590,14 @@ function handleWorldGameData(
       return;
     }
     handleLocationAction(players, session, parsed.slot, parsed.targetCached, connLog, capture);
+
+  } else if (cmdIdx === 28) {
+    if (session.phase !== 'world') {
+      connLog.debug('[world] cmd-28 MORE ignored outside world phase: phase=%s', session.phase);
+      return;
+    }
+    connLog.info('[world] cmd-28 MORE');
+    handleActiveScrollListMore(session, connLog, capture);
 
   } else if (cmdIdx === 7) {
     const parsed = parseClientCmd7(payload);
@@ -616,6 +664,44 @@ function handleWorldGameData(
       return;
     }
 
+    if (parsed.listId === COMSTAR_SEND_TARGET_MENU_ID) {
+      handleComstarSendTargetSelection(players, session, parsed.selection, connLog, capture);
+      return;
+    }
+
+    if (parsed.listId === NEWS_CATEGORY_MENU_ID) {
+      handleNewsCategorySelection(session, parsed.selection, connLog, capture);
+      return;
+    }
+
+    if (parsed.listId === NEWSGRID_ARTICLE_LIST_ID) {
+      handleNewsgridArticleSelection(session, parsed.selection, connLog, capture);
+      return;
+    }
+
+    if (parsed.listId === MATCH_RESULTS_MENU_LIST_ID) {
+      handleMatchResultsSelection(session, parsed.selection, connLog, capture);
+      return;
+    }
+
+    if (parsed.listId === TIER_RANKING_CHOOSER_LIST_ID) {
+      handleTierRankingChooserSelection(session, parsed.selection, connLog, capture);
+      return;
+    }
+
+    if (parsed.listId === CLASS_RANKING_CHOOSER_LIST_ID) {
+      handleClassRankingChooserSelection(session, parsed.selection, connLog, capture);
+      return;
+    }
+
+    if (
+      parsed.listId === TIER_RANKING_RESULTS_LIST_ID
+      || parsed.listId === CLASS_RANKING_RESULTS_LIST_ID
+    ) {
+      handleRankingResultsSelection(session, parsed.selection, connLog, capture);
+      return;
+    }
+
     if (parsed.listId === PERSONNEL_LIST_ID && parsed.selection > 0) {
       sendPersonnelRecord(players, session, parsed.selection - 1, 1, connLog, capture);
       return;
@@ -627,6 +713,11 @@ function handleWorldGameData(
         return;
       }
       sendPersonnelRecord(players, session, session.worldInquiryTargetId, 2, connLog, capture);
+      return;
+    }
+
+    if (parsed.listId === TERMINAL_MENU_LIST_ID) {
+      handleComstarAccessSelection(players, session, parsed.selection, connLog, capture);
       return;
     }
 
@@ -734,6 +825,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     awaitingMechConfirm: false,
     serverSeq:         0,
     worldInitialized:  false,
+    worldKeepalivePending: false,
     worldRosterId:     allocateWorldRosterId(),
     worldPresenceStatus: 5,
   };
@@ -762,6 +854,10 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
         connLog.debug('[world][rx]\n%s', hexDump(pkt.payload));
       }
 
+      if (pkt.type !== Msg.KEEPALIVE) {
+        session.worldKeepalivePending = false;
+      }
+
       switch (pkt.type) {
         case Msg.LOGIN:
           handleWorldLogin(session, pkt.payload, connLog, capture).catch((err: unknown) => {
@@ -776,6 +872,12 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
           break;
 
         case Msg.KEEPALIVE:
+          if (session.phase === 'combat' && !session.worldKeepalivePending) {
+            if (handleCombatKeepalivePacket(players, session, connLog)) {
+              break;
+            }
+          }
+          session.worldKeepalivePending = false;
           connLog.debug('[world] keepalive response received');
           break;
 
@@ -799,6 +901,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
       '[world] client disconnected (phase=%s, bytes=%d)',
       session.phase, session.bytesReceived,
     );
+    savePendingIncomingComstarPrompt(session, connLog, 'disconnect');
     clearSessionDuelState(players, session, connLog, 'player disconnected');
     if (session.worldInitialized) {
       notifyRoomDeparture(players, session, connLog);
@@ -864,7 +967,11 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
       if (socket.destroyed || !socket.writable) {
         return;
       }
+      if (session.phase === 'combat') {
+        return;
+      }
       connLog.debug('[world] keepalive — sending ping');
+      session.worldKeepalivePending = true;
       send(socket, buildPacket(Msg.KEEPALIVE, Buffer.alloc(0)), capture, 'WORLD_KEEPALIVE_PING');
     }, ARIES_KEEPALIVE_INTERVAL_MS)
     : undefined;

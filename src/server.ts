@@ -421,6 +421,7 @@ function handleGameData(
         // Returning player: character on file → straight to world.
         session.displayName = character.display_name;
         session.allegiance  = character.allegiance;
+        session.cbills = character.cbills;
         session.selectedMechId = character.mech_id ?? undefined;
         session.selectedMechSlot = character.mech_slot ?? undefined;
         connLog.info(
@@ -523,6 +524,7 @@ function handleGameData(
     createCharacter(session.accountId!, displayName, allegiance, defaultMech.id, defaultMech.slot).then((character) => {
       session.displayName = character.display_name;
       session.allegiance = character.allegiance;
+      session.cbills = character.cbills;
       session.selectedMechId = character.mech_id ?? defaultMech.id;
       session.selectedMechSlot = character.mech_slot ?? defaultMech.slot;
 
@@ -605,6 +607,7 @@ function recordWorldLaunch(
     accountId:       session.accountId,
     displayName:     session.displayName,
     allegiance:      session.allegiance,
+    cbills:          session.cbills,
     mechId:          mech.id,
     mechSlot:        mech.slot,
     mechTypeString:  mech.typeString,

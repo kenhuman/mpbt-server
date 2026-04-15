@@ -347,6 +347,16 @@ export interface MechEntry {
    * [LA, RA, LL, RL, CT front, LT front, RT front, CT rear, LT rear, RT rear]
    */
   armorLikeMaxValues: number[];
+  /**
+   * Per-weapon mounted internal-section refs from decrypted .MEC offsets
+   * 0x8e.., one uint16 per weapon slot. The client checks
+   * `internalStateBytes[weaponMountInternalIndices[slot]] > 0` before allowing
+   * the slot to fire (`FUN_0042c200`).
+   *
+   * Index order matches Cmd72 / Cmd66 class-2 internal slots:
+   * [LA, RA, LT, RT, CT, LL, RL, Head].
+   */
+  weaponMountInternalIndices: number[];
 }
 
 /**
@@ -875,6 +885,55 @@ export function buildMenuDialogPacket(
   seq    = 0,
 ): Buffer {
   return buildGamePacket(7, buildMenuDialogArgs(listId, title, items), false, seq);
+}
+
+// ── Command 44 — keyed single-string list (server→client) ─────────────────────
+// CONFIRMED from FUN_0040fe80 / Cmd44_KeyedSingleStringList.
+//
+// Wire layout (args after seq+cmd bytes):
+//   [type1 2B: list_id]
+//   [string:   title]              — short arg-string via FUN_00401c80/FUN_0043d9b0
+//   [byte:     count]
+//   [repeat count times:
+//     [type4 5B: item_id]
+//     [string:   item text]
+//   ]
+//
+// Selecting a row later sends client cmd-7 with:
+//   [type1 list_id] [type4 item_id + 1]
+//
+// Special note: list_id 0x22 triggers a client-local synthetic "Exit to online service"
+// row (item_id=100) and keeps the dialog open after ordinary picks.
+
+export interface Cmd44KeyedStringItem {
+  itemId: number;
+  text: string;
+}
+
+export function buildCmd44KeyedSingleStringListArgs(
+  listId: number,
+  title: string,
+  items: Cmd44KeyedStringItem[],
+): Buffer {
+  const parts: Buffer[] = [
+    encodeB85_1(listId),
+    encodeString(title),
+    encodeAsByte(items.length),
+  ];
+  for (const item of items) {
+    parts.push(encodeB85_4(item.itemId));
+    parts.push(encodeString(item.text));
+  }
+  return Buffer.concat(parts);
+}
+
+export function buildCmd44KeyedSingleStringListPacket(
+  listId: number,
+  title: string,
+  items: Cmd44KeyedStringItem[],
+  seq = 0,
+): Buffer {
+  return buildGamePacket(44, buildCmd44KeyedSingleStringListArgs(listId, title, items), false, seq);
 }
 
 // ── Command 36 — Read / Reply message view (server→client) ──────────────────

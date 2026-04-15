@@ -1,12 +1,13 @@
 /**
  * ComStar message persistence helpers.
  *
- * Messages are stored when the recipient is offline and delivered the next
- * time they enter the game world.  Online delivery goes directly over the
- * socket and bypasses this table entirely.
+ * Messages are persisted for both online and offline recipients so the
+ * terminal inbox can read from a single Postgres-backed source of truth.
  */
 
 import { pool } from './client.js';
+
+export const COMSTAR_UNREAD_LIMIT = 25;
 
 export interface MessageRow {
   id: number;
@@ -18,10 +19,12 @@ export interface MessageRow {
   body: string;
   sent_at: Date;
   delivered_at: Date | null;
+  saved_at: Date | null;
+  read_at: Date | null;
 }
 
 /**
- * Persist an offline ComStar message.
+ * Persist a ComStar message.
  *
  * `body` must be the value produced by `buildComstarDeliveryText()` — it
  * includes the "ComStar message from <name>\" prefix and is already clamped
@@ -32,67 +35,133 @@ export async function storeMessage(
   recipientAccountId: number,
   senderComstarId: number,
   body: string,
-): Promise<MessageRow> {
+): Promise<MessageRow | null> {
   const res = await pool.query<MessageRow>(
     `INSERT INTO messages
        (sender_account_id, recipient_account_id, sender_comstar_id, body)
-     VALUES ($1, $2, $3, $4)
+     SELECT $1, $2, $3, $4
+     WHERE (
+       SELECT COUNT(*)
+       FROM messages
+       WHERE recipient_account_id = $2 AND read_at IS NULL
+     ) < $5
      RETURNING id, sender_account_id, recipient_account_id,
-               sender_comstar_id, body, sent_at, delivered_at`,
-    [senderAccountId, recipientAccountId, senderComstarId, body],
+                sender_comstar_id, body, sent_at, delivered_at, saved_at, read_at`,
+    [senderAccountId, recipientAccountId, senderComstarId, body, COMSTAR_UNREAD_LIMIT],
   );
-  return res.rows[0]!;
+  return res.rows[0] ?? null;
 }
 
 /**
- * Fetch all undelivered messages for a recipient account, oldest first.
- * Returns an empty array when there are no pending messages.
+ * Count unread messages for a recipient account.
  */
-export async function fetchUndeliveredMessages(
+export async function countUnreadMessages(
   recipientAccountId: number,
-): Promise<MessageRow[]> {
-  const res = await pool.query<MessageRow>(
-    `SELECT id, sender_account_id, recipient_account_id,
-            sender_comstar_id, body, sent_at, delivered_at
+): Promise<number> {
+  const res = await pool.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count
      FROM messages
-     WHERE recipient_account_id = $1 AND delivered_at IS NULL
-     ORDER BY sent_at ASC, id ASC`,
+     WHERE recipient_account_id = $1 AND read_at IS NULL`,
     [recipientAccountId],
   );
-  return res.rows;
+  return Number(res.rows[0]?.count ?? '0');
 }
 
 /**
- * Mark a list of message IDs as delivered (sets delivered_at = now()).
+ * Count saved-but-unread messages for a recipient account.
+ */
+export async function countSavedUnreadMessages(
+  recipientAccountId: number,
+): Promise<number> {
+  const res = await pool.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count
+     FROM messages
+     WHERE recipient_account_id = $1
+       AND saved_at IS NOT NULL
+       AND read_at IS NULL`,
+    [recipientAccountId],
+  );
+  return Number(res.rows[0]?.count ?? '0');
+}
+
+/**
+ * Fetch the next unread message for a recipient account, oldest first.
+ * Returns null when there are no unread messages.
+ */
+export async function fetchNextUnreadMessage(
+  recipientAccountId: number,
+): Promise<MessageRow | null> {
+  const res = await pool.query<MessageRow>(
+    `SELECT id, sender_account_id, recipient_account_id,
+            sender_comstar_id, body, sent_at, delivered_at, read_at
+     FROM messages
+     WHERE recipient_account_id = $1 AND read_at IS NULL
+     ORDER BY sent_at ASC, id ASC
+     LIMIT 1`,
+    [recipientAccountId],
+  );
+  return res.rows[0] ?? null;
+}
+
+/**
+ * Fetch the next saved unread message for a recipient account, oldest first.
+ * Returns null when there are no saved unread messages.
+ */
+export async function fetchNextSavedUnreadMessage(
+  recipientAccountId: number,
+): Promise<MessageRow | null> {
+  const res = await pool.query<MessageRow>(
+    `SELECT id, sender_account_id, recipient_account_id,
+            sender_comstar_id, body, sent_at, delivered_at, saved_at, read_at
+     FROM messages
+     WHERE recipient_account_id = $1
+       AND saved_at IS NOT NULL
+       AND read_at IS NULL
+     ORDER BY sent_at ASC, id ASC
+     LIMIT 1`,
+    [recipientAccountId],
+  );
+  return res.rows[0] ?? null;
+}
+
+/**
+ * Mark a list of message IDs as delivered (sets delivered_at = now() when unset).
  * Safe to call with an empty array (no-op).
  */
 export async function markDelivered(ids: number[]): Promise<void> {
   if (ids.length === 0) return;
   await pool.query(
-    `UPDATE messages SET delivered_at = now() WHERE id = ANY($1::int[])`,
+    `UPDATE messages
+     SET delivered_at = COALESCE(delivered_at, now())
+     WHERE id = ANY($1::int[])`,
     [ids],
   );
 }
 
 /**
- * Fetch pending messages for a recipient in delivery order without marking
- * them delivered. Callers must invoke `markDelivered()` only after the
- * messages have been successfully written to the recipient socket.
- *
- * Note: eliminating duplicate delivery across concurrent sessions requires
- * a separate claim/lock mechanism; this function intentionally preserves
- * correct `delivered_at` semantics and avoids message loss on failed sends.
+ * Mark messages as saved for later terminal retrieval and ensure they count as delivered.
  */
-export async function claimUndeliveredMessages(
-  recipientAccountId: number,
-): Promise<MessageRow[]> {
-  const res = await pool.query<MessageRow>(
-    `SELECT id, sender_account_id, recipient_account_id,
-            sender_comstar_id, body, sent_at, delivered_at
-     FROM messages
-     WHERE recipient_account_id = $1 AND delivered_at IS NULL
-     ORDER BY sent_at ASC, id ASC`,
-    [recipientAccountId],
+export async function markSaved(ids: number[]): Promise<void> {
+  if (ids.length === 0) return;
+  await pool.query(
+    `UPDATE messages
+     SET delivered_at = COALESCE(delivered_at, now()),
+         saved_at = COALESCE(saved_at, now())
+     WHERE id = ANY($1::int[])`,
+    [ids],
   );
-  return res.rows;
+}
+
+/**
+ * Mark messages as read and ensure they also count as delivered.
+ */
+export async function markRead(ids: number[]): Promise<void> {
+  if (ids.length === 0) return;
+  await pool.query(
+    `UPDATE messages
+     SET delivered_at = COALESCE(delivered_at, now()),
+         read_at = COALESCE(read_at, now())
+     WHERE id = ANY($1::int[])`,
+    [ids],
+  );
 }

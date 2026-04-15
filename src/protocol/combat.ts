@@ -59,6 +59,13 @@ const FACING_BASE = 0x0dc2; // 3,522
 /** Divisor shared by all motion accumulator fields. CONFIRMED §19.2. */
 export const MOTION_DIV = 0xb6; // 182
 
+/**
+ * Neutral DAT_004f1d5c value used by the client-side cmd8/cmd9 sender when
+ * reconstructing the first trailing type1 motion field.
+ * RE/Ghidra: sVar4 = (DAT_004f1d5c - 0x3ffc) / 0xb6; wire = sVar4 + 0x0e1c.
+ */
+export const FACING_ACCUMULATOR_NEUTRAL = 0x3ffc; // 16,380
+
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /** Encode a signed world coordinate as type3 (4 bytes, COORD_BIAS applied). */

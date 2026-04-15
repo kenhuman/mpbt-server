@@ -42,8 +42,66 @@ export const ALL_ROSTER_LIST_ID         = 0x3F4;
 // any non-reserved positive integer instead (see RESEARCH.md §11 avoid-list).
 export const INQUIRY_MENU_ID            = 0x3F3;  // 1011 — safe, not in client avoid-list
 export const PERSONNEL_LIST_ID          = 0x3F2;
+export const COMSTAR_SEND_TARGET_MENU_ID = 0x3F1;
+export const NEWS_CATEGORY_MENU_ID      = 0x3F0;
+export const NEWSGRID_ARTICLE_LIST_ID   = 0x3EF;
+export const TIER_RANKING_CHOOSER_LIST_ID = 0x3EE;
+export const CLASS_RANKING_CHOOSER_LIST_ID = 0x3ED;
+export const TIER_RANKING_RESULTS_LIST_ID = 0x3EC;
+export const CLASS_RANKING_RESULTS_LIST_ID = 0x3EB;
+export const MATCH_RESULTS_MENU_LIST_ID  = 0x3EA;
 export const PERSONNEL_MORE_ID          = 0x95;
 export const SOLARIS_TRAVEL_CONTEXT_ID  = 0xC6;
+export const COMSTAR_ACCESS_ACTION_TYPE = 0x08;
+export const TERMINAL_MENU_LIST_ID      = 0x22;
+
+export const TERMINAL_MENU_ITEMS = [
+  { itemId: 0, text: 'Send a ComStar message' },
+  { itemId: 1, text: 'Receive a ComStar message' },
+  { itemId: 2, text: 'Check News Grid' },
+  { itemId: 3, text: 'Examine Planetary Info' },
+  { itemId: 4, text: 'Set News Agent Options' },
+  { itemId: 5, text: 'Move without any Mechs' },
+  { itemId: 6, text: 'General news' },
+  { itemId: 7, text: 'Access Newsgrid' },
+  { itemId: 8, text: 'Transfer funds to someone' },
+  { itemId: 9, text: 'Change Handle' },
+  { itemId: 10, text: 'Review Personal Status' },
+  { itemId: 11, text: 'Examine my Contract' },
+  { itemId: 12, text: 'Review Unit Status' },
+] as const;
+
+export const COMSTAR_SEND_TARGET_MENU_ITEMS = [
+  'Search by Comstar ID',
+  'All Personnel Online',
+] as const;
+
+export const NEWS_CATEGORY_MENU_ITEMS = [
+  'Solaris Match Results',
+  'View Personal Tier Rankings',
+  'Tier Rankings',
+  'Class Rankings',
+  'General news',
+  'House news',
+] as const;
+
+export const TIER_RANKING_CHOOSER_ITEMS = [
+  { itemId: 0, text: 'Unranked' },
+  { itemId: 1, text: 'Novice' },
+  { itemId: 2, text: 'Amateur' },
+  { itemId: 3, text: 'Professional' },
+  { itemId: 4, text: 'Veteran' },
+  { itemId: 5, text: 'Master' },
+  { itemId: 6, text: 'BattleMaster' },
+  { itemId: 7, text: 'Champion' },
+] as const;
+
+export const CLASS_RANKING_CHOOSER_ITEMS = [
+  { itemId: 0, text: 'Light' },
+  { itemId: 1, text: 'Medium' },
+  { itemId: 2, text: 'Heavy' },
+  { itemId: 3, text: 'Assault' },
+] as const;
 
 // ── Per-connection session state ─────────────────────────────────────────────
 

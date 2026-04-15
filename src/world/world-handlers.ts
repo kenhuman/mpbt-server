@@ -8,6 +8,7 @@
 
 import {
   buildCmd3BroadcastPacket,
+  buildCmd46InfoPanelPacket,
   buildCmd17DuelTermsPacket,
   buildCmd4SceneInitPacket,
   buildCmd5CursorNormalPacket,
@@ -17,12 +18,35 @@ import {
 import {
   buildCmd20Packet,
   buildCmd36MessageViewPacket,
+  buildCmd37OpenComposePacket,
   parseClientCmd10WeaponFire,
   parseClientCmd12Action,
   parseClientCmd8Coasting,
   parseClientCmd9Moving,
 } from '../protocol/game.js';
 import { buildCombatWelcomePacket, buildWelcomePacket }    from '../protocol/auth.js';
+import { findAccountById } from '../db/accounts.js';
+import {
+  fetchLatestPublishedArticle,
+  fetchLatestPublishedArticleForTerm,
+  fetchPublishedArticleById,
+  listLatestPublishedArticles,
+} from '../db/articles.js';
+import {
+  createDuelResult,
+  type DuelResultRow,
+  fetchDuelResultById,
+  listAllDuelResults,
+  listRecentDuelResults,
+  updateDuelResultSettlement,
+} from '../db/duel-results.js';
+import {
+  isDisplayNameTaken,
+  listCharacters,
+  settleDuelStakeTransfer,
+  updateCharacterDisplayName,
+  updateCharacterMech,
+} from '../db/characters.js';
 import {
   buildCmd62CombatStartPacket,
   buildCmd63ArenaSceneInitPacket,
@@ -38,17 +62,25 @@ import {
   COMBAT_RESULT_LOSS,
   COMBAT_RESULT_VICTORY,
   COORD_BIAS,
+  FACING_ACCUMULATOR_NEUTRAL,
   MOTION_DIV,
   MOTION_NEUTRAL,
 } from '../protocol/combat.js';
-import { PlayerRegistry, ClientSession } from '../state/players.js';
-import { storeMessage } from '../db/messages.js';
-import { updateCharacterMech } from '../db/characters.js';
+import { PlayerRegistry, ClientSession, type CombatSession } from '../state/players.js';
+import {
+  countSavedUnreadMessages,
+  fetchNextSavedUnreadMessage,
+  markDelivered,
+  markRead,
+  markSaved,
+  storeMessage,
+} from '../db/messages.js';
 import { Logger }        from '../util/logger.js';
 import { CaptureLogger } from '../util/capture.js';
 import { buildMechExamineText, MECH_STATS } from '../data/mech-stats.js';
 import { mechInternalStateBytes } from '../data/mechs.js';
 import {
+  type CombatAttachmentImpactContext,
   type CombatAttachmentHitSection,
   getCombatModelIdForMechId,
   resolveCombatAttachmentHitSection,
@@ -60,6 +92,13 @@ import {
   WORLD_MECHS,
   DEFAULT_MAP_ROOM_ID,
   DEFAULT_SCENE_NAME,
+  MATCH_RESULTS_MENU_LIST_ID,
+  NEWS_CATEGORY_MENU_ID,
+  NEWSGRID_ARTICLE_LIST_ID,
+  TIER_RANKING_CHOOSER_LIST_ID,
+  CLASS_RANKING_CHOOSER_LIST_ID,
+  TIER_RANKING_RESULTS_LIST_ID,
+  CLASS_RANKING_RESULTS_LIST_ID,
   SOLARIS_ROOM_BY_ID,
   worldCaptures,
   worldMapByRoomId,
@@ -67,6 +106,7 @@ import {
   getSolarisRoomName,
   setSessionRoomPosition,
   CLASS_KEYS,
+  getMechWeightClass,
   getMechChassis,
   getMechChassisListForClass,
   MECH_CLASS_LIST_ID,
@@ -85,11 +125,26 @@ import {
   buildComstarDeliveryText,
   sendSceneRefresh,
   sendAllRosterList,
+  sendComstarSendTargetMenu,
+  sendNewsCategoryMenu,
+  sendNewsgridArticleMenu,
+  sendTierRankingChooser,
+  sendClassRankingChooser,
+  sendRankingResultsList,
+  sendMatchResultsMenu,
+  sendPersonnelRecord,
   sendSolarisTravelMap,
   sendMechClassPicker,
   sendMechChassisPicker,
   sendMechVariantPicker,
 } from './world-scene.js';
+import {
+  type SolarisTierKey,
+  type SolarisClassKey,
+  type SolarisStanding,
+  computeSolarisStandings,
+  findStandingByComstarId,
+} from './solaris-rankings.js';
 import {
   BOT_INITIAL_HEALTH,
   BOT_SPAWN_DISTANCE,
@@ -132,28 +187,848 @@ const SENSOR_CRITICAL_CODE = 0x11;
 const LIFE_SUPPORT_CRITICAL_CODE = 0x12;
 const CRITICAL_STATE_DAMAGED = 1;
 const CRITICAL_STATE_DESTROYED = 2;
+const WEAPON_STATE_UNAVAILABLE = 1;
 const PLAYER_RESULT_DELAY_MS = 750;
 const BOT_RESULT_DELAY_MS = 1500;
 const COMBAT_DROP_DELAY_MS = 4000;
 const RESULT_WORLD_RESTORE_DELAY_MS = 10_500;
+const COMSTAR_DIALOG_ID = 6;
+const COMSTAR_INCOMING_DIALOG_ID = 7;
 const HEAD_RETALIATION_SECTION: CombatAttachmentHitSection = {
   armorIndex: NO_ARMOR_INDEX,
   internalIndex: 7,
   label: 'head',
 };
+
+function notifyUnreadComstarMessages(
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const recipientAccountId = session.accountId;
+  if (recipientAccountId === undefined) return;
+  countSavedUnreadMessages(recipientAccountId)
+    .then((unreadCount) => {
+      if (unreadCount <= 0 || session.socket.destroyed || !session.socket.writable) return;
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket(
+          unreadCount === 1
+            ? 'You have 1 unread ComStar message waiting.'
+            : `You have ${unreadCount} unread ComStar messages waiting.`,
+          nextSeq(session),
+        ),
+        capture,
+        'CMD3_COMSTAR_WAITING',
+      );
+    })
+    .catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      connLog.error('[world] failed to query unread ComStar messages: %s', msg);
+  });
+}
+
+function openComstarTargetPrompt(
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  session.pendingComstarTargetPrompt = true;
+  session.pendingHandleChangePrompt = false;
+  connLog.info('[world] prompting for direct ComStar recipient id');
+  send(
+    session.socket,
+    buildCmd3BroadcastPacket('Enter the recipient ComStar ID, then press SEND.', nextSeq(session)),
+    capture,
+    'CMD3_COMSTAR_TARGET_PROMPT',
+  );
+  send(
+    session.socket,
+    buildCmd37OpenComposePacket(0, nextSeq(session)),
+    capture,
+    'CMD37_COMSTAR_TARGET_PROMPT',
+  );
+}
+
+function openHandleChangePrompt(
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  session.pendingHandleChangePrompt = true;
+  session.pendingComstarTargetPrompt = false;
+  connLog.info('[world] prompting for new handle');
+  send(
+    session.socket,
+    buildCmd3BroadcastPacket('Enter your new handle, then press SEND.', nextSeq(session)),
+    capture,
+    'CMD3_HANDLE_CHANGE_PROMPT',
+  );
+  send(
+    session.socket,
+    buildCmd37OpenComposePacket(0, nextSeq(session)),
+    capture,
+    'CMD37_HANDLE_CHANGE_PROMPT',
+  );
+}
+
+function broadcastDisplayNameRefresh(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+): void {
+  if (!session.roomId || session.worldRosterId === undefined || !session.worldInitialized) return;
+  const callsign = getDisplayName(session);
+  const status = getPresenceStatus(session);
+  for (const other of players.inRoom(session.roomId)) {
+    if (
+      other.id === session.id ||
+      other.phase !== 'world' ||
+      !other.worldInitialized ||
+      other.socket.destroyed
+    ) {
+      continue;
+    }
+    sendToWorldSession(
+      other,
+      buildCmd11PlayerEventPacket(session.worldRosterId, status, callsign, nextSeq(other)),
+      'CMD11_HANDLE_REFRESH',
+    );
+  }
+  connLog.info(
+    '[world] refreshed room display name: rosterId=%d status=%d callsign="%s"',
+    session.worldRosterId,
+    status,
+    callsign,
+  );
+}
+
+function broadcastSolarisResultMarquee(
+  players: PlayerRegistry,
+  winnerName: string,
+  loserName: string,
+  roomName: string,
+  connLog: Logger,
+): void {
+  const line = `Solaris update: ${winnerName} defeated ${loserName} in ${roomName}.`;
+  let recipients = 0;
+  for (const other of players.worldSessions()) {
+    if (!other.socket.writable) continue;
+    sendToWorldSession(
+      other,
+      buildCmd3BroadcastPacket(line, nextSeq(other)),
+      'CMD3_SOLARIS_RESULT',
+    );
+    recipients += 1;
+  }
+  connLog.info(
+    '[world] broadcast Solaris result marquee to %d world session(s): %s',
+    recipients,
+    line,
+  );
+}
+
+function buildCompactNewsText(title: string, summary: string, body: string): string {
+  const SEP = '\x5c';
+  const sanitize = (value: string) =>
+    value
+      .replace(/[\x00-\x1F\x7F]/g, ' ')
+      .replace(/\x1b/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const lines = [
+    sanitize(title),
+    sanitize(summary || body).slice(0, 64),
+  ].filter(Boolean);
+  const full = lines.join(SEP);
+  return Buffer.byteLength(full, 'latin1') <= 84
+    ? full
+    : Buffer.from(full, 'latin1').subarray(0, 84).toString('latin1');
+}
+
+function sendNewsArticleText(
+  session: ClientSession,
+  title: string,
+  summary: string,
+  body: string,
+  capture: CaptureLogger,
+): void {
+  send(
+    session.socket,
+    buildCmd20Packet(COMSTAR_DIALOG_ID, 2, buildCompactNewsText(title, summary, body), nextSeq(session)),
+    capture,
+    'CMD20_NEWS_ARTICLE',
+  );
+}
+
+function sendNoNewsAvailable(
+  session: ClientSession,
+  capture: CaptureLogger,
+): void {
+  send(
+    session.socket,
+    buildCmd20Packet(COMSTAR_DIALOG_ID, 2, 'No information is available.', nextSeq(session)),
+    capture,
+    'CMD20_NEWS_EMPTY',
+  );
+}
+
+function buildCompactDialogText(lines: string[]): string {
+  const SEP = '\x5c';
+  const safeLines = lines
+    .map(line => line.replace(/[\x00-\x1F\x7F]/g, ' ').replace(/\x1b/g, '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  const full = safeLines.join(SEP);
+  return Buffer.byteLength(full, 'latin1') <= 84
+    ? full
+    : Buffer.from(full, 'latin1').subarray(0, 84).toString('latin1');
+}
+
+function getSessionMaxHealth(session: ClientSession): number {
+  if (session.combatPlayerArmorValues && session.combatPlayerInternalValues) {
+    return getCombatDurability(session.combatPlayerArmorValues, session.combatPlayerInternalValues)
+      + (session.combatPlayerHeadArmor ?? HEAD_ARMOR_VALUE);
+  }
+  return session.playerHealth ?? HEAD_ARMOR_VALUE;
+}
+
+function getSessionCbills(session: ClientSession): number {
+  return Math.max(0, Math.trunc(session.cbills ?? 0));
+}
+
+function getCombatSessionStakeForParticipant(combatSession: CombatSession, sessionId: string): number {
+  const [participantAId, participantBId] = combatSession.participantSessionIds;
+  const [stakeA, stakeB] = combatSession.duelStakeValues;
+  if (sessionId === participantAId) return stakeA;
+  if (sessionId === participantBId) return stakeB;
+  return 0;
+}
+
+function getDuelStakeBalanceError(
+  participantA: ClientSession,
+  stakeA: number,
+  participantB: ClientSession,
+  stakeB: number,
+): string | undefined {
+  const balanceA = getSessionCbills(participantA);
+  if (stakeA > balanceA) {
+    return `${getDisplayName(participantA)} only has ${balanceA} cb for a ${stakeA} cb stake.`;
+  }
+  const balanceB = getSessionCbills(participantB);
+  if (stakeB > balanceB) {
+    return `${getDisplayName(participantB)} only has ${balanceB} cb for a ${stakeB} cb stake.`;
+  }
+  return undefined;
+}
+
+function flushPendingDuelSettlementNotice(session: ClientSession): void {
+  const notice = session.pendingDuelSettlementNotice;
+  if (
+    !notice
+    || session.phase !== 'world'
+    || !session.worldInitialized
+    || session.socket.destroyed
+    || !session.socket.writable
+  ) {
+    return;
+  }
+  session.pendingDuelSettlementNotice = undefined;
+  sendToWorldSession(
+    session,
+    buildCmd3BroadcastPacket(notice, nextSeq(session)),
+    'CMD3_DUEL_SETTLEMENT',
+  );
+}
+
+function persistDuelResult(
+  players: PlayerRegistry,
+  winner: ClientSession,
+  loser: ClientSession,
+  connLog: Logger,
+  reason: string,
+): void {
+  const combatSessionId = winner.combatSessionId;
+  const winnerAccountId = winner.accountId;
+  const loserAccountId = loser.accountId;
+  if (!combatSessionId || !winnerAccountId || !loserAccountId) {
+    connLog.warn('[world/duel] skipping duel-result persistence: missing session/account ids');
+    return;
+  }
+  const combatSession = players.getCombatSession(combatSessionId);
+  if (!combatSession?.worldMapRoomId) {
+    connLog.warn('[world/duel] skipping duel-result persistence: missing combat session room id');
+    return;
+  }
+  const winnerStakeCb = getCombatSessionStakeForParticipant(combatSession, winner.id);
+  const loserStakeCb = getCombatSessionStakeForParticipant(combatSession, loser.id);
+
+  createDuelResult({
+    combatSessionId,
+    worldMapRoomId: combatSession.worldMapRoomId,
+    roomName: getSolarisRoomName(combatSession.worldMapRoomId),
+    winnerAccountId,
+    loserAccountId,
+    winnerDisplayName: getDisplayName(winner),
+    loserDisplayName: getDisplayName(loser),
+    winnerComstarId: getComstarId(winner),
+    loserComstarId: getComstarId(loser),
+    winnerMechId: winner.selectedMechId ?? FALLBACK_MECH_ID,
+    loserMechId: loser.selectedMechId ?? FALLBACK_MECH_ID,
+    winnerStakeCb,
+    loserStakeCb,
+    winnerRemainingHealth: Math.max(0, Math.round(winner.playerHealth ?? 0)),
+    winnerMaxHealth: Math.max(1, getSessionMaxHealth(winner)),
+    loserRemainingHealth: Math.max(0, Math.round(loser.playerHealth ?? 0)),
+    loserMaxHealth: Math.max(1, getSessionMaxHealth(loser)),
+    resultReason: reason,
+  })
+    .then((row) => {
+      if (!row) {
+        connLog.debug('[world/duel] duel result already persisted for session=%s', combatSessionId);
+        return;
+      }
+      broadcastSolarisResultMarquee(
+        players,
+        row.winner_display_name,
+        row.loser_display_name,
+        row.room_name,
+        connLog,
+      );
+      connLog.info('[world/duel] persisted duel result id=%d session=%s', row.id, combatSessionId);
+    })
+    .catch((err: unknown) => {
+      const detail = err instanceof Error ? err.message : String(err);
+      connLog.error('[world/duel] failed to persist duel result: %s', detail);
+    });
+}
+
+function settleDuelCbills(
+  players: PlayerRegistry,
+  winner: ClientSession,
+  loser: ClientSession,
+  connLog: Logger,
+): void {
+  const combatSessionId = winner.combatSessionId;
+  const winnerAccountId = winner.accountId;
+  const loserAccountId = loser.accountId;
+  if (!combatSessionId || !winnerAccountId || !loserAccountId) {
+    connLog.warn('[world/duel] skipping duel settlement: missing session/account ids');
+    return;
+  }
+  const combatSession = players.getCombatSession(combatSessionId);
+  if (!combatSession) {
+    connLog.warn('[world/duel] skipping duel settlement: combat session missing');
+    return;
+  }
+  const transferCb = getCombatSessionStakeForParticipant(combatSession, loser.id);
+  if (transferCb <= 0) {
+    return;
+  }
+  const recordSettlement = (remainingAttempts = 3): void => {
+    updateDuelResultSettlement(combatSessionId, transferCb, winner.cbills ?? 0, loser.cbills ?? 0)
+      .then((row) => {
+        if (row || remainingAttempts <= 1) {
+          if (!row) {
+            connLog.warn('[world/duel] settlement update missed duel result session=%s', combatSessionId);
+          }
+          return;
+        }
+        const retryTimer = setTimeout(() => recordSettlement(remainingAttempts - 1), 50);
+        retryTimer.unref();
+      })
+      .catch((err: unknown) => {
+        const detail = err instanceof Error ? err.message : String(err);
+        connLog.error('[world/duel] failed to update duel-result settlement: %s', detail);
+      });
+  };
+  settleDuelStakeTransfer(winnerAccountId, loserAccountId, transferCb)
+    .then(({ winnerCbills, loserCbills }) => {
+      winner.cbills = winnerCbills;
+      loser.cbills = loserCbills;
+      winner.pendingDuelSettlementNotice = `Sanctioned settlement: +${transferCb} cb (balance ${winnerCbills} cb).`;
+      loser.pendingDuelSettlementNotice = `Sanctioned settlement: -${transferCb} cb (balance ${loserCbills} cb).`;
+      recordSettlement();
+      flushPendingDuelSettlementNotice(winner);
+      flushPendingDuelSettlementNotice(loser);
+      connLog.info(
+        '[world/duel] settled %d cb winner="%s" loser="%s"',
+        transferCb,
+        getDisplayName(winner),
+        getDisplayName(loser),
+      );
+    })
+    .catch((err: unknown) => {
+      const detail = err instanceof Error ? err.message : String(err);
+      winner.pendingDuelSettlementNotice = 'Sanctioned settlement failed; balances unchanged.';
+      loser.pendingDuelSettlementNotice = 'Sanctioned settlement failed; balances unchanged.';
+      flushPendingDuelSettlementNotice(winner);
+      flushPendingDuelSettlementNotice(loser);
+      connLog.error('[world/duel] failed to settle duel cbills: %s', detail);
+    });
+}
+
+function buildRankingLabel(standing: SolarisStanding): string {
+  return standing.tierKey === 'UNRANKED'
+    ? 'Unranked'
+    : `${standing.tierLabel} #${standing.tierRank}`;
+}
+
+function findLatestResultForAccount(
+  results: DuelResultRow[],
+  accountId: number,
+): DuelResultRow | undefined {
+  for (let i = results.length - 1; i >= 0; i -= 1) {
+    const result = results[i];
+    if (result.winner_account_id === accountId || result.loser_account_id === accountId) {
+      return result;
+    }
+  }
+  return undefined;
+}
+
+function buildRankingLastDuelLine(
+  standing: SolarisStanding,
+  latestResult?: DuelResultRow,
+): string {
+  if (!latestResult) {
+    return 'Last duel: None';
+  }
+  const won = latestResult.winner_account_id === standing.accountId;
+  const opponent = won ? latestResult.loser_display_name : latestResult.winner_display_name;
+  return `Last duel: ${won ? 'Won' : 'Lost'} vs ${opponent}`;
+}
+
+function buildRankingInfoPanelLines(
+  standing: SolarisStanding,
+  latestResult?: DuelResultRow,
+  context?: {
+    tierKey?: SolarisTierKey;
+    classKey?: SolarisClassKey;
+  },
+): string[] {
+  const contextLine = context?.classKey
+    ? `Class   : #${standing.overallRank} ${context.classKey.charAt(0)}${context.classKey.slice(1).toLowerCase()}`
+    : context?.tierKey
+      ? `Tier    : #${standing.tierRank} ${standing.tierLabel}`
+      : `Overall : #${standing.overallRank}`;
+  return [
+    `Rank    : ${buildRankingLabel(standing)}`,
+    `Score   : ${standing.score}`,
+    `Record  : ${standing.ratioText}`,
+    `House   : ${standing.allegiance}`,
+    contextLine,
+    buildRankingLastDuelLine(standing, latestResult),
+  ];
+}
+
+function sendRankingInfoPanel(
+  session: ClientSession,
+  standing: SolarisStanding,
+  latestResult: DuelResultRow | undefined,
+  capture: CaptureLogger,
+  label: string,
+  context?: {
+    tierKey?: SolarisTierKey;
+    classKey?: SolarisClassKey;
+  },
+): void {
+  send(
+    session.socket,
+    buildCmd46InfoPanelPacket(
+      {
+        comstarId: standing.comstarId,
+        battlesToDate: standing.matches,
+        lines: buildRankingInfoPanelLines(standing, latestResult, context),
+      },
+      nextSeq(session),
+    ),
+    capture,
+    label,
+  );
+}
+
+function buildMatchResultDetailText(result: {
+  roomName: string;
+  winnerDisplayName: string;
+  loserDisplayName: string;
+  winnerStakeCb: number;
+  loserStakeCb: number;
+  settledTransferCb: number;
+  resultReason: string;
+}): string {
+  const stakeLine = (result.winnerStakeCb > 0 || result.loserStakeCb > 0)
+    ? `Stakes: ${result.winnerStakeCb}/${result.loserStakeCb} cb`
+    : 'Stakes: none';
+  const settlementLine = result.settledTransferCb > 0
+    ? `Settled: +${result.settledTransferCb} cb`
+    : undefined;
+  return buildCompactDialogText([
+    result.roomName,
+    `${result.winnerDisplayName} def. ${result.loserDisplayName}`,
+    stakeLine,
+    ...(settlementLine ? [settlementLine] : []),
+    result.resultReason,
+  ]);
+}
+
+function classKeyFromSelection(selection: number): SolarisClassKey | undefined {
+  switch (selection) {
+    case 1: return 'LIGHT';
+    case 2: return 'MEDIUM';
+    case 3: return 'HEAVY';
+    case 4: return 'ASSAULT';
+    default: return undefined;
+  }
+}
+
+const RANKING_SHELL_PAGE_SIZE = 10;
+const MATCH_RESULTS_SHELL_PAGE_SIZE = 10;
+const SCROLL_SHELL_INTERNAL_ID_BASE = 100000;
+const TIER_RANKING_KEYS: SolarisTierKey[] = [
+  'UNRANKED',
+  'NOVICE',
+  'AMATEUR',
+  'PROFESSIONAL',
+  'VETERAN',
+  'MASTER',
+  'BATTLEMASTER',
+  'CHAMPION',
+];
+const TIER_RANKING_LABELS = new Map<SolarisTierKey, string>([
+  ['UNRANKED', 'Unranked'],
+  ['NOVICE', 'Novice'],
+  ['AMATEUR', 'Amateur'],
+  ['PROFESSIONAL', 'Professional'],
+  ['VETERAN', 'Veteran'],
+  ['MASTER', 'Master'],
+  ['BATTLEMASTER', 'BattleMaster'],
+  ['CHAMPION', 'Champion'],
+]);
+
+function buildRankingShellRows(standings: SolarisStanding[]) {
+  return standings.map((standing) => ({
+    itemId: standing.comstarId,
+    text: `${standing.displayName.slice(0, 12).padEnd(12)} ${String(standing.score).padStart(5)} ${standing.ratioText.padStart(7)}`,
+  }));
+}
+
+function makeScrollShellInternalId(rawId: number): number {
+  return SCROLL_SHELL_INTERNAL_ID_BASE + rawId;
+}
+
+function parseScrollShellRawId(selection: number): number | undefined {
+  const storedId = selection - 1;
+  if (storedId < SCROLL_SHELL_INTERNAL_ID_BASE) return undefined;
+  return storedId - SCROLL_SHELL_INTERNAL_ID_BASE;
+}
+
+function buildMatchResultShellRows(results: DuelResultRow[]) {
+  return results.map((result) => ({
+    itemId: makeScrollShellInternalId(result.id),
+    text: `${result.winner_display_name.slice(0, 10)} v ${result.loser_display_name.slice(0, 10)} @ ${result.room_name.slice(0, 6)}`,
+  }));
+}
+
+function sendRankingPage(
+  session: ClientSession,
+  listId: number,
+  title: string,
+  standings: SolarisStanding[],
+  pageIndex: number,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const start = pageIndex * RANKING_SHELL_PAGE_SIZE;
+  const pageStandings = standings.slice(start, start + RANKING_SHELL_PAGE_SIZE);
+  if (pageStandings.length === 0) {
+    session.worldScrollList = undefined;
+    sendNoNewsAvailable(session, capture);
+    return;
+  }
+  const hasMore = start + pageStandings.length < standings.length;
+  sendRankingResultsList(
+    session,
+    listId,
+    title,
+    buildRankingShellRows(pageStandings),
+    hasMore,
+    connLog,
+    capture,
+  );
+}
+
+function showPersonalTierRanking(
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const accountId = session.accountId;
+  if (!accountId) {
+    sendNoNewsAvailable(session, capture);
+    return;
+  }
+  Promise.all([listAllDuelResults(), listCharacters()])
+    .then(([results, characters]) => {
+      session.worldScrollList = undefined;
+      const standings = computeSolarisStandings(results, characters);
+      const standing = standings.find(entry => entry.accountId === accountId);
+      const latestResult = standing ? findLatestResultForAccount(results, standing.accountId) : undefined;
+      if (!standing || session.socket.destroyed || !session.socket.writable) {
+        if (!standing && !session.socket.destroyed && session.socket.writable) {
+          sendNoNewsAvailable(session, capture);
+        }
+        return;
+      }
+      sendRankingInfoPanel(session, standing, latestResult, capture, 'CMD46_PERSONAL_TIER_RANK');
+    })
+    .catch((err: unknown) => {
+      const detail = err instanceof Error ? err.message : String(err);
+      connLog.error('[world] failed to build personal tier ranking: %s', detail);
+      if (!session.socket.destroyed && session.socket.writable) {
+        sendNoNewsAvailable(session, capture);
+      }
+    });
+}
+
+function showTierRankingList(
+  session: ClientSession,
+  tierKey: SolarisTierKey,
+  tierLabel: string,
+  connLog: Logger,
+  capture: CaptureLogger,
+  pageIndex = 0,
+): void {
+  const title = `Tier Rankings - ${tierLabel}`;
+  Promise.all([listAllDuelResults(), listCharacters()])
+    .then(([results, characters]) => {
+      const standings = computeSolarisStandings(results, characters)
+        .filter(standing => standing.tierKey === tierKey);
+      if (session.socket.destroyed || !session.socket.writable) return;
+      if (standings.length === 0) {
+        session.worldScrollList = undefined;
+        sendNoNewsAvailable(session, capture);
+        return;
+      }
+      session.worldScrollList = {
+        listId: TIER_RANKING_RESULTS_LIST_ID,
+        kind: 'tier-ranking',
+        pageIndex,
+        pageSize: RANKING_SHELL_PAGE_SIZE,
+        title,
+        tierKey,
+      };
+      sendRankingPage(
+        session,
+        TIER_RANKING_RESULTS_LIST_ID,
+        title,
+        standings,
+        pageIndex,
+        connLog,
+        capture,
+      );
+    })
+    .catch((err: unknown) => {
+      const detail = err instanceof Error ? err.message : String(err);
+      connLog.error('[world] failed to build tier rankings: %s', detail);
+      if (!session.socket.destroyed && session.socket.writable) {
+        sendNoNewsAvailable(session, capture);
+      }
+    });
+}
+
+function showClassRankingList(
+  session: ClientSession,
+  classKey: SolarisClassKey,
+  connLog: Logger,
+  capture: CaptureLogger,
+  pageIndex = 0,
+): void {
+  const title = `${classKey.charAt(0)}${classKey.slice(1).toLowerCase()} Class Rankings`;
+  Promise.all([listAllDuelResults(), listCharacters()])
+    .then(([results, characters]) => {
+      const standings = computeSolarisStandings(results, characters, classKey);
+      if (session.socket.destroyed || !session.socket.writable) return;
+      if (standings.length === 0) {
+        session.worldScrollList = undefined;
+        sendNoNewsAvailable(session, capture);
+        return;
+      }
+      session.worldScrollList = {
+        listId: CLASS_RANKING_RESULTS_LIST_ID,
+        kind: 'class-ranking',
+        pageIndex,
+        pageSize: RANKING_SHELL_PAGE_SIZE,
+        title,
+        classKey,
+      };
+      sendRankingPage(
+        session,
+        CLASS_RANKING_RESULTS_LIST_ID,
+        title,
+        standings,
+        pageIndex,
+        connLog,
+        capture,
+      );
+    })
+    .catch((err: unknown) => {
+      const detail = err instanceof Error ? err.message : String(err);
+      connLog.error('[world] failed to build class rankings: %s', detail);
+      if (!session.socket.destroyed && session.socket.writable) {
+        sendNoNewsAvailable(session, capture);
+      }
+    });
+}
+
+function showStandingDetailByComstarId(
+  session: ClientSession,
+  comstarId: number,
+  connLog: Logger,
+  capture: CaptureLogger,
+  context?: {
+    tierKey?: SolarisTierKey;
+    classKey?: SolarisClassKey;
+  },
+): void {
+  Promise.all([listAllDuelResults(), listCharacters()])
+    .then(([results, characters]) => {
+      session.worldScrollList = undefined;
+      let standings = computeSolarisStandings(results, characters, context?.classKey);
+      if (context?.tierKey) {
+        standings = standings.filter(entry => entry.tierKey === context.tierKey);
+      }
+      const standing = findStandingByComstarId(standings, comstarId);
+      const latestResult = standing ? findLatestResultForAccount(results, standing.accountId) : undefined;
+      if (!standing || session.socket.destroyed || !session.socket.writable) {
+        if (!standing && !session.socket.destroyed && session.socket.writable) {
+          sendNoNewsAvailable(session, capture);
+        }
+        return;
+      }
+      sendRankingInfoPanel(session, standing, latestResult, capture, 'CMD46_RANKING_DETAIL', context);
+    })
+    .catch((err: unknown) => {
+      const detail = err instanceof Error ? err.message : String(err);
+      connLog.error('[world] failed to build ranking detail: %s', detail);
+      if (!session.socket.destroyed && session.socket.writable) {
+        sendNoNewsAvailable(session, capture);
+      }
+    });
+}
+
+function showMatchResults(
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+  pageIndex = 0,
+): void {
+  listRecentDuelResults(20)
+    .then((results) => {
+      if (session.socket.destroyed || !session.socket.writable) return;
+      if (results.length === 0) {
+        session.worldScrollList = undefined;
+        session.pendingMatchResultIds = undefined;
+        sendNoNewsAvailable(session, capture);
+        return;
+      }
+      const start = pageIndex * MATCH_RESULTS_SHELL_PAGE_SIZE;
+      const pageResults = results.slice(start, start + MATCH_RESULTS_SHELL_PAGE_SIZE);
+      if (pageResults.length === 0) {
+        session.worldScrollList = undefined;
+        session.pendingMatchResultIds = undefined;
+        sendNoNewsAvailable(session, capture);
+        return;
+      }
+      session.pendingMatchResultIds = undefined;
+      session.worldScrollList = {
+        listId: MATCH_RESULTS_MENU_LIST_ID,
+        kind: 'match-results',
+        pageIndex,
+        pageSize: MATCH_RESULTS_SHELL_PAGE_SIZE,
+        title: 'Solaris Match Results',
+      };
+      sendRankingResultsList(
+        session,
+        MATCH_RESULTS_MENU_LIST_ID,
+        'Solaris Match Results',
+        buildMatchResultShellRows(pageResults),
+        start + pageResults.length < results.length,
+        connLog,
+        capture,
+      );
+    })
+    .catch((err: unknown) => {
+      const detail = err instanceof Error ? err.message : String(err);
+      connLog.error('[world] failed to fetch Solaris match results: %s', detail);
+      if (!session.socket.destroyed && session.socket.writable) {
+        sendNoNewsAvailable(session, capture);
+      }
+    });
+}
+
+function clearPendingIncomingComstarPrompt(session: ClientSession): void {
+  session.pendingIncomingComstarMessageId = undefined;
+  session.pendingIncomingComstarSenderId = undefined;
+  session.pendingIncomingComstarBody = undefined;
+}
+
+function promptIncomingComstarMessage(
+  session: ClientSession,
+  messageId: number,
+  senderComstarId: number,
+  body: string,
+  connLog: Logger,
+): void {
+  session.pendingIncomingComstarMessageId = messageId;
+  session.pendingIncomingComstarSenderId = senderComstarId;
+  session.pendingIncomingComstarBody = body;
+  connLog.info('[world] prompting live ComStar recipient: msgId=%d sender=%d', messageId, senderComstarId);
+  sendToWorldSession(
+    session,
+    buildCmd20Packet(COMSTAR_INCOMING_DIALOG_ID, 0, 'Incoming ComStar message\\Read now?', nextSeq(session)),
+    'CMD20_COMSTAR_INCOMING',
+  );
+  markDelivered([messageId]).catch((err: unknown) => {
+    const detail = err instanceof Error ? err.message : String(err);
+    connLog.error('[world] failed to mark prompted ComStar message delivered: %s', detail);
+  });
+}
+
+function sendLiveUnreadComstarNotice(session: ClientSession): void {
+  sendToWorldSession(
+    session,
+    buildCmd3BroadcastPacket('You have unread ComStar messages waiting.', nextSeq(session)),
+    'CMD3_COMSTAR_WAITING_LIVE',
+  );
+}
+
+export function savePendingIncomingComstarPrompt(
+  session: ClientSession,
+  connLog: Logger,
+  reason: string,
+): void {
+  const messageId = session.pendingIncomingComstarMessageId;
+  if (messageId === undefined) return;
+  clearPendingIncomingComstarPrompt(session);
+  connLog.info('[world] saving pending incoming ComStar prompt: msgId=%d reason=%s', messageId, reason);
+  markSaved([messageId]).catch((err: unknown) => {
+    const detail = err instanceof Error ? err.message : String(err);
+    connLog.error('[world] failed to save pending incoming ComStar prompt: %s', detail);
+  });
+}
 type CombatResultCode = 0 | 1;
 
 const LOCAL_RETALIATION_SECTIONS: readonly CombatAttachmentHitSection[] = [
   { armorIndex: 0, internalIndex: 0, label: 'left-arm' },
-  { armorIndex: 5, internalIndex: 5, label: 'left-torso-front' },
-  { armorIndex: 8, internalIndex: 5, label: 'left-torso-rear' },
+  { armorIndex: 5, internalIndex: 2, label: 'left-torso-front' },
+  { armorIndex: 8, internalIndex: 2, label: 'left-torso-rear' },
   { armorIndex: 4, internalIndex: 4, label: 'center-torso-front' },
   { armorIndex: 7, internalIndex: 4, label: 'center-torso-rear' },
-  { armorIndex: 6, internalIndex: 6, label: 'right-torso-front' },
-  { armorIndex: 9, internalIndex: 6, label: 'right-torso-rear' },
+  { armorIndex: 6, internalIndex: 3, label: 'right-torso-front' },
+  { armorIndex: 9, internalIndex: 3, label: 'right-torso-rear' },
   { armorIndex: 1, internalIndex: 1, label: 'right-arm' },
-  { armorIndex: 2, internalIndex: 2, label: 'left-leg' },
-  { armorIndex: 3, internalIndex: 3, label: 'right-leg' },
+  { armorIndex: 2, internalIndex: 5, label: 'left-leg' },
+  { armorIndex: 3, internalIndex: 6, label: 'right-leg' },
   HEAD_RETALIATION_SECTION,
 ] as const;
 
@@ -202,8 +1077,29 @@ function resolveBotHitSection(
   mechId: number | undefined,
   attach: number,
   impactZ: number,
+  impactContext?: CombatAttachmentImpactContext,
 ): CombatAttachmentHitSection {
-  return resolveCombatAttachmentHitSection(mechId, attach, impactZ);
+  return resolveCombatAttachmentHitSection(mechId, attach, impactZ, impactContext);
+}
+
+function buildTargetImpactContext(
+  impactX: number,
+  impactY: number,
+  impactZ: number,
+  targetX: number,
+  targetY: number,
+  targetZ: number,
+  facingAccumulator: number,
+): CombatAttachmentImpactContext {
+  return {
+    impactX,
+    impactY,
+    impactZ,
+    targetX,
+    targetY,
+    targetZ,
+    facingAccumulator,
+  };
 }
 
 function shouldSpillUpperBodyHitToCenter(hitSection: CombatAttachmentHitSection): boolean {
@@ -239,6 +1135,79 @@ function getWeaponDamageByName(weaponName: string | undefined): number | undefin
     case 'LRM-20': return 20;
     default: return undefined;
   }
+}
+
+const INTERNAL_SECTION_LABELS = [
+  'left arm',
+  'right arm',
+  'left torso',
+  'right torso',
+  'center torso',
+  'left leg',
+  'right leg',
+  'head',
+] as const;
+
+function getWeaponMountGate(
+  session: ClientSession,
+  weaponSlot: number,
+): { allowed: boolean; reason?: string; mountedSectionIndex?: number } {
+  const sourceMechId = session.selectedMechId ?? FALLBACK_MECH_ID;
+  const mechEntry = WORLD_MECH_BY_ID.get(sourceMechId);
+  if (!mechEntry) return { allowed: true };
+  if (weaponSlot < 0 || weaponSlot >= mechEntry.weaponMountInternalIndices.length) {
+    return { allowed: false, reason: 'invalid slot' };
+  }
+
+  const mountedSectionIndex = mechEntry.weaponMountInternalIndices[weaponSlot];
+  if (
+    mountedSectionIndex < 0
+    || mountedSectionIndex >= INTERNAL_SECTION_LABELS.length
+  ) {
+    return { allowed: true, mountedSectionIndex };
+  }
+
+  const internalValues = session.combatPlayerInternalValues ?? mechInternalStateBytes(mechEntry.tonnage);
+  if ((internalValues[mountedSectionIndex] ?? 0) > 0) {
+    return { allowed: true, mountedSectionIndex };
+  }
+
+  return {
+    allowed: false,
+    reason: `${INTERNAL_SECTION_LABELS[mountedSectionIndex]} destroyed`,
+    mountedSectionIndex,
+  };
+}
+
+function getWeaponSectionLossUpdates(
+  mechId: number | undefined,
+  previousInternalValues: readonly number[],
+  nextInternalValues: readonly number[],
+): DamageCodeUpdate[] {
+  const mechEntry = mechId === undefined ? undefined : WORLD_MECH_BY_ID.get(mechId);
+  if (!mechEntry) return [];
+
+  const destroyedSections = new Set<number>();
+  for (let sectionIndex = 0; sectionIndex < nextInternalValues.length; sectionIndex += 1) {
+    const previousValue = previousInternalValues[sectionIndex] ?? 0;
+    const nextValue = nextInternalValues[sectionIndex] ?? 0;
+    if (previousValue > 0 && nextValue <= 0) {
+      destroyedSections.add(sectionIndex);
+    }
+  }
+  if (destroyedSections.size === 0) return [];
+
+  const updates: DamageCodeUpdate[] = [];
+  for (let weaponSlot = 0; weaponSlot < mechEntry.weaponMountInternalIndices.length; weaponSlot += 1) {
+    if (!destroyedSections.has(mechEntry.weaponMountInternalIndices[weaponSlot] ?? -1)) continue;
+    updates.push({
+      damageCode: 0x28 + weaponSlot,
+      // RE confirms any non-zero weapon state triggers the local HUD/TIC refresh.
+      // The exact retail tier split is still unresolved; 1 is the first unavailable state.
+      damageValue: WEAPON_STATE_UNAVAILABLE,
+    });
+  }
+  return updates;
 }
 
 function getShotDamage(session: ClientSession, weaponSlot: number): { damage: number; weaponName?: string } {
@@ -328,8 +1297,9 @@ function resolveEffectiveHitSection(
   impactZ: number,
   armorValues: readonly number[],
   internalValues: readonly number[],
+  impactContext?: CombatAttachmentImpactContext,
 ): CombatAttachmentHitSection {
-  let hitSection = resolveBotHitSection(mechId, attach, impactZ);
+  let hitSection = resolveBotHitSection(mechId, attach, impactZ, impactContext);
   const primaryArmorCurrent = armorValues[hitSection.armorIndex] ?? 0;
   const primaryInternalCurrent = internalValues[hitSection.internalIndex] ?? 0;
   if (
@@ -456,6 +1426,7 @@ function queueCombatResultTransition(
           ? 'Combat over: victory.'
           : 'Combat over: defeat.',
       );
+      notifyUnreadComstarMessages(session, connLog, capture);
     }, RESULT_WORLD_RESTORE_DELAY_MS);
     session.combatWorldRestoreTimer.unref();
   }, delayMs);
@@ -646,13 +1617,30 @@ export function handleDuelTermsSubmit(
     );
   }
 
-  combatSession.duelStakeValues = [normalizedStakeA, normalizedStakeB];
-  combatSession.duelTermsUpdatedBySessionId = session.id;
-  combatSession.duelTermsUpdatedAt = Date.now();
-
   const [participantAId, participantBId] = combatSession.participantSessionIds;
   const participantA = players.get(participantAId);
   const participantB = players.get(participantBId);
+  if (participantA && participantB) {
+    const balanceError = getDuelStakeBalanceError(
+      participantA,
+      normalizedStakeA,
+      participantB,
+      normalizedStakeB,
+    );
+    if (balanceError) {
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket(`Duel terms rejected: ${balanceError}`, nextSeq(session)),
+        capture,
+        'CMD3_DUEL_TERMS_FUNDS',
+      );
+      return;
+    }
+  }
+
+  combatSession.duelStakeValues = [normalizedStakeA, normalizedStakeB];
+  combatSession.duelTermsUpdatedBySessionId = session.id;
+  combatSession.duelTermsUpdatedAt = Date.now();
   const summary = `Duel terms updated: ${participantA ? getDisplayName(participantA) : 'Pilot A'}=${normalizedStakeA} cb, ${participantB ? getDisplayName(participantB) : 'Pilot B'}=${normalizedStakeB} cb. Use Duel Terms to review or /fight to start.`;
 
   connLog.info(
@@ -698,7 +1686,7 @@ function mirrorDuelRemotePosition(
         x:        session.combatX ?? 0,
         y:        session.combatY ?? 0,
         z:        session.combatJumpAltitude ?? 0,
-        facing:   ((session.combatHeadingRaw ?? MOTION_NEUTRAL) - MOTION_NEUTRAL) * MOTION_DIV,
+        facing:   getCombatCmd65Facing(session),
         throttle: session.combatThrottle ?? 0,
         legVel:   session.combatLegVel ?? 0,
         speedMag: session.combatSpeedMag ?? 0,
@@ -707,6 +1695,13 @@ function mirrorDuelRemotePosition(
     ),
     label,
   );
+}
+
+function getCombatCmd65Facing(session: ClientSession): number {
+  // Ghidra: client cmd8/cmd9 writes the first trailing type1 field from DAT_004f1d5c
+  // ("turn momentum"/positional adjust), not from the absolute type2 heading field.
+  return FACING_ACCUMULATOR_NEUTRAL +
+    ((session.combatTurnMomentumRaw ?? MOTION_NEUTRAL) - MOTION_NEUTRAL) * MOTION_DIV;
 }
 
 function stopSessionActiveCombatLoops(session: ClientSession): void {
@@ -847,6 +1842,8 @@ function queueDuelCombatResultTransition(
   }
 
   combatSession.state = 'completed';
+  persistDuelResult(players, winner, loser, connLog, reason);
+  settleDuelCbills(players, winner, loser, connLog);
   winner.combatResultCode = COMBAT_RESULT_VICTORY;
   loser.combatResultCode = COMBAT_RESULT_LOSS;
   winner.combatEjectArmed = false;
@@ -918,7 +1915,9 @@ function queueDuelCombatResultTransition(
               ? `Duel over: victory vs ${getDisplayName(opponent)}.`
               : `Duel over: defeat vs ${getDisplayName(opponent)}.`,
           );
+          notifyUnreadComstarMessages(participant, connLog, participantCapture);
         }
+        flushPendingDuelSettlementNotice(participant);
         notifyRoomArrival(players, participant, connLog);
         maybeFinalizeDuelCombatSession(players, combatSessionId, participants, connLog);
       }, RESULT_WORLD_RESTORE_DELAY_MS);
@@ -935,13 +1934,14 @@ function requestDuelEjection(
   players: PlayerRegistry,
   session: ClientSession,
   connLog: Logger,
+  confirmImmediately = false,
 ): boolean {
   const duelPeer = getActiveDuelPeer(players, session);
   if (!duelPeer) {
     return false;
   }
 
-  if (!session.combatEjectArmed) {
+  if (!confirmImmediately && !session.combatEjectArmed) {
     session.combatEjectArmed = true;
     connLog.info('[world/duel] eject armed for "%s" (awaiting confirm)', getDisplayName(session));
     return true;
@@ -968,6 +1968,34 @@ function requestDuelEjection(
     BOT_RESULT_DELAY_MS,
   );
   return true;
+}
+
+export function handleCombatEjectRequest(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+  source: string,
+): boolean {
+  if (session.combatResultCode !== undefined) {
+    connLog.debug('[world/combat] %s ignored while result transition is pending', source);
+    return true;
+  }
+
+  if (requestDuelEjection(players, session, connLog, true)) {
+    connLog.info('[world/combat] %s interpreted as confirmed duel ejection', source);
+    return true;
+  }
+
+  connLog.debug('[world/combat] %s observed outside active duel', source);
+  return false;
+}
+
+export function handleCombatKeepalivePacket(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+): boolean {
+  return handleCombatEjectRequest(players, session, connLog, 'type-0x05');
 }
 
 export function tryStartStagedDuelCombat(
@@ -1002,12 +2030,31 @@ export function tryStartStagedDuelCombat(
     clearSessionDuelState(players, session, connLog, 'participant unavailable');
     return true;
   }
+  const balanceError = getDuelStakeBalanceError(
+    playerA,
+    combatSession.duelStakeValues[0],
+    playerB,
+    combatSession.duelStakeValues[1],
+  );
+  if (balanceError) {
+    for (const participant of [playerA, playerB]) {
+      sendToWorldSession(
+        participant,
+        buildCmd3BroadcastPacket(`Cannot start sanctioned duel: ${balanceError}`, nextSeq(participant)),
+        'CMD3_DUEL_START_FUNDS',
+      );
+    }
+    return true;
+  }
   const participants = [
     { local: playerA, peer: playerB, localX: 0, localY: 0, remoteX: 0, remoteY: BOT_SPAWN_DISTANCE },
     { local: playerB, peer: playerA, localX: 0, localY: BOT_SPAWN_DISTANCE, remoteX: 0, remoteY: 0 },
   ];
 
   for (const participant of participants) {
+    participant.local.pendingComstarTargetPrompt = false;
+    participant.local.pendingHandleChangePrompt = false;
+    savePendingIncomingComstarPrompt(participant.local, connLog, 'entering duel combat');
     resetCombatState(participant.local);
     const mechId = participant.local.selectedMechId ?? FALLBACK_MECH_ID;
     const mechEntry = WORLD_MECH_BY_ID.get(mechId);
@@ -1017,6 +2064,7 @@ export function tryStartStagedDuelCombat(
     participant.local.combatX = participant.localX;
     participant.local.combatY = participant.localY;
     participant.local.combatHeadingRaw = MOTION_NEUTRAL;
+    participant.local.combatTurnMomentumRaw = MOTION_NEUTRAL;
     participant.local.combatThrottle = 0;
     participant.local.combatLegVel = 0;
     participant.local.combatSpeedMag = 0;
@@ -1197,6 +2245,174 @@ export function handleComstarTextReply(
   capture: CaptureLogger,
 ): void {
   const clean = text.replace(/\x1b/g, '?').replace(/\s+/g, ' ').trim();
+
+  if (session.pendingHandleChangePrompt && dialogId === 0) {
+    const accountId = session.accountId;
+    const displayName = clean.replace(/[\x00-\x1F\x7F]/g, '').slice(0, 64);
+    if (!accountId || !displayName) {
+      connLog.warn('[world] invalid handle-change reply');
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket('Invalid handle. Please try again.', nextSeq(session)),
+        capture,
+        'CMD3_HANDLE_CHANGE_INVALID',
+      );
+      openHandleChangePrompt(session, connLog, capture);
+      return;
+    }
+
+    const currentDisplayName = getDisplayName(session);
+    if (displayName.toLowerCase() === currentDisplayName.toLowerCase()) {
+      session.pendingHandleChangePrompt = false;
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket(`Handle remains ${currentDisplayName}.`, nextSeq(session)),
+        capture,
+        'CMD3_HANDLE_CHANGE_NOOP',
+      );
+      return;
+    }
+
+    isDisplayNameTaken(displayName)
+      .then((taken) => {
+        if (taken) {
+          connLog.info('[world] handle change rejected: displayName="%s" already taken', displayName);
+          if (!session.socket.destroyed && session.socket.writable) {
+            send(
+              session.socket,
+              buildCmd3BroadcastPacket('That handle is already taken.', nextSeq(session)),
+              capture,
+              'CMD3_HANDLE_CHANGE_TAKEN',
+            );
+            openHandleChangePrompt(session, connLog, capture);
+          }
+          return;
+        }
+
+        updateCharacterDisplayName(accountId, displayName)
+          .then(() => {
+            session.pendingHandleChangePrompt = false;
+            session.displayName = displayName;
+            broadcastDisplayNameRefresh(players, session, connLog);
+            if (!session.socket.destroyed && session.socket.writable) {
+              sendSceneRefresh(players, session, connLog, capture, `Handle changed to ${displayName}.`);
+            }
+          })
+          .catch((err: unknown) => {
+            const detail = err instanceof Error ? err.message : String(err);
+            session.pendingHandleChangePrompt = false;
+            connLog.error('[world] failed to persist handle change: %s', detail);
+            if (!session.socket.destroyed && session.socket.writable) {
+              send(
+                session.socket,
+                buildCmd3BroadcastPacket('Handle change failed — please try again.', nextSeq(session)),
+                capture,
+                'CMD3_HANDLE_CHANGE_FAIL',
+              );
+            }
+          });
+      })
+      .catch((err: unknown) => {
+        const detail = err instanceof Error ? err.message : String(err);
+        session.pendingHandleChangePrompt = false;
+        connLog.error('[world] failed to validate handle change: %s', detail);
+        if (!session.socket.destroyed && session.socket.writable) {
+          send(
+            session.socket,
+            buildCmd3BroadcastPacket('Handle change failed — please try again.', nextSeq(session)),
+            capture,
+            'CMD3_HANDLE_CHANGE_FAIL',
+          );
+        }
+      });
+    return;
+  }
+
+  if (session.pendingComstarTargetPrompt && dialogId === 0) {
+    if (!/^\d+$/.test(clean)) {
+      connLog.warn('[world] invalid direct ComStar target reply: %j', clean);
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket('Invalid ComStar ID. Please enter digits only.', nextSeq(session)),
+        capture,
+        'CMD3_COMSTAR_TARGET_INVALID',
+      );
+      openComstarTargetPrompt(session, connLog, capture);
+      return;
+    }
+
+    const targetId = Number.parseInt(clean, 10);
+    const recipientAccountId =
+      targetId > 100_000 && targetId < 900_000 ? targetId - 100_000 : undefined;
+
+    if (recipientAccountId === undefined) {
+      connLog.warn('[world] out-of-range direct ComStar target reply: %d', targetId);
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket('ComStar target unavailable.', nextSeq(session)),
+        capture,
+        'CMD3_COMSTAR_TARGET_MISSING',
+      );
+      openComstarTargetPrompt(session, connLog, capture);
+      return;
+    }
+
+    const onlineTarget = findWorldTargetBySelectionId(players, targetId);
+    if (onlineTarget) {
+      session.pendingComstarTargetPrompt = false;
+      connLog.info('[world] direct ComStar target resolved online: target=%d', targetId);
+      send(
+        session.socket,
+        buildCmd37OpenComposePacket(targetId, nextSeq(session)),
+        capture,
+        'CMD37_OPEN_COMPOSE_DIRECT',
+      );
+      return;
+    }
+
+    findAccountById(recipientAccountId)
+      .then((account) => {
+        if (!account) {
+          connLog.warn('[world] direct ComStar target account not found: target=%d account=%d', targetId, recipientAccountId);
+          if (!session.socket.destroyed && session.socket.writable) {
+            send(
+              session.socket,
+              buildCmd3BroadcastPacket('ComStar target unavailable.', nextSeq(session)),
+              capture,
+              'CMD3_COMSTAR_TARGET_MISSING',
+            );
+            openComstarTargetPrompt(session, connLog, capture);
+          }
+          return;
+        }
+
+        session.pendingComstarTargetPrompt = false;
+        connLog.info('[world] direct ComStar target resolved offline: target=%d account=%d', targetId, recipientAccountId);
+        if (!session.socket.destroyed && session.socket.writable) {
+          send(
+            session.socket,
+            buildCmd37OpenComposePacket(targetId, nextSeq(session)),
+            capture,
+            'CMD37_OPEN_COMPOSE_DIRECT',
+          );
+        }
+      })
+      .catch((err: unknown) => {
+        const detail = err instanceof Error ? err.message : String(err);
+        session.pendingComstarTargetPrompt = false;
+        connLog.error('[world] failed to resolve direct ComStar target: %s', detail);
+        if (!session.socket.destroyed && session.socket.writable) {
+          send(
+            session.socket,
+            buildCmd3BroadcastPacket('ComStar target lookup failed — please try again.', nextSeq(session)),
+            capture,
+            'CMD3_COMSTAR_TARGET_FAIL',
+          );
+        }
+      });
+    return;
+  }
+
   if (clean.length === 0) {
     connLog.warn('[world] cmd-21 ComStar text ignored (empty)');
     send(
@@ -1211,26 +2427,114 @@ export function handleComstarTextReply(
   const senderName      = getDisplayName(session);
   const senderComstarId = getComstarId(session);
   const formattedBody   = buildComstarDeliveryText(senderName, clean);
+  const senderAccountId = session.accountId;
 
   const target = findWorldTargetBySelectionId(players, dialogId);
   if (target) {
-    // Recipient is online — deliver immediately.
     const targetName = getDisplayName(target);
+    const recipientAccountId = target.accountId;
+    if (senderAccountId === undefined || recipientAccountId === undefined) {
+      connLog.warn(
+        '[world] cmd-21 ComStar online target cannot persist: senderAccId=%s recipientAccId=%s target=%d',
+        senderAccountId,
+        recipientAccountId,
+        dialogId,
+      );
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket('ComStar delivery failed — please try again.', nextSeq(session)),
+        capture,
+        'CMD3_COMSTAR_FAIL',
+      );
+      return;
+    }
     connLog.info(
-      '[world] cmd-21 ComStar (online): from="%s" to="%s" target=%d text=%j',
+      '[world] cmd-21 ComStar (online): from="%s" to="%s" target=%d text=%j — persisting first',
       senderName, targetName, dialogId, clean,
     );
-    sendToWorldSession(
-      target,
-      buildCmd36MessageViewPacket(senderComstarId, formattedBody, nextSeq(target)),
-      'CMD36_COMSTAR_DELIVERY',
-    );
-    send(
-      session.socket,
-      buildCmd3BroadcastPacket(`ComStar sent to ${targetName}.`, nextSeq(session)),
-      capture,
-      'CMD3_COMSTAR_ACK',
-    );
+    storeMessage(senderAccountId, recipientAccountId, senderComstarId, formattedBody)
+      .then((row) => {
+        if (!row) {
+          connLog.info('[world] ComStar recipient inbox is full: target=%d recipientAccId=%d', dialogId, recipientAccountId);
+          if (!session.socket.destroyed && session.socket.writable) {
+            send(
+              session.socket,
+              buildCmd3BroadcastPacket('ComStar delivery failed — recipient mailbox is full.', nextSeq(session)),
+              capture,
+              'CMD3_COMSTAR_MAILBOX_FULL',
+            );
+          }
+          return;
+        }
+        if (!target.socket.destroyed && target.socket.writable) {
+          send(
+            session.socket,
+            buildCmd3BroadcastPacket(`ComStar sent to ${targetName}.`, nextSeq(session)),
+            capture,
+            'CMD3_COMSTAR_ACK',
+          );
+          const canPromptLive = target.phase === 'world' && target.worldInitialized === true;
+          if (!canPromptLive) {
+            connLog.info('[world] ComStar recipient is busy; leaving message unread for later retrieval');
+            markSaved([row.id]).catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              connLog.error('[world] failed to save busy-recipient ComStar message: %s', msg);
+            });
+            return;
+          }
+          countSavedUnreadMessages(recipientAccountId)
+            .then((savedUnreadCount) => {
+              if (target.socket.destroyed || !target.socket.writable) return;
+              if (savedUnreadCount === 0 && target.pendingIncomingComstarMessageId === undefined) {
+                promptIncomingComstarMessage(target, row.id, senderComstarId, row.body, connLog);
+                return;
+              }
+              markSaved([row.id]).catch((err: unknown) => {
+                const msg = err instanceof Error ? err.message : String(err);
+                connLog.error('[world] failed to save queued live ComStar message: %s', msg);
+              });
+              connLog.info(
+                '[world] live ComStar recipient already has saved/pending mail; saving new message for later (savedCount=%d pending=%s)',
+                savedUnreadCount,
+                target.pendingIncomingComstarMessageId === undefined ? 'false' : 'true',
+              );
+              sendLiveUnreadComstarNotice(target);
+            })
+            .catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              connLog.error('[world] failed to query live recipient unread ComStar count: %s', msg);
+              markSaved([row.id]).catch((saveErr: unknown) => {
+                const detail = saveErr instanceof Error ? saveErr.message : String(saveErr);
+                connLog.error('[world] failed to save live ComStar message after count failure: %s', detail);
+              });
+            });
+          return;
+        }
+
+        connLog.info('[world] ComStar target disconnected before delivery; saving message for later retrieval');
+        markSaved([row.id]).catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          connLog.error('[world] failed to save disconnected-target ComStar message: %s', msg);
+        });
+        send(
+          session.socket,
+          buildCmd3BroadcastPacket('ComStar message queued for offline delivery.', nextSeq(session)),
+          capture,
+          'CMD3_COMSTAR_QUEUED',
+        );
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        connLog.error('[world] failed to persist online ComStar: %s', msg);
+        if (!session.socket.destroyed && session.socket.writable) {
+          send(
+            session.socket,
+            buildCmd3BroadcastPacket('ComStar delivery failed — please try again.', nextSeq(session)),
+            capture,
+            'CMD3_COMSTAR_FAIL',
+          );
+        }
+      });
     return;
   }
 
@@ -1239,7 +2543,6 @@ export function handleComstarTextReply(
   // 900_000 + worldRosterId for anonymous sessions (cannot persist).
   const recipientAccountId =
     dialogId > 100_000 && dialogId < 900_000 ? dialogId - 100_000 : undefined;
-  const senderAccountId = session.accountId;
 
   if (senderAccountId !== undefined && recipientAccountId !== undefined) {
     connLog.info(
@@ -1247,7 +2550,23 @@ export function handleComstarTextReply(
       senderAccountId, recipientAccountId, clean,
     );
     storeMessage(senderAccountId, recipientAccountId, senderComstarId, formattedBody)
-      .then(() => {
+      .then((row) => {
+        if (!row) {
+          connLog.info('[world] offline ComStar recipient inbox is full: account=%d', recipientAccountId);
+          if (!session.socket.destroyed && session.socket.writable) {
+            send(
+              session.socket,
+              buildCmd3BroadcastPacket('ComStar delivery failed — recipient mailbox is full.', nextSeq(session)),
+              capture,
+              'CMD3_COMSTAR_MAILBOX_FULL',
+            );
+          }
+          return;
+        }
+        markSaved([row.id]).catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          connLog.error('[world] failed to save offline ComStar message: %s', msg);
+        });
         connLog.info('[world] ComStar message stored for offline delivery (account=%d)', recipientAccountId);
         if (!session.socket.destroyed && session.socket.writable) {
           send(
@@ -1282,6 +2601,520 @@ export function handleComstarTextReply(
       'CMD3_COMSTAR_MISSING',
     );
   }
+}
+
+export function handleComstarAccessSelection(
+  players: PlayerRegistry,
+  session: ClientSession,
+  selection: number,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const selectedItemId = selection - 1;
+  if (selection <= 0) {
+    connLog.info('[world] ComStar access menu closed');
+    return;
+  }
+
+  if (selectedItemId === 0) {
+    session.pendingComstarTargetPrompt = false;
+    connLog.info('[world] ComStar access: opening send-target chooser');
+    sendComstarSendTargetMenu(session, connLog, capture);
+    return;
+  }
+
+  if (selectedItemId === 1) {
+    connLog.info('[world] ComStar access: receive-message check');
+    const recipientAccountId = session.accountId;
+    if (recipientAccountId === undefined) {
+      send(
+        session.socket,
+        buildCmd20Packet(COMSTAR_DIALOG_ID, 2, 'No messages waiting.', nextSeq(session)),
+        capture,
+        'CMD20_COMSTAR_EMPTY',
+      );
+      return;
+    }
+    fetchNextSavedUnreadMessage(recipientAccountId)
+      .then((msg) => {
+        if (!msg) {
+          if (!session.socket.destroyed && session.socket.writable) {
+            send(
+              session.socket,
+              buildCmd20Packet(COMSTAR_DIALOG_ID, 2, 'No messages waiting.', nextSeq(session)),
+              capture,
+              'CMD20_COMSTAR_EMPTY',
+            );
+          }
+          return;
+        }
+        if (!session.socket.destroyed && session.socket.writable) {
+          if (msg.id === session.pendingIncomingComstarMessageId) {
+            clearPendingIncomingComstarPrompt(session);
+          }
+          send(
+            session.socket,
+            buildCmd36MessageViewPacket(msg.sender_comstar_id, msg.body, nextSeq(session)),
+            capture,
+            'CMD36_COMSTAR_INBOX',
+          );
+        }
+        markRead([msg.id]).catch((err: unknown) => {
+          const detail = err instanceof Error ? err.message : String(err);
+          connLog.error('[world] failed to mark terminal ComStar message read: %s', detail);
+        });
+      })
+      .catch((err: unknown) => {
+        const detail = err instanceof Error ? err.message : String(err);
+        connLog.error('[world] failed to fetch unread ComStar message: %s', detail);
+        if (!session.socket.destroyed && session.socket.writable) {
+          send(
+            session.socket,
+            buildCmd20Packet(COMSTAR_DIALOG_ID, 2, 'Unable to retrieve ComStar messages.', nextSeq(session)),
+            capture,
+            'CMD20_COMSTAR_FAIL',
+          );
+        }
+      });
+    return;
+  }
+
+  if (selectedItemId === 2) {
+    sendNewsCategoryMenu(session, connLog, capture);
+    return;
+  }
+
+  if (selectedItemId === 6) {
+    fetchLatestPublishedArticle()
+      .then((article) => {
+        if (!article || session.socket.destroyed || !session.socket.writable) {
+          if (!article && !session.socket.destroyed && session.socket.writable) {
+            sendNoNewsAvailable(session, capture);
+          }
+          return;
+        }
+        sendNewsArticleText(session, article.title, article.summary, article.body, capture);
+      })
+      .catch((err: unknown) => {
+        const detail = err instanceof Error ? err.message : String(err);
+        connLog.error('[world] failed to fetch general news: %s', detail);
+        if (!session.socket.destroyed && session.socket.writable) {
+          sendNoNewsAvailable(session, capture);
+        }
+      });
+    return;
+  }
+
+  if (selectedItemId === 7) {
+    listLatestPublishedArticles(10)
+      .then((articles) => {
+        if (session.socket.destroyed || !session.socket.writable) return;
+        if (articles.length === 0) {
+          sendNoNewsAvailable(session, capture);
+          return;
+        }
+        sendNewsgridArticleMenu(
+          session,
+          articles.map(article => article.id),
+          articles.map(article => article.title.slice(0, 60)),
+          connLog,
+          capture,
+        );
+      })
+      .catch((err: unknown) => {
+        const detail = err instanceof Error ? err.message : String(err);
+        connLog.error('[world] failed to fetch newsgrid list: %s', detail);
+        if (!session.socket.destroyed && session.socket.writable) {
+          sendNoNewsAvailable(session, capture);
+        }
+      });
+    return;
+  }
+
+  if (selectedItemId === 9) {
+    openHandleChangePrompt(session, connLog, capture);
+    return;
+  }
+
+  if (selectedItemId === 10) {
+    const selfTargetId = getComstarId(session);
+    connLog.info('[world] ComStar access: personal status for self target=%d', selfTargetId);
+    sendPersonnelRecord(players, session, selfTargetId, 1, connLog, capture);
+    return;
+  }
+
+  if (selectedItemId === 12) {
+    const selectedMech = WORLD_MECH_BY_ID.get(session.selectedMechId ?? FALLBACK_MECH_ID);
+    if (!selectedMech) {
+      connLog.warn('[world] ComStar access: no current mech available for unit status');
+      send(
+        session.socket,
+        buildCmd20Packet(COMSTAR_DIALOG_ID, 2, 'No unit status is available yet.', nextSeq(session)),
+        capture,
+        'CMD20_COMSTAR_NO_UNIT',
+      );
+      return;
+    }
+    const examineText = buildMechExamineText(selectedMech.typeString);
+    connLog.info('[world] ComStar access: unit status mech_id=%d (%s)', selectedMech.id, selectedMech.typeString);
+    send(
+      session.socket,
+      buildCmd20Packet(COMSTAR_DIALOG_ID, 2, examineText, nextSeq(session)),
+      capture,
+      'CMD20_COMSTAR_UNIT',
+    );
+    return;
+  }
+
+  connLog.info('[world] ComStar access: selection=%d not yet implemented', selection);
+  send(
+    session.socket,
+    buildCmd20Packet(COMSTAR_DIALOG_ID, 2, 'This terminal option is not implemented yet.', nextSeq(session)),
+    capture,
+    'CMD20_COMSTAR_UNIMPL',
+  );
+}
+
+export function handleComstarSendTargetSelection(
+  players: PlayerRegistry,
+  session: ClientSession,
+  selection: number,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  session.pendingComstarTargetPrompt = false;
+
+  if (selection <= 0) {
+    connLog.info('[world] ComStar send-target menu closed');
+    return;
+  }
+
+  if (selection === 1) {
+    openComstarTargetPrompt(session, connLog, capture);
+    return;
+  }
+
+  if (selection === 2) {
+    connLog.info('[world] ComStar send-target: opening all-roster list');
+    sendAllRosterList(players, session, connLog, capture);
+    return;
+  }
+
+  connLog.warn('[world] ComStar send-target: unsupported selection=%d', selection);
+}
+
+export function handleComstarIncomingPromptCmd20(
+  session: ClientSession,
+  selection: number,
+  connLog: Logger,
+  capture: CaptureLogger,
+): boolean {
+  const messageId = session.pendingIncomingComstarMessageId;
+  const senderId = session.pendingIncomingComstarSenderId;
+  const body = session.pendingIncomingComstarBody;
+  if (messageId === undefined || senderId === undefined || body === undefined) {
+    return false;
+  }
+
+  clearPendingIncomingComstarPrompt(session);
+
+  if (selection === 0) {
+    connLog.info('[world] live ComStar prompt accepted: msgId=%d sender=%d', messageId, senderId);
+    send(
+      session.socket,
+      buildCmd36MessageViewPacket(senderId, body, nextSeq(session)),
+      capture,
+      'CMD36_COMSTAR_PROMPT_ACCEPT',
+    );
+    markRead([messageId]).catch((err: unknown) => {
+      const detail = err instanceof Error ? err.message : String(err);
+      connLog.error('[world] failed to mark accepted live ComStar message read: %s', detail);
+    });
+    return true;
+  }
+
+  connLog.info('[world] live ComStar prompt deferred: msgId=%d selection=%d', messageId, selection);
+  send(
+    session.socket,
+    buildCmd3BroadcastPacket('ComStar message saved for later.', nextSeq(session)),
+    capture,
+    'CMD3_COMSTAR_SAVED',
+  );
+  markSaved([messageId]).catch((err: unknown) => {
+    const detail = err instanceof Error ? err.message : String(err);
+    connLog.error('[world] failed to save deferred live ComStar message: %s', detail);
+  });
+  return true;
+}
+
+export function handleNewsCategorySelection(
+  session: ClientSession,
+  selection: number,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  if (selection <= 0) {
+    connLog.info('[world] news category menu closed');
+    return;
+  }
+
+  if (selection === 1) {
+    showMatchResults(session, connLog, capture);
+    return;
+  }
+
+  if (selection === 2) {
+    showPersonalTierRanking(session, connLog, capture);
+    return;
+  }
+
+  if (selection === 3) {
+    sendTierRankingChooser(session, connLog, capture);
+    return;
+  }
+
+  if (selection === 4) {
+    sendClassRankingChooser(session, connLog, capture);
+    return;
+  }
+
+  if (selection === 5) {
+    fetchLatestPublishedArticle()
+      .then((article) => {
+        if (!article || session.socket.destroyed || !session.socket.writable) {
+          if (!article && !session.socket.destroyed && session.socket.writable) {
+            sendNoNewsAvailable(session, capture);
+          }
+          return;
+        }
+        sendNewsArticleText(session, article.title, article.summary, article.body, capture);
+      })
+      .catch((err: unknown) => {
+        const detail = err instanceof Error ? err.message : String(err);
+        connLog.error('[world] failed to fetch general news from category menu: %s', detail);
+        if (!session.socket.destroyed && session.socket.writable) {
+          sendNoNewsAvailable(session, capture);
+        }
+      });
+    return;
+  }
+
+  if (selection === 6) {
+    const allegiance = session.allegiance ?? '';
+    fetchLatestPublishedArticleForTerm(allegiance)
+      .then((article) => {
+        if (!article || session.socket.destroyed || !session.socket.writable) {
+          if (!article && !session.socket.destroyed && session.socket.writable) {
+            sendNoNewsAvailable(session, capture);
+          }
+          return;
+        }
+        sendNewsArticleText(session, article.title, article.summary, article.body, capture);
+      })
+      .catch((err: unknown) => {
+        const detail = err instanceof Error ? err.message : String(err);
+        connLog.error('[world] failed to fetch house news: %s', detail);
+        if (!session.socket.destroyed && session.socket.writable) {
+          sendNoNewsAvailable(session, capture);
+        }
+      });
+    return;
+  }
+
+  connLog.warn('[world] news category selection unsupported: %d', selection);
+}
+
+export function handleNewsgridArticleSelection(
+  session: ClientSession,
+  selection: number,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  if (selection <= 0) {
+    session.pendingNewsArticleIds = undefined;
+    connLog.info('[world] newsgrid article menu closed');
+    return;
+  }
+
+  const articleId = session.pendingNewsArticleIds?.[selection - 1];
+  if (!articleId) {
+    connLog.warn('[world] newsgrid article selection missing: selection=%d', selection);
+    session.pendingNewsArticleIds = undefined;
+    return;
+  }
+
+  fetchPublishedArticleById(articleId)
+    .then((article) => {
+      if (!article || session.socket.destroyed || !session.socket.writable) {
+        session.pendingNewsArticleIds = undefined;
+        if (!article && !session.socket.destroyed && session.socket.writable) {
+          sendNoNewsAvailable(session, capture);
+        }
+        return;
+      }
+      sendNewsArticleText(session, article.title, article.summary, article.body, capture);
+    })
+    .catch((err: unknown) => {
+      const detail = err instanceof Error ? err.message : String(err);
+      connLog.error('[world] failed to fetch newsgrid article: %s', detail);
+      if (!session.socket.destroyed && session.socket.writable) {
+        sendNoNewsAvailable(session, capture);
+      }
+    });
+}
+
+export function handleTierRankingChooserSelection(
+  session: ClientSession,
+  selection: number,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  if (selection <= 0) {
+    connLog.info('[world] tier ranking chooser closed');
+    return;
+  }
+  const tierKey = TIER_RANKING_KEYS[selection - 1];
+  const tierLabel = tierKey ? TIER_RANKING_LABELS.get(tierKey) : undefined;
+  if (!tierKey || !tierLabel) {
+    sendNoNewsAvailable(session, capture);
+    return;
+  }
+  showTierRankingList(session, tierKey, tierLabel, connLog, capture);
+}
+
+export function handleClassRankingChooserSelection(
+  session: ClientSession,
+  selection: number,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  if (selection <= 0) {
+    connLog.info('[world] class ranking chooser closed');
+    return;
+  }
+  const classKey = classKeyFromSelection(selection);
+  if (!classKey) {
+    sendNoNewsAvailable(session, capture);
+    return;
+  }
+  showClassRankingList(session, classKey, connLog, capture);
+}
+
+export function handleRankingResultsSelection(
+  session: ClientSession,
+  selection: number,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  if (selection <= 0) {
+    session.worldScrollList = undefined;
+    connLog.info('[world] ranking results list closed');
+    return;
+  }
+  const pager = session.worldScrollList;
+  session.worldScrollList = undefined;
+  showStandingDetailByComstarId(
+    session,
+    selection - 1,
+    connLog,
+    capture,
+    pager?.kind === 'tier-ranking'
+      ? { tierKey: pager.tierKey }
+      : pager?.kind === 'class-ranking'
+        ? { classKey: pager.classKey }
+        : undefined,
+  );
+}
+
+export function handleActiveScrollListMore(
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const pager = session.worldScrollList;
+  if (!pager) {
+    connLog.debug('[world] cmd-28 MORE ignored without active scroll shell');
+    return;
+  }
+  if (pager.kind === 'tier-ranking' && pager.tierKey) {
+    const tierLabel = TIER_RANKING_LABELS.get(pager.tierKey);
+    if (!tierLabel) {
+      session.worldScrollList = undefined;
+      sendNoNewsAvailable(session, capture);
+      return;
+    }
+    showTierRankingList(session, pager.tierKey, tierLabel, connLog, capture, pager.pageIndex + 1);
+    return;
+  }
+  if (pager.kind === 'class-ranking' && pager.classKey) {
+    showClassRankingList(session, pager.classKey, connLog, capture, pager.pageIndex + 1);
+    return;
+  }
+  if (pager.kind === 'match-results') {
+    showMatchResults(session, connLog, capture, pager.pageIndex + 1);
+    return;
+  }
+  session.worldScrollList = undefined;
+  connLog.warn('[world] cmd-28 MORE ignored for incomplete scroll shell state');
+}
+
+export function handleMatchResultsSelection(
+  session: ClientSession,
+  selection: number,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  if (selection <= 0) {
+    session.pendingMatchResultIds = undefined;
+    session.worldScrollList = undefined;
+    connLog.info('[world] Solaris match results menu closed');
+    return;
+  }
+  const shellResultId = parseScrollShellRawId(selection);
+  const resultId = shellResultId ?? session.pendingMatchResultIds?.[selection - 1];
+  if (!resultId) {
+    session.pendingMatchResultIds = undefined;
+    session.worldScrollList = undefined;
+    connLog.warn('[world] Solaris match result selection missing: selection=%d', selection);
+    return;
+  }
+  session.pendingMatchResultIds = undefined;
+  session.worldScrollList = undefined;
+  fetchDuelResultById(resultId)
+    .then((result) => {
+      if (!result || session.socket.destroyed || !session.socket.writable) {
+        if (!result && !session.socket.destroyed && session.socket.writable) {
+          sendNoNewsAvailable(session, capture);
+        }
+        return;
+      }
+      send(
+        session.socket,
+        buildCmd20Packet(
+          COMSTAR_DIALOG_ID,
+          2,
+          buildMatchResultDetailText({
+            roomName: result.room_name,
+            winnerDisplayName: result.winner_display_name,
+            loserDisplayName: result.loser_display_name,
+            winnerStakeCb: result.winner_stake_cb,
+            loserStakeCb: result.loser_stake_cb,
+            settledTransferCb: result.settled_transfer_cb,
+            resultReason: result.result_reason,
+          }),
+          nextSeq(session),
+        ),
+        capture,
+        'CMD20_MATCH_RESULT_DETAIL',
+      );
+    })
+    .catch((err: unknown) => {
+      const detail = err instanceof Error ? err.message : String(err);
+      connLog.error('[world] failed to load Solaris match result detail: %s', detail);
+      if (!session.socket.destroyed && session.socket.writable) {
+        sendNoNewsAvailable(session, capture);
+      }
+    });
 }
 
 // ── Room presence ─────────────────────────────────────────────────────────────
@@ -1415,6 +3248,9 @@ export function sendCombatBootstrapSequence(
   connLog: Logger,
   capture: CaptureLogger,
 ): void {
+  session.pendingComstarTargetPrompt = false;
+  session.pendingHandleChangePrompt = false;
+  savePendingIncomingComstarPrompt(session, connLog, 'entering combat');
   const { socket } = session;
   const mechId   = session.selectedMechId ?? FALLBACK_MECH_ID;
   const callsign = getDisplayName(session);
@@ -1622,6 +3458,7 @@ export function sendCombatBootstrapSequence(
     const hitSection = verificationMode === 'headtest'
       ? HEAD_RETALIATION_SECTION
       : chooseRetaliationHitSection(session, playerArmorValues, playerInternalValues, playerHeadArmor);
+    const previousInternalValues = [...playerInternalValues];
     const damageResult = applyDamageToSection(
       playerArmorValues,
       playerInternalValues,
@@ -1635,11 +3472,16 @@ export function sendCombatBootstrapSequence(
       hitSection.internalIndex === 7 && damageResult.updates.some(update => update.damageCode === 0x27)
         ? applyHeadCriticalStateUpdates(playerCriticalStateBytes, playerInternalValues[7] ?? 0)
         : [];
+    const weaponSectionUpdates = getWeaponSectionLossUpdates(
+      session.selectedMechId,
+      previousInternalValues,
+      playerInternalValues,
+    );
     session.combatPlayerCriticalStateBytes = playerCriticalStateBytes;
     session.combatPlayerHeadArmor = damageResult.headArmor;
     session.playerHealth = getCombatDurability(playerArmorValues, playerInternalValues);
     session.playerHealth += damageResult.headArmor;
-    const allUpdates = [...damageResult.updates, ...headCriticalUpdates];
+    const allUpdates = [...damageResult.updates, ...headCriticalUpdates, ...weaponSectionUpdates];
     const armorRemaining = hitSection.armorIndex >= 0
       ? `${playerArmorValues[hitSection.armorIndex] ?? 0}`
       : `${damageResult.headArmor}`;
@@ -1904,6 +3746,7 @@ export function clearSessionDuelState(
             peerCapture,
             `Duel with ${getDisplayName(session)} aborted: ${reason}.`,
           );
+          notifyUnreadComstarMessages(peer, connLog, peerCapture);
         }
         notifyRoomArrival(players, peer, connLog);
       } else if (peer.phase === 'world' && peer.worldInitialized && !peer.socket.destroyed) {
@@ -1952,13 +3795,30 @@ function handleDuelTextCommand(
   };
 
   if (lower === '/duelstatus') {
-    if (session.combatSessionId) {
+    const combatSession = session.combatSessionId
+      ? players.getCombatSession(session.combatSessionId)
+      : undefined;
+    if (combatSession?.mode === 'duel') {
       const peer = session.combatPeerSessionId ? players.get(session.combatPeerSessionId) : undefined;
+      const duelStateLabel = combatSession.state === 'active'
+        ? 'Active'
+        : combatSession.state === 'completed'
+          ? 'Completed'
+          : 'Staged';
+      const localStake = getCombatSessionStakeForParticipant(combatSession, session.id);
+      const peerStake = peer ? getCombatSessionStakeForParticipant(combatSession, peer.id) : 0;
       sendLocalNotice(
-        `Staged duel active with ${peer ? getDisplayName(peer) : 'unknown opponent'} (session=${session.combatSessionId}).`,
+        `${duelStateLabel} duel with ${peer ? getDisplayName(peer) : 'unknown opponent'}. ` +
+        `Stakes: you=${localStake} cb, ${peer ? getDisplayName(peer) : 'opponent'}=${peerStake} cb. ` +
+        `Balance=${getSessionCbills(session)} cb.`,
         'CMD3_DUEL_STATUS',
       );
       return true;
+    }
+    if (session.combatSessionId) {
+      session.combatSessionId = undefined;
+      session.combatPeerSessionId = undefined;
+      session.duelTermsAvailable = false;
     }
     if (session.outgoingDuelInviteTargetSessionId) {
       const target = players.get(session.outgoingDuelInviteTargetSessionId);
@@ -2467,6 +4327,7 @@ export function handleCombatMovementFrame(
     session.combatX          = frame.xRaw - COORD_BIAS;
     session.combatY          = frame.yRaw - COORD_BIAS;
     session.combatHeadingRaw = frame.headingRaw;
+    session.combatTurnMomentumRaw = frame.turnMomRaw;
 
     const clientSpeed       = frame.rotationRaw - MOTION_NEUTRAL;
 
@@ -2497,6 +4358,7 @@ export function handleCombatMovementFrame(
     session.combatX          = frame.xRaw - COORD_BIAS;
     session.combatY          = frame.yRaw - COORD_BIAS;
     session.combatHeadingRaw = frame.headingRaw;
+    session.combatTurnMomentumRaw = frame.turnMomRaw;
 
     const maxSpeedMag    = session.combatMaxSpeedMag ?? 0;
     const throttlePct    = frame.throttleRaw - MOTION_NEUTRAL; // negative = forward
@@ -2533,7 +4395,7 @@ export function handleCombatMovementFrame(
           x:        session.combatX,
           y:        session.combatY,
           z:        session.combatJumpAltitude ?? 0,
-          facing:   (frame.headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
+          facing:   getCombatCmd65Facing(session),
           throttle,
           legVel,
           speedMag: clientSpeed,
@@ -2583,25 +4445,38 @@ export function handleCombatWeaponFireFrame(
     return;
   }
 
-  session.combatShotsAccepted = (session.combatShotsAccepted ?? 0) + shots.length;
+  const fireableShots = shots.filter(shot => {
+    const gate = getWeaponMountGate(session, shot.weaponSlot);
+    if (gate.allowed) return true;
+    connLog.info(
+      '[world/combat] cmd10 shot REJECTED: weapon slot=%d unavailable (%s)',
+      shot.weaponSlot,
+      gate.reason ?? 'mount unavailable',
+    );
+    return false;
+  });
+  const rejectedHardpointShots = shots.length - fireableShots.length;
+  session.combatShotsAccepted = (session.combatShotsAccepted ?? 0) + fireableShots.length;
+  session.combatShotsRejected = (session.combatShotsRejected ?? 0) + rejectedHardpointShots;
   if (hasRecentFireAction) {
-    session.combatShotsAction0Correlated = (session.combatShotsAction0Correlated ?? 0) + shots.length;
+    session.combatShotsAction0Correlated = (session.combatShotsAction0Correlated ?? 0) + fireableShots.length;
     connLog.debug(
       '[world/combat] cmd10 %s path: correlated with cmd12/action0 (age=%dms records=%d)',
       firePath,
       actionAgeMs,
-      shots.length,
+      fireableShots.length,
     );
     session.lastCombatFireActionAt = undefined;
   } else {
-    session.combatShotsDirectCmd10 = (session.combatShotsDirectCmd10 ?? 0) + shots.length;
+    session.combatShotsDirectCmd10 = (session.combatShotsDirectCmd10 ?? 0) + fireableShots.length;
     connLog.debug(
       '[world/combat] cmd10 %s path: no recent cmd12/action0 (age=%s records=%d) — compatible with TIC fire geometry',
       firePath,
       actionAgeMs === undefined ? 'n/a' : `${actionAgeMs}ms`,
-      shots.length,
+      fireableShots.length,
     );
   }
+  if (fireableShots.length === 0) return;
 
   const duelSession = players.getCombatSession(session.combatSessionId);
   if (duelSession?.mode === 'duel') {
@@ -2626,15 +4501,26 @@ export function handleCombatWeaponFireFrame(
     const shotSummaries: string[] = [];
     let totalDamageUpdates = 0;
 
-    for (const shot of shots) {
+    for (const shot of fireableShots) {
       const { damage: shotDamage, weaponName } = getShotDamage(session, shot.weaponSlot);
+      const impactContext = buildTargetImpactContext(
+        shot.impactXRaw - COORD_BIAS,
+        shot.impactYRaw - COORD_BIAS,
+        shot.impactZ,
+        duelPeer.combatX ?? 0,
+        duelPeer.combatY ?? 0,
+        duelPeer.combatJumpAltitude ?? 0,
+        getCombatCmd65Facing(duelPeer),
+      );
       const hitSection = resolveEffectiveHitSection(
         duelPeerMechId,
         shot.targetAttach,
         shot.impactZ,
         duelPeerArmorValues,
         duelPeerInternalValues,
+        impactContext,
       );
+      const previousInternalValues = [...duelPeerInternalValues];
       const damageResult = applyDamageToSection(
         duelPeerArmorValues,
         duelPeerInternalValues,
@@ -2646,8 +4532,13 @@ export function handleCombatWeaponFireFrame(
         hitSection.internalIndex === 7 && damageResult.updates.some(update => update.damageCode === 0x27)
           ? applyHeadCriticalStateUpdates(duelPeerCriticalStateBytes, duelPeerInternalValues[7] ?? 0)
           : [];
+      const weaponSectionUpdates = getWeaponSectionLossUpdates(
+        duelPeerMechId,
+        previousInternalValues,
+        duelPeerInternalValues,
+      );
       duelPeerHeadArmor = damageResult.headArmor;
-      const allUpdates = [...damageResult.updates, ...criticalUpdates];
+      const allUpdates = [...damageResult.updates, ...criticalUpdates, ...weaponSectionUpdates];
 
       send(
         session.socket,
@@ -2720,7 +4611,7 @@ export function handleCombatWeaponFireFrame(
       getDisplayName(session),
       getDisplayName(duelPeer),
       duelPeer.playerHealth,
-      shots.length,
+      fireableShots.length,
       totalDamageUpdates,
       shotSummaries.join(','),
     );
@@ -2764,15 +4655,26 @@ export function handleCombatWeaponFireFrame(
   const shotSummaries: string[] = [];
   let totalDamageUpdates = 0;
 
-  for (const shot of shots) {
+  for (const shot of fireableShots) {
     const { damage: shotDamage, weaponName } = getShotDamage(session, shot.weaponSlot);
+    const impactContext = buildTargetImpactContext(
+      shot.impactXRaw - COORD_BIAS,
+      shot.impactYRaw - COORD_BIAS,
+      shot.impactZ,
+      0,
+      BOT_SPAWN_DISTANCE,
+      0,
+      0,
+    );
     const hitSection = resolveEffectiveHitSection(
       botMechId,
       shot.targetAttach,
       shot.impactZ,
       botArmorValues,
       botInternalValues,
+      impactContext,
     );
+    const previousInternalValues = [...botInternalValues];
     const damageResult = applyDamageToSection(
       botArmorValues,
       botInternalValues,
@@ -2784,8 +4686,13 @@ export function handleCombatWeaponFireFrame(
       hitSection.internalIndex === 7 && damageResult.updates.some(update => update.damageCode === 0x27)
         ? applyHeadCriticalStateUpdates(botCriticalStateBytes, botInternalValues[7] ?? 0)
         : [];
+    const weaponSectionUpdates = getWeaponSectionLossUpdates(
+      botMechId,
+      previousInternalValues,
+      botInternalValues,
+    );
     botHeadArmor = damageResult.headArmor;
-    const allUpdates = [...damageResult.updates, ...criticalUpdates];
+    const allUpdates = [...damageResult.updates, ...criticalUpdates, ...weaponSectionUpdates];
 
     send(
       session.socket,
@@ -2830,8 +4737,8 @@ export function handleCombatWeaponFireFrame(
   connLog.info(
     '[world/combat] cmd10 weapon fire accepted: firePath=%s records=%d weaponSlots=%s botMechId=%s botModelId=%s botHealth=%d updates=%d shots=[%s]',
     firePath,
-    shots.length,
-    shots.map(shot => shot.weaponSlot).join('/'),
+    fireableShots.length,
+    fireableShots.map(shot => shot.weaponSlot).join('/'),
     botMechId ?? 'n/a',
     botModelId ?? 'n/a',
     session.botHealth,
@@ -2937,7 +4844,6 @@ export function handleCombatActionFrame(
     const sendJumpUpdate = (tag: string): void => {
       const x = session.combatX ?? 0;
       const y = session.combatY ?? 0;
-      const headingRaw = session.combatHeadingRaw ?? MOTION_NEUTRAL;
       const throttle = session.combatThrottle ?? 0;
       const legVel = session.combatLegVel ?? 0;
       const speedMag = session.combatSpeedMag ?? 0;
@@ -2949,7 +4855,7 @@ export function handleCombatActionFrame(
             x,
             y,
             z:        session.combatJumpAltitude ?? 0,
-            facing:   (headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
+            facing:   getCombatCmd65Facing(session),
             throttle,
             legVel,
             speedMag,
@@ -3015,7 +4921,6 @@ export function handleCombatActionFrame(
 
     const x = session.combatX ?? 0;
     const y = session.combatY ?? 0;
-    const headingRaw = session.combatHeadingRaw ?? MOTION_NEUTRAL;
     const throttle = session.combatThrottle ?? 0;
     const legVel = session.combatLegVel ?? 0;
     const speedMag = session.combatSpeedMag ?? 0;
@@ -3029,7 +4934,7 @@ export function handleCombatActionFrame(
           x,
           y,
           z:        0,
-          facing:   (headingRaw - MOTION_NEUTRAL) * MOTION_DIV,
+          facing:   getCombatCmd65Facing(session),
           throttle,
           legVel,
           speedMag,

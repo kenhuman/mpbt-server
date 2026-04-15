@@ -28,6 +28,15 @@ export async function findAccount(username: string): Promise<AccountRow | null> 
   return res.rows[0] ?? null;
 }
 
+/** Look up an account by numeric id. */
+export async function findAccountById(id: number): Promise<AccountRow | null> {
+  const res = await pool.query<AccountRow>(
+    'SELECT id, username, password_hash, created_at FROM accounts WHERE id = $1',
+    [id],
+  );
+  return res.rows[0] ?? null;
+}
+
 /**
  * Create a new account and return the inserted row.
  * Throws if the username is already taken (UNIQUE violation).

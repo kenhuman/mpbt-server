@@ -16,6 +16,8 @@ export interface PendingLaunch {
   displayName?: string;
   /** House allegiance selected during character creation. */
   allegiance?: string;
+  /** Persisted C-Bill balance carried into the world session. */
+  cbills?: number;
   /** Selected mech ID (from MechEntry.id — the MPBT.MSG variant table index). */
   mechId: number;
   /** Selected mech slot (0-based sort position in the mech list). */

@@ -39,6 +39,23 @@ export interface CombatSession {
   duelTermsUpdatedAt?: number;
 }
 
+export interface WorldScrollListState {
+  /** Active Cmd58/Cmd45 list id echoed back through cmd-7 row selection. */
+  listId: number;
+  /** Server-side source of the currently open scroll shell. */
+  kind: 'tier-ranking' | 'class-ranking' | 'match-results';
+  /** Zero-based page index currently shown in the shell. */
+  pageIndex: number;
+  /** Rows requested per page. */
+  pageSize: number;
+  /** Visible heading line embedded into the shell body. */
+  title: string;
+  /** Tier filter for tier-ranking shells. */
+  tierKey?: 'UNRANKED' | 'NOVICE' | 'AMATEUR' | 'PROFESSIONAL' | 'VETERAN' | 'MASTER' | 'BATTLEMASTER' | 'CHAMPION';
+  /** Weight-class filter for class-ranking shells. */
+  classKey?: 'LIGHT' | 'MEDIUM' | 'HEAVY' | 'ASSAULT';
+}
+
 /**
  * NOTE — cross-session writes and CaptureLogger:
  *
@@ -80,6 +97,8 @@ export interface ClientSession {
   serverSeq: number;
   /** True once the world init sequence has been sent in response to the first world cmd-3. */
   worldInitialized?: boolean;
+  /** True while a server-initiated world keepalive ping is awaiting a type-0x05 response. */
+  worldKeepalivePending?: boolean;
   /** True once the combat bootstrap sequence (MMC welcome + Cmd72) has been sent. */
   combatInitialized?: boolean;
   /** Repeating setInterval that sends bot position updates during combat. */
@@ -147,6 +166,22 @@ export interface ClientSession {
   worldInquiryTargetId?: number;
   /** Current personnel-record page number for the active inquiry target. */
   worldInquiryPage?: number;
+  /** True while a terminal/global ComStar send flow is waiting for a typed ComStar ID. */
+  pendingComstarTargetPrompt?: boolean;
+  /** True while terminal Change Handle is waiting for a typed replacement handle. */
+  pendingHandleChangePrompt?: boolean;
+  /** Latest Newsgrid article ids shown to the client for follow-up selection. */
+  pendingNewsArticleIds?: number[];
+  /** Latest persisted duel-result ids shown in the Solaris match results menu. */
+  pendingMatchResultIds?: number[];
+  /** Active paged Cmd45 scroll-list shell state for Solaris ranking pages. */
+  worldScrollList?: WorldScrollListState;
+  /** Pending unread ComStar message id for the current live yes/no prompt. */
+  pendingIncomingComstarMessageId?: number;
+  /** Sender ComStar id to use if the live prompt is accepted. */
+  pendingIncomingComstarSenderId?: number;
+  /** Full persisted Cmd36-ready body for the pending live prompt. */
+  pendingIncomingComstarBody?: string;
   /**
    * Mech ID selected in the lobby and used to initialize the world arena.
    * Set on world-server sessions (via launchRegistry.consume); undefined on lobby sessions.
@@ -185,6 +220,8 @@ export interface ClientSession {
   combatY?: number;
   /** Last raw heading value from client Cmd8/9. */
   combatHeadingRaw?: number;
+  /** Last raw turn-momentum / positional-adjust value from client Cmd8/9. */
+  combatTurnMomentumRaw?: number;
   /** Last decoded throttle velocity echoed in Cmd65 responses. */
   combatThrottle?: number;
   /** Last decoded leg velocity echoed in Cmd65 responses. */
@@ -230,7 +267,8 @@ export interface ClientSession {
   combatBotArmorValues?: number[];
   /**
    * Server-side remaining remote internal-structure values for the scripted bot.
-   * Order matches Cmd66 class-2 internal codes 0x20..0x27.
+   * Order matches Cmd72 / Cmd66 class-2 internal codes 0x20..0x27:
+   * LA, RA, LT, RT, CT, LL, RL, Head.
    */
   combatBotInternalValues?: number[];
   /**
@@ -248,7 +286,8 @@ export interface ClientSession {
   combatPlayerArmorValues?: number[];
   /**
    * Server-side remaining local internal-structure values for the player.
-   * Order matches Cmd66/67 class-2 internal codes 0x20..0x27.
+   * Order matches Cmd72 / Cmd66 / Cmd67 class-2 internal codes 0x20..0x27:
+   * LA, RA, LT, RT, CT, LL, RL, Head.
    */
   combatPlayerInternalValues?: number[];
   /**
@@ -303,6 +342,10 @@ export interface ClientSession {
    * the first-login allegiance-picker wizard (wire format confirmed via RE).
    */
   allegiance?: string;
+  /** Persisted C-Bill balance loaded from the character row and updated after duel settlement. */
+  cbills?: number;
+  /** Pending one-line sanctioned-duel settlement notice to show once the player is back in world. */
+  pendingDuelSettlementNotice?: string;
 }
 
 export class PlayerRegistry {

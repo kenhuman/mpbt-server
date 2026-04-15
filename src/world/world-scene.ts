@@ -8,6 +8,11 @@
 
 import * as net from 'net';
 
+import { listCharacters } from '../db/characters.js';
+import {
+  type DuelResultRow,
+  listAllDuelResults,
+} from '../db/duel-results.js';
 import {
   buildCmd3BroadcastPacket,
   buildCmd4SceneInitPacket,
@@ -15,10 +20,17 @@ import {
   buildCmd6CursorBusyPacket,
   buildCmd10RoomPresenceSyncPacket,
   buildCmd14PersonnelRecordPacket,
+  buildCmd45ScrollListContent,
+  buildCmd45ScrollListShellPacket,
   buildCmd43SolarisMapPacket,
   buildCmd48KeyedTripleStringListPacket,
+  buildCmd58SetScrollListIdPacket,
 } from '../protocol/world.js';
-import { buildMenuDialogPacket, buildMechListPacket } from '../protocol/game.js';
+import {
+  buildCmd44KeyedSingleStringListPacket,
+  buildMenuDialogPacket,
+  buildMechListPacket,
+} from '../protocol/game.js';
 import { PlayerRegistry, ClientSession } from '../state/players.js';
 import { Logger }         from '../util/logger.js';
 import { CaptureLogger }  from '../util/capture.js';
@@ -27,11 +39,27 @@ import {
   worldCaptures,
   DEFAULT_MAP_ROOM_ID,
   ALL_ROSTER_LIST_ID,
+  COMSTAR_SEND_TARGET_MENU_ID,
+  COMSTAR_SEND_TARGET_MENU_ITEMS,
   INQUIRY_MENU_ID,
+  MATCH_RESULTS_MENU_LIST_ID,
+  NEWS_CATEGORY_MENU_ID,
+  NEWS_CATEGORY_MENU_ITEMS,
+  NEWSGRID_ARTICLE_LIST_ID,
+  TIER_RANKING_CHOOSER_LIST_ID,
+  TIER_RANKING_CHOOSER_ITEMS,
+  CLASS_RANKING_CHOOSER_LIST_ID,
+  CLASS_RANKING_CHOOSER_ITEMS,
+  TIER_RANKING_RESULTS_LIST_ID,
+  CLASS_RANKING_RESULTS_LIST_ID,
   PERSONNEL_LIST_ID,
+  COMSTAR_ACCESS_ACTION_TYPE,
   FALLBACK_MECH_ID,
   SOLARIS_TRAVEL_CONTEXT_ID,
+  TERMINAL_MENU_ITEMS,
+  TERMINAL_MENU_LIST_ID,
   worldMapByRoomId,
+  WORLD_MECH_BY_ID,
   getSolarisRoomExits,
   getSolarisSceneIndex,
   getSolarisRoomName,
@@ -40,6 +68,7 @@ import {
   WORLD_MECHS,
   getMechChassis,
   getMechChassisListForClass,
+  getMechWeightClass,
   getRepresentativeMechForClass,
   getRepresentativeMechForChassis,
   CLASS_LABELS,
@@ -53,6 +82,10 @@ import {
   MECH_CHASSIS_PAGE_SIZE,
   mechKph,
 } from './world-data.js';
+import {
+  computeSolarisStandings,
+  type SolarisStanding,
+} from './solaris-rankings.js';
 
 // ── Low-level send helpers ────────────────────────────────────────────────────
 
@@ -167,7 +200,69 @@ export function buildAllRosterEntries(players: PlayerRegistry) {
     }));
 }
 
-export function buildPersonnelRecordLines(target: ClientSession, page: number): string[] {
+interface PersonnelRecordContext {
+  standing?: SolarisStanding;
+  latestResult?: DuelResultRow;
+}
+
+function formatPersonnelRank(standing?: SolarisStanding): string {
+  if (!standing || standing.matches <= 0 || standing.tierKey === 'UNRANKED') {
+    return 'Unranked';
+  }
+  return `${standing.tierLabel} #${standing.tierRank}`;
+}
+
+function countMatchesForAccount(results: DuelResultRow[], accountId: number | undefined): number {
+  if (!accountId) return 0;
+  let matches = 0;
+  for (const result of results) {
+    if (result.winner_account_id === accountId || result.loser_account_id === accountId) {
+      matches += 1;
+    }
+  }
+  return matches;
+}
+
+function findLatestDuelResultForAccount(
+  results: DuelResultRow[],
+  accountId: number | undefined,
+): DuelResultRow | undefined {
+  if (!accountId) return undefined;
+  for (let i = results.length - 1; i >= 0; i -= 1) {
+    const result = results[i];
+    if (result.winner_account_id === accountId || result.loser_account_id === accountId) {
+      return result;
+    }
+  }
+  return undefined;
+}
+
+function buildLastDuelLine(target: ClientSession, latestResult?: DuelResultRow): string {
+  const accountId = target.accountId;
+  if (!latestResult || !accountId) {
+    return 'Last duel: None';
+  }
+  const won = latestResult.winner_account_id === accountId;
+  const opponent = won ? latestResult.loser_display_name : latestResult.winner_display_name;
+  return `Last duel: ${won ? 'Won' : 'Lost'} vs ${opponent}`;
+}
+
+function getPersonnelMechSummary(target: ClientSession): { chassis: string; classLabel: string } {
+  const mech = WORLD_MECH_BY_ID.get(target.selectedMechId ?? FALLBACK_MECH_ID);
+  const chassis = mech ? getMechChassis(mech.typeString) : 'Unknown';
+  const classKey = mech ? getMechWeightClass(mech) : undefined;
+  const classLabel = classKey
+    ? `${classKey.charAt(0)}${classKey.slice(1).toLowerCase()}`
+    : 'Unknown';
+  return { chassis, classLabel };
+}
+
+export function buildPersonnelRecordLines(
+  target: ClientSession,
+  page: number,
+  context: PersonnelRecordContext = {},
+): string[] {
+  const { standing, latestResult } = context;
   if (page <= 1) {
     return [
       // The client's Cmd14 header always shows the querying user's own callsign
@@ -175,21 +270,22 @@ export function buildPersonnelRecordLines(target: ClientSession, page: number): 
       // defaults to self).  We have no wire field that overrides it, so we
       // repeat the correct handle as the first body line.
       `Handle   : ${getDisplayName(target)}`,
+      `Rank    : ${formatPersonnelRank(standing)}`,
       `House    : ${target.allegiance ?? 'Unaffiliated'}`,
-      `Sector   : ${getSolarisRoomName(target.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID)}`,
       `Location : ${getPresenceLocation(target)}`,
       'Status   : Online',
       `ComStar  : ${getComstarId(target)}`,
     ];
   }
 
+  const { chassis, classLabel } = getPersonnelMechSummary(target);
   return [
-    'Stable   : Independent',
-    `Mech ID  : ${target.selectedMechId ?? FALLBACK_MECH_ID}`,
-    `Roster   : ${target.worldRosterId ?? 0}`,
-    'Standing : 0',
-    'Winnings : 0 cb',
-    'Record   : Prototype page 2',
+    `Winnings : ${Math.max(0, Math.trunc(target.cbills ?? 0))} cb`,
+    `Mech     : ${chassis}`,
+    `Class    : ${classLabel}`,
+    `Score    : ${standing?.score ?? 0}`,
+    `Record   : ${standing?.ratioText ?? '0/0'}`,
+    buildLastDuelLine(target, latestResult),
   ];
 }
 
@@ -256,12 +352,15 @@ export function buildSceneInitForSession(session: ClientSession) {
   // actionType 4 → "Travel" (opens Cmd43 travel map).
   // actionType 5 → "Fight"  (enter combat; handled by cmd-5 dispatch in server-world.ts).
   // actionType 6 → "Mech Bay" (opens the 3-step mech picker).
+  // actionType 8 → "ComStar"/"Terminal" (opens the Cmd44 utility menu).
   // The client hard-codes actionType 0 (0x100 wire) as the local Help button.
   const isArena = mapRoom?.type === 'arena';
+  const hasRoomTerminal = mapRoom?.type === 'bar' || mapRoom?.type === 'terminal';
   const arenaOptions: Array<{ type: number; label: string }> = [
     { type: 0, label: 'Help' },
     { type: 4, label: 'Travel' },
     { type: 6, label: 'Mech Bay' },
+    { type: COMSTAR_ACCESS_ACTION_TYPE, label: hasRoomTerminal ? 'Terminal' : 'ComStar' },
   ];
   if (isArena) {
     if (session.duelTermsAvailable) {
@@ -349,6 +448,179 @@ export function sendAllRosterList(
   );
 }
 
+export function sendComstarAccessMenu(
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const roomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
+  const roomType = worldMapByRoomId.get(roomId)?.type;
+  connLog.info('[world] sending Cmd44 ComStar access menu: room=%d type=%s', roomId, roomType ?? 'unknown');
+  send(
+    session.socket,
+    buildCmd44KeyedSingleStringListPacket(
+      TERMINAL_MENU_LIST_ID,
+      'Choose option:',
+      [...TERMINAL_MENU_ITEMS],
+      nextSeq(session),
+    ),
+    capture,
+    'CMD44_COMSTAR_MENU',
+  );
+}
+
+export function sendComstarSendTargetMenu(
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  connLog.info('[world] sending ComStar send-target menu');
+  send(
+    session.socket,
+    buildMenuDialogPacket(
+      COMSTAR_SEND_TARGET_MENU_ID,
+      'Who do you wish to send this to?',
+      [...COMSTAR_SEND_TARGET_MENU_ITEMS],
+      nextSeq(session),
+    ),
+    capture,
+    'CMD7_COMSTAR_SEND_TARGET_MENU',
+  );
+}
+
+export function sendNewsCategoryMenu(
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  connLog.info('[world] sending news category menu');
+  send(
+    session.socket,
+    buildMenuDialogPacket(
+      NEWS_CATEGORY_MENU_ID,
+      'What news do you wish to see?',
+      [...NEWS_CATEGORY_MENU_ITEMS],
+      nextSeq(session),
+    ),
+    capture,
+    'CMD7_NEWS_CATEGORY_MENU',
+  );
+}
+
+export function sendNewsgridArticleMenu(
+  session: ClientSession,
+  articleIds: number[],
+  articleTitles: string[],
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  session.pendingNewsArticleIds = articleIds;
+  connLog.info('[world] sending newsgrid article menu (%d entries)', articleIds.length);
+  send(
+    session.socket,
+    buildMenuDialogPacket(
+      NEWSGRID_ARTICLE_LIST_ID,
+      'Access Newsgrid',
+      articleTitles,
+      nextSeq(session),
+    ),
+    capture,
+    'CMD7_NEWSGRID_ARTICLE_MENU',
+  );
+}
+
+export function sendTierRankingChooser(
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  connLog.info('[world] sending tier ranking chooser');
+  send(
+    session.socket,
+    buildCmd44KeyedSingleStringListPacket(
+      TIER_RANKING_CHOOSER_LIST_ID,
+      'Choose a ranking tier:',
+      [...TIER_RANKING_CHOOSER_ITEMS],
+      nextSeq(session),
+    ),
+    capture,
+    'CMD44_TIER_RANKING_CHOOSER',
+  );
+}
+
+export function sendClassRankingChooser(
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  connLog.info('[world] sending class ranking chooser');
+  send(
+    session.socket,
+    buildCmd44KeyedSingleStringListPacket(
+      CLASS_RANKING_CHOOSER_LIST_ID,
+      'Choose a mech class:',
+      [...CLASS_RANKING_CHOOSER_ITEMS],
+      nextSeq(session),
+    ),
+    capture,
+    'CMD44_CLASS_RANKING_CHOOSER',
+  );
+}
+
+export function sendRankingResultsList(
+  session: ClientSession,
+  listId: number,
+  title: string,
+  rows: Array<{ itemId: number; text: string }>,
+  hasMore: boolean,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const content = buildCmd45ScrollListContent(title, rows);
+  const mode = hasMore ? 2 : 0;
+  connLog.info(
+    '[world] sending Cmd45 ranking shell: listId=%d rows=%d mode=%d more=%s',
+    listId,
+    rows.length,
+    mode,
+    hasMore ? 'true' : 'false',
+  );
+  send(
+    session.socket,
+    buildCmd58SetScrollListIdPacket(listId, nextSeq(session)),
+    capture,
+    'CMD58_SCROLL_LIST_ID',
+  );
+  send(
+    session.socket,
+    buildCmd45ScrollListShellPacket(mode, content, nextSeq(session)),
+    capture,
+    listId === TIER_RANKING_RESULTS_LIST_ID ? 'CMD45_TIER_RANKINGS' : 'CMD45_CLASS_RANKINGS',
+  );
+}
+
+export function sendMatchResultsMenu(
+  session: ClientSession,
+  resultIds: number[],
+  labels: string[],
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  session.pendingMatchResultIds = resultIds;
+  connLog.info('[world] sending Solaris match results menu (%d entries)', resultIds.length);
+  send(
+    session.socket,
+    buildMenuDialogPacket(
+      MATCH_RESULTS_MENU_LIST_ID,
+      'Solaris Match Results',
+      labels,
+      nextSeq(session),
+    ),
+    capture,
+    'CMD7_MATCH_RESULTS_MENU',
+  );
+}
+
 export function sendInquiryMenu(
   session: ClientSession,
   target: ClientSession,
@@ -421,19 +693,46 @@ export function sendPersonnelRecord(
     getDisplayName(target),
     page,
   );
-  send(
-    session.socket,
-    buildCmd14PersonnelRecordPacket(
-      {
-        comstarId:     presenceId,
-        battlesToDate: 0,
-        lines:         buildPersonnelRecordLines(target, page),
-      },
-      nextSeq(session),
-    ),
-    capture,
-    page <= 1 ? 'CMD14_PERSONNEL_P1' : 'CMD14_PERSONNEL_P2',
-  );
+  Promise.all([listAllDuelResults(), listCharacters()])
+    .then(([results, characters]) => {
+      if (session.socket.destroyed || !session.socket.writable) return;
+      const standing = target.accountId === undefined
+        ? undefined
+        : computeSolarisStandings(results, characters)
+          .find(entry => entry.accountId === target.accountId);
+      const latestResult = findLatestDuelResultForAccount(results, target.accountId);
+      send(
+        session.socket,
+        buildCmd14PersonnelRecordPacket(
+          {
+            comstarId:     presenceId,
+            battlesToDate: standing?.matches ?? countMatchesForAccount(results, target.accountId),
+            lines:         buildPersonnelRecordLines(target, page, { standing, latestResult }),
+          },
+          nextSeq(session),
+        ),
+        capture,
+        page <= 1 ? 'CMD14_PERSONNEL_P1' : 'CMD14_PERSONNEL_P2',
+      );
+    })
+    .catch((err: unknown) => {
+      const detail = err instanceof Error ? err.message : String(err);
+      connLog.error('[world] failed to build personnel record: %s', detail);
+      if (session.socket.destroyed || !session.socket.writable) return;
+      send(
+        session.socket,
+        buildCmd14PersonnelRecordPacket(
+          {
+            comstarId:     presenceId,
+            battlesToDate: 0,
+            lines:         buildPersonnelRecordLines(target, page),
+          },
+          nextSeq(session),
+        ),
+        capture,
+        page <= 1 ? 'CMD14_PERSONNEL_P1' : 'CMD14_PERSONNEL_P2',
+      );
+    });
 }
 
 // Re-export PERSONNEL_LIST_ID so the dispatch handler can reference it without
@@ -466,6 +765,7 @@ export function sendMechClassPicker(
       extraCritCount: 0,
       tonnage:        0,
       armorLikeMaxValues: Array<number>(10).fill(0),
+      weaponMountInternalIndices: [],
     };
   });
   connLog.info('[world] sending mech class picker');
@@ -509,6 +809,7 @@ export function sendMechChassisPicker(
       extraCritCount: 0,
       tonnage:    0,
       armorLikeMaxValues: Array<number>(10).fill(0),
+      weaponMountInternalIndices: [],
     };
   });
 
@@ -550,6 +851,7 @@ export function sendMechVariantPicker(
     extraCritCount: mech.extraCritCount,
     tonnage:    mech.tonnage,
     armorLikeMaxValues: mech.armorLikeMaxValues,
+    weaponMountInternalIndices: mech.weaponMountInternalIndices,
   }));
 
   connLog.info('[world] sending mech variant picker: chassis="%s" entries=%d', chassis, entries.length);

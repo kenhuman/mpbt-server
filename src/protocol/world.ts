@@ -384,10 +384,126 @@ export function buildCmd14PersonnelRecordPacket(
   return buildGamePacket(14, buildCmd14Args(opts), false, seq);
 }
 
+// ── Cmd 45 / Cmd 58 — Scroll-list shell ───────────────────────────────────────
+// Current best RE fit for paged Solaris ranking/result displays.
+//
+// Cmd58 wire args:
+//   [type1 2B: list_id]
+//
+// Cmd45 wire args:
+//   [byte: mode]
+//   [Frame_ReadString: shell content]  encodeB85_1(len) + raw bytes
+//
+// The shell content is rendered through FUN_00433310(), which in turn feeds
+// FUN_00431f10() for each visible line. That means the shared row-store grammar
+// can be carried inline inside the Cmd45 content itself:
+//   |NN|%ABCDE   — hidden row id (5-char external player id)
+//   |NN|$Text    — visible row text for that row
+//
+// We use `%` rather than `#` so the external id is stored but not visibly echoed.
+// `Text` is truncated to 30 bytes because FUN_00431f10() clamps row text at 0x1e.
+
+const CMD45_TEXT_LIMIT = 85 * 85 - 1;
+const CMD45_ROW_LIMIT = 0x1d;
+const CMD45_ROW_TEXT_LIMIT = 0x1e;
+
+export interface Cmd45ScrollListRow {
+  itemId: number;
+  text: string;
+}
+
+function sanitizeCmd45Text(text: string, maxBytes: number): string {
+  let clean = text
+    .replace(/[\x00-\x1F\x7F]/g, ' ')
+    .replace(/[\\|]/g, ' ')
+    .trimEnd();
+  while (Buffer.byteLength(clean, 'latin1') > maxBytes) {
+    clean = clean.slice(0, -1);
+  }
+  return clean;
+}
+
+function encodeExternalPlayerId(internalPlayerId: number): string {
+  const base10 = internalPlayerId - 100000;
+  if (base10 < 0) {
+    throw new RangeError(`encodeExternalPlayerId: invalid internal player id ${internalPlayerId}`);
+  }
+  const encoded = base10.toString(36).toUpperCase();
+  if (encoded.length > 5) {
+    throw new RangeError(`encodeExternalPlayerId: external id too wide for ${internalPlayerId}`);
+  }
+  return encoded.padStart(5, '0');
+}
+
+export function buildCmd45ScrollListContent(
+  title: string,
+  rows: Cmd45ScrollListRow[],
+): string {
+  const segments: string[] = [];
+  const safeTitle = sanitizeCmd45Text(title, 84);
+  if (safeTitle.length > 0) segments.push(safeTitle);
+
+  rows.slice(0, CMD45_ROW_LIMIT).forEach((row, index) => {
+    const rowId = index.toString().padStart(2, '0');
+    const extId = encodeExternalPlayerId(row.itemId);
+    const text = sanitizeCmd45Text(row.text, CMD45_ROW_TEXT_LIMIT);
+    segments.push(`|${rowId}|%${extId}|${rowId}|$${text}`);
+  });
+
+  let content = segments.join('\\');
+  while (Buffer.byteLength(content, 'latin1') > CMD45_TEXT_LIMIT) {
+    segments.pop();
+    content = segments.join('\\');
+  }
+  return content;
+}
+
+function buildCmd45Args(mode: number, content: string): Buffer {
+  const raw = Buffer.from(content, 'latin1').subarray(0, CMD45_TEXT_LIMIT);
+  if (raw.includes(0x1b)) throw new RangeError('buildCmd45Args: content must not contain ESC');
+  return Buffer.concat([encodeAsByte(mode), encodeB85_1(raw.length), raw]);
+}
+
+export function buildCmd45ScrollListShellPacket(
+  mode: number,
+  content: string,
+  seq = 0,
+): Buffer {
+  return buildGamePacket(45, buildCmd45Args(mode, content), false, seq);
+}
+
+export function buildCmd58SetScrollListIdPacket(listId: number, seq = 0): Buffer {
+  return buildGamePacket(58, encodeB85_1(listId), false, seq);
+}
+
+// ── Cmd 46 — Rich Info Panel ──────────────────────────────────────────────────
+// Strong current RE fit for richer Solaris ranking/personnel detail.
+//
+// Wire args:
+//   [type4: id]
+//   [type3: battles to date]
+//   [type4: legacy/unused]
+//   [type4: legacy/unused]
+//   [Frame_ReadArg × 6: detail lines]
+//
+// Current best-fit assumption: same payload layout as Cmd14, but routed to the
+// richer info-panel handler family (`World_HandleInfoPanelPacket_v123`).
+
+export interface Cmd46InfoPanelOptions extends Cmd14PersonnelRecordOptions {}
+
+/** Build a Cmd46 rich info-panel packet. */
+export function buildCmd46InfoPanelPacket(
+  opts: Cmd46InfoPanelOptions,
+  seq = 0,
+): Buffer {
+  return buildGamePacket(46, buildCmd14Args(opts), false, seq);
+}
+
 // ── Cmd 17 — Scene-Action Response Family / Duel Terms ──────────────────────
 // CONFIRMED subtype 3 handler: World_HandleCmd5SceneActionSubtype3_v123 @ 0x0041e5b0.
 //
-// Subtype 3 payload layout:
+// Cmd17 family layout:
+//   [byte: subtype=3]
 //   [byte: panel_mode]
 //   [Frame_ReadArg: participant_a]
 //   [Frame_ReadArg: participant_b]
@@ -415,6 +531,7 @@ export interface Cmd17DuelTermsOptions {
 
 function buildCmd17DuelTermsArgs(opts: Cmd17DuelTermsOptions): Buffer {
   return Buffer.concat([
+    encodeAsByte(3),
     encodeAsByte(opts.mode ?? 0),
     encodeString(opts.participantA.slice(0, 84)),
     encodeString(opts.participantB.slice(0, 84)),

@@ -510,20 +510,30 @@ sends type4(item_data[k-1] + 1)
 
 ### Special list_id Values / Shared Callback Cases
 
-The numbered-list selection callback used by `Cmd7`, `Cmd16`, `Cmd19`, and
-`Cmd48` has a few hard-coded `list_id` branches:
+The numbered-list selection callback family used by `Cmd7`, `Cmd16`, `Cmd19`,
+`Cmd44`, and `Cmd48` has a few hard-coded `list_id` branches. The later
+`Cmd44` pass now confirms the ordinary keyed-single-string picker still routes
+normal row picks through the same plain outbound `Cmd7` helper (`FUN_0043eb80`),
+with the keep-open behavior controlled only by these list-id checks:
 
 | Value (decimal) | Hex | Notes |
 |:---:|:---:|-------|
 | 8 | `0x08` | Shared keep-open path; exact feature still unresolved. |
 | 12 | `0x0c` | Shared keep-open path; exact feature still unresolved. |
-| 34 | `0x22` | Shared keep-open path; additionally, if the selected `item_id == 100`, the client opens the exit-confirmation MessageBox via `FUN_00404410()`. |
+| 34 | `0x22` | Shared keep-open path; additionally, the `Cmd44` picker appends a synthetic local `item_id = 100` row labeled `Exit to online service` (`MPBT.MSG[139]`) and, when that row is chosen, opens an exit-confirmation MessageBox via `FUN_00444af0()` instead of sending a wire request. |
 | 37 | `0x25` | Shared keep-open path; exact feature still unresolved. |
 | 46 | `0x2e` | `Cmd48`-specific builder special case: installs `FUN_00411e00`, which just synthesizes an Enter/close path (`FUN_0042ffe0(..., 0x0d)` -> `FUN_00419370()`). This looks like modal boilerplate, not the KP5 inquiry fork. |
 | 52 | `0x34` | Shared keep-open path; exact feature still unresolved. |
 | 1000 | `0x3E8` | Local synthetic `Personal inquiry on:` submenu built by `FUN_00412980()`, not a proven server-assigned `Cmd48` list id. |
 
 Use any other positive integer as `list_id` to get a simple dismiss-on-pick dialog.
+
+Current implication for Solaris work: the downstream **tier chooser itself**
+still does not need any special submit opcode beyond plain `Cmd7`, and the
+still-unresolved **top-level** terminal/ranking opener now fits the shared
+keep-open `Cmd44` keyed-list family better than before because `FUN_0040fe80()`
+now has a clean wire-contract readback: `list_id + title + count + repeated
+(item_id + one display string)`.
 
 ### Local Inquiry Submenu (`list_id = 1000`)
 
@@ -542,11 +552,20 @@ The follow-up actions are now confirmed:
 - Option 2 (`Access personnel data`) emits `Cmd7(0x3f2, target_id + 1)` from
   `FUN_00412190()`.
 
-### ESC / Cancel Handling (`Cmd7_OnMenuEsc` / `FUN_004122d0`)
+### Correction on Earlier `Cmd7` ESC Attribution
 
-If the user presses ESC:
-- Calls `Cmd1d_Send` (`FUN_00410cc0`) → sends command `0x1d` frame: `[byte(p1), type1(p2), type4(p3)]`
-- This is **not** a cmd-7 reply; `selection = 0` in a cmd-7 reply also means cancel.
+The earlier note that labeled `FUN_004122d0` as a generic `Cmd7` ESC/cancel
+handler should no longer be relied on.
+
+- Re-reading `FUN_00411e20()` shows the `LAB_00412190` / `LAB_004122d0` callback
+  pair is installed by the denser keyed triple-string list family, not by the
+  simple `Cmd44` keyed single-string picker and not yet by a proven plain
+  top-terminal `Cmd7` menu.
+- That means this callback pair is no longer valid evidence for the exact cancel
+  semantics of the unresolved terminal/ranking opener.
+- The current safe statement is narrower: the proven `Cmd44` chooser path uses
+  plain outbound `Cmd7` for ordinary row selection, while the exact generic
+  plain-`Cmd7` terminal cancel path remains unresolved.
 
 ---
 
@@ -1086,8 +1105,8 @@ No seed change happens mid-session in standard gameplay.
 | 14 | `0x2f` | `0x00415700` | `Cmd14_PersonnelRecord` | Reads `type4 comstar_id`, `type3 battles_to_date`, then two legacy/unused `type4` values, followed by six `Frame_ReadArg` strings. Opens a type-2 text window and formats the visible record as: current selected roster handle via `MPBT.MSG[0x98]` (`Handle  : %s`), formatted ComStar ID, `MPBT.MSG[0xa0]` (`Battles to date: %ld`), then the six server-supplied strings verbatim as additional lines. The dialog installs `FUN_00415690` as its key handler: Enter/ESC close the view, while Space emits `Cmd7(0x95, 2)` and flushes, strongly suggesting a built-in `More` / next-page request for personnel records. |
 | 15 | `0x30` | `0x004139C0` | |
 | 16 | `0x31` | `0x00411DE0` | same addr as cmd 19 |
-| 17 | `0x32` | `0x0041E2C0` | |
-| 18 | `0x33` | `0x00420780` | |
+| 17 | `0x32` | `0x0041E2C0` | Mid-function entry inside the bilateral scene-offer / duel-review family. This address lands in the accept/choice path that ultimately emits client `cmd 29`; it is not a clean standalone parser start. |
+| 18 | `0x33` | `0x00420780` | `Cmd18_SceneOfferStatus` | Reads one type1 mode/status value and routes into the shared scene-offer panel builder `FUN_00413800(...)`. Confirmed string anchors from `MPBT.MSG`: mode `0` shows `Contract accepted.` (`449`), while mode `6` builds the `Contract Accepted` / `What name should it be filed under?` (`450` / `451`) filing-under prompt. This is part of the agreement / subcontract acceptance UI family, not a ranking surface. |
 | 19 | `0x34` | `0x00411DE0` | same as cmd 16 |
 | 20 | `0x35` | `0x00411D90` | `Cmd20_ParseTextDialog` |
 | 21 | `0x36` | `0x004208C0` | |
@@ -1101,36 +1120,36 @@ No seed change happens mid-session in standard gameplay.
 | 29 | `0x3e` | `0x00427710` | |
 | 30 | `0x3f` | `0x0043B4E0` | |
 | 31 | `0x40` | `0x0043C190` | |
-| 32 | `0x41` | `0x0043A520` | |
+| 32 | `0x41` | `0x0043A520` | Alternate list parser / extended ranking-style list. Reads `type1 list_id`, `byte count`, then per row a numeric `item_id`, a second numeric field, and a `type3` score-like value before formatting the visible text partly from local lookups rather than three free-form wire strings. Only list ids `0x20` and `0x3e` flip the shared dialog into its multi-select submit mode; other list ids still behave like ordinary single-pick lists. This remains a candidate for Solaris ranking / match-results style data, but it is no longer the strongest row-shape match. |
 | 33 | `0x42` | `0x00419360` | `FUN_00419370` — Ok-dialog callback |
 | 34 | `0x43` | `0x00413FF0` | |
 | 35 | `0x44` | `0x00429C80` | |
 | 36 | `0x45` | `0x004161A0` | `Cmd36_MessageView` | Reads `type4 reply_target_id` plus a `Frame_ReadString` body. Creates a type-4 read-message window. `reply_target_id == 0` gives a plain read-only page; nonzero adds `Reply` and `Enter`, and the installed key handler reopens the local compose builder `FUN_00416db0(reply_target_id, NULL)` when the user presses `R`. This is a received-message / reply view, not the compose editor itself. |
 | 37 | `0x46` | `0x00416D40` | `Cmd37_OpenCompose` | Reads one `type4` count-or-target value; if `0 < value < 1000`, reads that many additional `type4` ids into a local array; otherwise treats the first value as the single target identifier. Then calls `FUN_00416db0(value, ids)` to open the local editable compose window. This is the server-side wrapper around the same compose builder used locally by the inquiry submenu. Passing `0` still lands in that same ComStar-specific editor; this pass did not uncover any separate generic first-login name-entry mode behind `Cmd37`. |
 | 38 | `0x47` | `0x00419250` | |
-| 39 | `0x48` | `0x0043DAE0` | |
+| 39 | `0x48` | `0x0043DAE0` | Scene-status text / toast family. Dispatch lands inside `FUN_0043da70`, which either appends text into `g_world_SceneStatusTextWidget` or pushes a short transient status update depending on the current local scene-status mode. |
 | 40 | `0x49` | `0x0040ECB0` | |
 | 41 | `0x4a` | `0x00415AF0` | |
 | 42 | `0x4b` | `0x00412680` | |
 | 43 | `0x4c` | `0x0040EED0` | |
-| 44 | `0x4d` | `0x00410000` | |
-| 45 | `0x4e` | `0x0040CEF0` | `Cmd45_ScrollListShell` | Reads a 1-byte mode and a `Frame_ReadString` title into `DAT_004e1844`, normalizing `\` to newlines. Creates/reuses a type-6 scroll-list window backed by `DAT_004e2620`, installs callbacks `FUN_0040ce70` / `FUN_0040ca70`, and copies the previously latched list-id from `DAT_00472a34` into `window[0x512]` so later Enter/ESC actions can emit `Cmd7(listId, selection)` replies. Mode `0/1` creates a plain list shell, `2/4` add Space/ESC footer controls, and `3` adds a Space-only footer. This command does **not** carry roster rows itself; it is a shell around the shared `DAT_004e2620` list state. |
-| 46 | `0x4f` | `0x00414130` | |
+| 44 | `0x4d` | `0x00410000` | `Cmd44_KeyedSingleStringList` (mid-function entry into `FUN_0040fe80`) | Reads a `type1 list_id`, a title string, a count, then per row a `type4 item_id` plus one wire string. Builds a numbered selection list while preserving the wire `item_id` for later `Cmd7(listId, item_id + 1)` replies. The ordinary callback (`LAB_00410a70`) sends plain `Cmd7` for ESC / row pick, then only skips the close helper `FUN_0040faf0()` for keep-open list ids `0x08`, `0x0c`, `0x22`, `0x25`, and `0x34`. Special case: `list_id == 0x22` appends a synthetic `item_id = 100` row labeled `Exit to online service` (`MPBT.MSG[139]`) locally, and picking that row opens `FUN_00444af0()` instead of sending a wire request. An alternate callback (`LAB_00410bb0`) exists but uses `cmd29` control-family `2` for both ESC and row pick, so it should not be treated as the ordinary terminal-picker path. Strong current candidate for compact chooser menus such as **Choose a ranking tier** / **Choose a mech class**. |
+| 45 | `0x4e` | `0x0040CEF0` | `Cmd45_ScrollListShell` | Reads a 1-byte mode and a `Frame_ReadString` title/body string into `DAT_004e1844`, normalizing `\` to newlines. Creates/reuses a type-6 scroll-list window backed by `DAT_004e2620`, installs callbacks `FUN_0040ce70` / `FUN_0040ca70`, and copies the previously latched list-id from `DAT_00472a34` into `window[0x512]` so later Enter/ESC actions can emit `Cmd7(listId, selection)` replies. Enter on a populated row goes straight to `Cmd7(listId, item_id + 1)`; only `listId == 0` diverts into the local `Personal inquiry on:` submenu. Mode `0/1` creates a plain list shell, `2/4` add Space/ESC footer controls, and `3` adds a Space-only footer. Crucial paging clue: in `FUN_0040ca70`, pressing **Space** while `mode != 3` sends raw outbound byte `0x1c` (client `cmd28`), flushes, and clears the shared row store, which is the strongest current match for a built-in **MORE / next-page** action. New hard proof from `FUN_00433310`: when the long string is rendered into a real window it feeds each line through `FUN_00431f10`, so the `|NN|%id` / `|NN|$text` row-feed grammar can ride **inline inside the same Cmd45 body string** rather than requiring a separate visible carrier command. |
+| 46 | `0x4f` | `0x00414130` | Rich record / info panel (mid-function entry inside `World_HandleInfoPanelPacket_v123`) | The containing handler reads one `type4` id, one `type3` numeric value, skips two additional `type4` fields, then reads **six wire strings** and renders a modal text/info page. The proven title/label format hardcodes `MPBT.MSG` fields including `Handle`, `ID`, and `Battles to date`, making this the strongest current candidate for richer Solaris ranking/personnel detail beyond the simpler `Cmd14` page. |
 | 47 | `0x50` | `0x004192F0` | |
 | 48 | `0x51` | `0x00411DF0` | `Cmd48_KeyedTripleStringList` | Wrapper to `FUN_00411e20(1)`. Reads `type1 list_id`, a `Frame_ReadArg` title string, a 1-byte count, then per row: `type4 item_id` + three `Frame_ReadArg` strings. Builds a type-4 numbered selection window where each line formats as `N. <item_id> <str1> <str2> <str3>` when `item_id != 0`. Selecting an entry later emits `Cmd7(list_id, item_id + 1)` via `FUN_00412190`. This is the strongest current candidate for the real global all-roster / KP5 response, because the payload naturally fits `ComStar ID + handle + sector + location` style rows. |
-| 49 | `0x52` | `0x0040F980` | |
+| 49 | `0x52` | `0x0040F980` | Solaris map connector / path overlay. Reads one compact type3 value, resolves two map-node indices plus a color/style value, and draws a line between the corresponding Solaris map locations. |
 | 50 | `0x53` | `0x00410460` | |
 | 51 | `0x54` | `0x00410480` | |
 | 52 | `0x55` | `0x00401000` | |
 | 53 | `0x56` | `0x004010C0` | |
 | 54 | `0x57` | `0x00419320` | |
 | 55 | `0x58` | `0x00419340` | |
-| 56 | `0x59` | `0x0040FD60` | |
+| 56 | `0x59` | `0x0040FD60` | Solaris map room-marker overlay. Reads a compact type2 bitfield, resolves one map location plus color/style, and draws a small highlight box over that room on the Solaris map. |
 | 57 | `0x5a` | `0x004168E0` | |
 | 58 | `0x5b` | `0x0040CEE0` | `Cmd58_SetScrollListId` | Reads one `type1` value via `FUN_0040d4c0()` and stores it in `DAT_00472a34`. `Cmd45_ScrollListShell` later copies that value into `window[0x512]`, making `Cmd58` a companion “set list-id for the scroll-list shell” packet rather than a visible UI command on its own. |
 | 59 | `0x5c` | `0x0040D4E0` | |
-| 60 | `0x5d` | `0x0040FEB0` | |
-| 61 | `0x5e` | `0x0040FA00` | |
+| 60 | `0x5d` | `0x0040FEB0` | Solaris map room-marker overlay (wide-range variant). Same visual family as `Cmd56`, but with wider packed bitfields for room/style indices. |
+| 61 | `0x5e` | `0x0040FA00` | Mid-function entry inside `World_RefreshSceneLocationIcons_v123`. Refreshes / rebuilds the per-location icon buttons for the current Solaris scene after the location table has been populated. |
 | 62–75 | — | NULL | unused in RPS mode |
 | 76 | `0x61` | `0x0040C0A0` | in both tables |
 
@@ -1156,6 +1175,254 @@ Combat-only entries (cmd 62–79, only non-null in combat table):
 | 77 | `0x72` | `0x00401F80` |
 | 78 | `0x73` | `0x004069E0` |
 | 79 | `0x74` | `0x00402AB0` |
+
+### 12.1 World UI / display-family map (2026-04-14)
+
+Not every RPS/world dispatch address is a real function start. Several entries
+(`17`, `21`–`24`, `44`, `46`–`47`, `50`–`51`, `61`) jump into interior labels of
+larger handlers. Even with that limitation, the inbound world-command table now
+clusters into a few concrete UI families:
+
+| Family | Commands | Display family | Notes |
+|--------|----------|----------------|-------|
+| Modal text / record pages | `14`, `20`, `36`, candidate `46` | text page / info panel | `Cmd14` is the currently proven personnel-record page; `Cmd20` is a generic text dialog; `Cmd36` is read-message / reply view. |
+| Scene-offer / duel-review pages | `17`, `18`, `21`–`24` | bilateral review / accept-cancel panel family | Uses agreement / subcontract / duel-specific `MPBT.MSG` text and local callbacks that emit `cmd29`, `cmd11`, `cmd13`, `cmd15`, `cmd30`, or `cmd32` depending on subtype and mode. |
+| Numbered selection lists | `26`, `32`, `44`, `48` | numbered list | `Cmd26` is the basic list/mech-list family; `Cmd32` is the extended numeric/list family; `Cmd44` is a keyed single-string chooser; `Cmd48` is the keyed triple-string list. |
+| Scroll-list shell | `45`, `58` plus row-feed helpers | scrollable list with optional `Space` / `ESC` footer controls | Backed by `DAT_004e2620`. `Cmd58` latches the list id; `Cmd45` opens the shell; Enter on a populated row emits `Cmd7(listId, item_id + 1)`. |
+| Solaris map / scene overlays | `40`, `43`, `49`, `56`, `60`, `61` | map / overlay family | `Cmd40` / `Cmd43` open the Inner Sphere / Solaris maps; `Cmd49`, `Cmd56`, and `Cmd60` draw connectors/markers; `Cmd61` refreshes scene location icons after map/scene state changes. |
+| Scene status text | `39` | inline world status text | Updates the status/toast text region in the current world scene. |
+
+### 12.2 Sanctioned-duel ranking and results display-family inference
+
+This remains partly inferential because no live packet capture has yet shown the
+retail Solaris ranking/result screens, but the client-side evidence is now strong
+enough to narrow the likely packet families and, for Tier Rankings, the visible
+page opener itself:
+
+- **Tier Rankings exact opener (current best proved flow)**:
+  1. **Tier chooser step** — a `Cmd44` keyed single-string chooser is the best fit for the
+     manual's "menu of the seven tiers appears" behavior, using title text such as
+     `Choose a ranking tier:` (`MPBT.MSG[1138]`) and the tier rows in
+     `MPBT.MSG[1124..1131]`.
+     `FUN_0040fe80()` now pins the exact packet shape for that family as
+     `list_id + title + count + repeated (item_id + one display string)`, and
+     the picker's normal row-selection path is concretely tied to plain
+     outbound `Cmd7`, not `cmd10`/`cmd16`.
+  2. **Results-page opener** — the actual rankings page opens through the
+     **`Cmd45` scroll-list shell**, preceded by `Cmd58` to latch its list id.
+     The remaining row-feed question is now much narrower: `FUN_00433310`
+     proves the shared `|NN|%id` / `|NN|$text` grammar can be embedded directly
+     in the same long string that Cmd45 renders into the shell window.
+  3. **Why this is now strong** — `BT-MAN.txt` says Tier Rankings use
+     **MORE** / **DONE**, and `FUN_0040ca70` shows the `Cmd45` shell is the only current
+     ranking candidate with a dedicated **Space => outbound `cmd28` next-page** path plus
+     ESC cancellation semantics.
+  4. **Still unresolved hop** — the *top terminal option* that leads into this chooser
+     is not yet packet-capture-proven. Current best inference now leans more
+     strongly toward a shared keep-open `Cmd44` keyed-list family than toward an
+     ordinary plain-`Cmd7` menu, because the older contrary `Cmd7` callback
+     evidence was misattributed to the triple-string list family.
+
+- **Top terminal / facility menu (strongest current candidate, still inferential)**:
+  - The best current fit is now a **`Cmd44` one-string keyed menu with `list_id = 0x22` and title/prompt `Choose option:` (`MPBT.MSG[192]`)**.
+  - Why `Cmd44` fits:
+    - `FUN_0040fe80()` now explicitly proves the family contract is
+      `list_id + title + count + repeated (item_id + one display string)`, which
+      matches a terminal utility chooser closely
+    - terminal/facility options in `MPBT.MSG` are predominantly **single-line labels**, e.g.
+      - `Send a ComStar message` (`145`, `178`)
+      - `Receive a ComStar message` (`179`)
+      - `Check News Grid` (`180`)
+      - `Solaris Match Results` (`266`)
+      - `View Personal Tier Rankings` (`1118`)
+      - `Tier Rankings` (`1121`)
+      - `Class Rankings` (`1122`)
+    - that shape matches `Cmd44` much better than `Cmd48` or the paged `Cmd45` shell
+    - the ordinary `Cmd44` callback path (`LAB_00410a70`) still reports both
+      normal picks and ordinary ESC through plain outbound `Cmd7`
+    - after a pick, that same ordinary callback only keeps the dialog open for
+      list ids `0x08`, `0x0c`, `0x22`, `0x25`, and `0x34`; all other `Cmd44`
+      list ids fall through the close helper `FUN_0040faf0()`
+    - the separate `LAB_00410bb0` / `cmd29` path is an alternate callback and
+      should not be treated as the default terminal-pick behavior
+    - the broader service-option block in `MPBT.MSG[178..190]`
+      (`Send a ComStar message`, `Receive a ComStar message`, `Check News Grid`,
+      `Examine Planetary Info`, `Set News Agent Options`, `Move without any Mechs`,
+      `General news`, `Access Newsgrid`, `Transfer funds to someone`,
+      `Change Handle`, `Review Personal Status`, `Examine my Contract`,
+      `Review Unit Status`) reads like one coherent terminal / facility utility menu
+    - the immediately adjacent `MPBT.MSG[192] = Choose option:` is the best current
+      title/prompt match for that broader option block
+    - unlike the proven local inquiry submenu (`MPBT.MSG[144..146]`), this
+      `178..192` cluster currently has **no direct local menu-builder xrefs** in
+      the client (`FUN_00405840(...)` / `FUN_004397c0(...)` search), which fits a
+      server-fed `Cmd44` menu much better than a client-local dialog
+  - Why `list_id = 0x22` currently fits best:
+    - it is one of the shared **keep-open** list ids
+    - the `Cmd44` builder appends a synthetic local `item_id = 100` row only for
+      `list_id = 0x22`, and that row is explicitly labeled
+      `Exit to online service` (`MPBT.MSG[139]`)
+    - its callback keeps the dialog open after normal picks, which matches a reusable
+      terminal utility menu better than a single-shot selection dialog
+    - semantically, `Exit to online service` fits a broad utility / facility / terminal
+      menu much better than it fits a narrow chooser such as tiers, mech classes, or
+      other focused pickers
+  - Current best solved mapping:
+    - **family**: `Cmd44` keyed single-string menu
+    - **list id**: strongest candidate `0x22`
+    - **title/prompt**: strongest candidate `Choose option:` (`MPBT.MSG[192]`)
+    - **body options**: strongest candidate block `MPBT.MSG[178..190]`
+    - **local synthetic tail row**: `Exit to online service` (`MPBT.MSG[139]`)
+  - This is still not packet-capture-proven, but it is now the tightest coherent
+    model the client evidence supports.
+
+- **Room/category typing from manual + client RE**
+  - The late-1990s manual gives **strong category-level semantics**, but not a full
+    authoritative room-by-room type table for every location.
+  - What is strongly supported:
+    - **Bars** are real room/category concepts.
+      - Manual: bars have **booths and terminals**.
+      - Client RE: the social-room roster/booth flow is proven
+        (`All`, `Stand`, `New Booth`, `Join`; booth statuses `5..12`).
+    - **Terminals / ComStar facilities** are real room/category concepts.
+      - Manual: every bar booth has a terminal, and **ComStar facilities function
+        like a terminal in a bar**.
+      - Client RE: the strongest current terminal menu fit is the server-fed
+        `Cmd44` service menu described above.
+    - **Arenas / ready rooms / battlegrounds** are real room/category concepts.
+      - Manual: arenas, ready rooms, sanctioned arenas, and battleground entry are explicit.
+      - Client/server RE: arena scenes get special scene options like
+        `Fight`, `Mech Bay`, and `Duel Terms`.
+    - **Tram / monorail travel** is real, but currently looks more like a
+      **travel interaction/system** than a distinct packet family or proven universal
+      room enum.
+      - Manual: tram/monorail is the access path to arena districts.
+      - Client RE: tram uses the same `cmd5 actionType 4 -> Cmd43` Solaris travel-map
+        flow as ordinary Solaris travel; no tram-specific world command was found.
+    - **Global ComStar access** is also a real gameplay concept, separate from
+      physically being inside a bar or facility.
+      - Manual (`BT-MAN.txt` 398-423): players can send ComStar messages by clicking
+        the lower-left ComStar logo, and the manual explicitly says that clicking it
+        "will provide the same functions as a ComStar terminal."
+      - Manual (`BT-MAN.txt` 586-609): the terminal section explicitly documents at
+        least `Send a ComStar message`, `Receive a ComStar message`, and
+        `Tier rankings`.
+      - Strong current inference: the always-available ComStar icon is likely meant
+        to expose the same broad terminal family as a bar / ComStar-facility terminal,
+        even though the exact local opener path is still not packet-capture-proven.
+  - Current practical interpretation for server world-map typing:
+    - `bar` and `terminal` should remain **separate semantic tags**
+    - but **bars should also expose terminal behavior**, because the manual explicitly
+      says terminals exist at bar booths
+    - dedicated `terminal` rooms likely correspond to **ComStar facilities / service buildings**
+    - `tram` is better treated as a **travel-access behavior/context** unless stronger
+      room-level proof appears
+  - Current `world-map.json` graph evidence strengthens that interpretation:
+    - the existing `bar` rooms are **not adjacent** to the dedicated `terminal` rooms
+    - current shortest same-sector bar-to-terminal paths are:
+      - `Riverside (155) -> Lyran Building (153)`: **4 steps**
+      - `Marina (170) -> Government House (148)`: **7 steps**
+      - `White Lotus (149) -> Government House (148)`: **9 steps**
+      - `Waterfront (150) -> Government House (148)`: **9 steps**
+    - so the current map does **not** support modeling bar terminal access as merely
+      "walk to the nearby terminal room"
+    - if the manual is followed, bars need their **own terminal interaction surface**
+      even when a separate `terminal` room also exists in the same sector
+    - and independently of room type, the client/game design also wants a
+      **global ComStar access surface** available from anywhere
+  - Important caution:
+    - the server's current `RoomType` union
+      (`bar | arena | hub | terminal | bank | street | sector | path`)
+      is a **useful server taxonomy**, not yet a fully RE-proven client enum
+    - `world-map.json` already includes dedicated `terminal` rooms, but
+      `buildSceneInitForSession()` currently only branches on `room.type === 'arena'`
+      for special scene actions, so the world-map data is ahead of the playable
+      terminal UI right now
+    - current emulator behavior is even narrower than the manual:
+      - it does support **ComStar compose** and **message delivery/reply**
+      - but the main entry surface is currently the all-roster inquiry submenu
+        (`Send a ComStar message` / `Access personnel data`)
+      - there is no proven retail-faithful always-available ComStar icon/menu yet,
+        and no surfaced bar/facility terminal utility menu yet
+
+- **Solaris Match Results exact opener (strongest current fit, still inferential)**:
+  - Best current fit is a **direct `Cmd45` scroll-list shell page**, again with `Cmd58`
+    plus row-feed data before the visible shell opens.
+  - The most likely title is `Solaris Match Results` (`MPBT.MSG[266]`).
+  - Unlike Tier Rankings, no manual text yet proves `MORE` / `DONE` paging for this
+    screen, so the family fit is strong but the exact mode/title pairing is still not
+    packet-capture-proven.
+
+- **Alternate `Cmd44` callback (`LAB_00410bb0`)**
+  - ESC sends `cmd29(family = 2, list_id, 0)`.
+  - Row selection sends `cmd29(family = 2, list_id, item_id + 1)`.
+  - Because the ordinary `Cmd44` callback already covers plain `Cmd7` picker
+    behavior, this alternate callback is now best treated as a separate
+    control/panel path rather than evidence about the top terminal menu.
+
+- **Tier Rankings** — current best fit: **`Cmd45` scroll-list shell family**
+  (`Cmd58` + row feed + `Cmd45`).
+  - Strongest reason: the manual explicitly says the ranking list shows **MORE**
+    for the next page and **DONE** to cancel.
+  - `Cmd45` is the only currently mapped world list family with native
+    `Space` / `ESC` footer-control modes, a persistent scrollable row store, and a
+    concrete Space handler that emits outbound raw byte `0x1c` for the next page.
+  - This makes it a better fit for paged rank listings than `Cmd48`, even though
+    `Cmd48` matches the row *shape* very cleanly.
+
+- **Tier Rankings row shape** — secondary candidate: **`Cmd48` keyed triple-string list**.
+  - `BT-MAN.txt` says each row shows:
+    - ComStar ID
+    - Handle
+    - rank score
+    - win/loss ratio
+  - `Cmd48` natively carries exactly `item_id + 3 strings`, so it remains the
+    cleanest structured-table match if later capture disproves the pager path.
+
+- **Tier / class chooser menus** — current best fit: **`Cmd44` keyed single-string list**.
+  - `MPBT.MSG` already contains the exact compact chooser prompts and option sets:
+    - `Choose a ranking tier:` (`1138`) with tier labels `Unranked`, `Novice`, `Amateur`,
+      `Professional`, `Veteran`, `Master`, `BattleMaster`, `Champion`
+    - `Choose a mech class:` (`1139`) with `Light`, `Medium`, `Heavy`, `Assault`
+  - `Cmd44` is the cleanest currently mapped family for **one string per row** plus a
+    preserved numeric item id, which matches a tier/class picker much better than the
+    denser `Cmd48` or paged `Cmd45` result displays.
+  - This is now the strongest current candidate for the *first visible screen* after
+    selecting the Tier Rankings terminal option, before the paged rank table opens.
+
+- **View Personal Tier Rankings / richer ranking detail** — strongest current
+  detail-page candidate: the **rich info-panel family** at dispatch `46/0x4f`.
+  - The containing handler family reads:
+    - one `type4` id
+    - one `type3` numeric value
+    - six wire strings
+  - and hardcodes `MPBT.MSG` personnel/ranking labels such as:
+    - `Handle  : %s` (`152`)
+    - `ID      : %ld` (`153`)
+    - `Battles to date: %ld` (`160`)
+  - This makes it a strong candidate for the richer Solaris ranking/personnel
+    summary page that goes beyond the simpler, already-proven `Cmd14` personnel record.
+
+- **Solaris Match Results** — current best fit: also the **`Cmd45` scroll-list shell family**.
+  - Best current inference is that match results are presented as a paged list or
+    scroll surface rather than a single modal page.
+  - No direct handler has yet been tied to the title string `Solaris Match Results`
+    (`MPBT.MSG[266]`), so this remains an informed hypothesis rather than a
+    packet-capture-confirmed fact.
+
+- **Current end-to-end ranking-flow hypothesis**
+  - `Cmd44` family opens the compact chooser (`tier` / `class` filter).
+  - `Cmd45` scroll-list family presents the paged result set (`MORE` / `DONE`).
+  - `Cmd46` rich info-panel family presents the per-player ranking/personnel detail page.
+  - `Cmd48` remains the best structured row-shape fallback if later capture shows the
+    results list is not actually using the scroll-list shell.
+
+- **What is *not* currently favored**
+  - The richer client submit path `Cmd16` is **not** a global requirement.
+    Current RE narrows it to special numbered-list ids `0x20` and `0x3e`.
+  - That means sanctioned rankings/results should be assumed to stay on ordinary
+    `Cmd7` selection unless capture or further RE proves one of those two
+    multi-select numbered-list ids is actually involved.
 
 Combat-handler revalidation against the local `MPBTWIN.EXE` on 2026-04-06 gives the
 first useful M7 position-sync lead, but it is **combat-mode only** and should not be
@@ -1417,6 +1684,16 @@ at `DAT_004ddf60`), then creates sub-windows via `FUN_00431880`:
 
 At completion: `g_chatReady` (`DAT_00472c84`) is set to `1`.  Cmd3 text-broadcast messages
 are silently discarded if `g_chatReady == 0`.
+
+**Sanctioned-duel implication (new):**
+
+- The remembered world-visible duel winner/loser marquee is most likely plain `Cmd3`
+  text written into this `DAT_00472c90` world scroll area rather than a separate
+  duel-only widget.
+- Current server state now matches that strongest fit: first persisted sanctioned
+  duel results fan out a plain world `Cmd3` line to all `world`-phase sessions,
+  while the same persisted row also feeds the terminal-side `Solaris Match Results`
+  browser.
 
 **Wire format (M4 impl):**
 ```
@@ -1729,6 +2006,7 @@ All fields are little-endian.  Offsets are from the start of the decrypted buffe
 | `0x3A` | u16  | `weapon_count`        | Number of weapon slots |
 | `0x3C` | i16  | `crit_state_extra_count` | v1.23 correction: used by `Combat_ClassifyDamageCode_v123` as the signed bound for a post-weapon class-0 damage-code range; this is **not** `weapon_ids[0]` |
 | `0x3E` | u16[] | `weapon_ids[weapon_count]` | Array of weapon type IDs (see §20.3) |
+| `0x8E` | u16[] | `weapon_mount_is_index[weapon_count]` | Internal-structure slot gate per weapon slot. `FUN_0042c200` reads `mec[0x8e + slot*2]`, then blocks firing if the actor's matching internal-state entry at `+0x20e` is zero. Index order matches the 8 local internal slots consumed by `Combat_ReadLocalActorMechState_v123`: `[LA, RA, LT, RT, CT, LL, RL, Head]`. |
 | *var*  | …    | *(unknown fields)*    | Critical-hit slot data, ammo tracking; see §20.4 |
 | `0xDE` | u16[45] | `crit_slot_table` | Critical-hit slot assignments; 0xFFFF = empty |
 | `0x1EC` | u16 | `ammo_bin_count`      | Number of ammo bin records that follow |
@@ -1785,6 +2063,28 @@ AS7-D `field_0x3c=8`, weapons `[9,16,3,3,3,3,12]`; BJ-1 `field_0x3c=8`, weapons 
 mech string table at `MPBT.MSG` offset `(mech_id + 0x3AE) * 2` (§15).  The loader
 uses this name both to construct the filename `mechdata\<name>.MEC` and as the
 encryption seed source.
+
+Additional weapon-loss proof from the client fire gate (`FUN_0042c200`, 2026-04-15):
+
+- The function rejects a weapon slot immediately when:
+  - `slot < 0` or `slot >= weapon_count`
+  - the per-slot cooldown is active
+  - the mounted internal section referenced by `mec[0x8e + slot*2]` is zero
+- This is the concrete retail section-loss gate behind hardpoint loss: the client does
+  not just look at generic weapon names or the visible HUD; it checks the slot's
+  `.MEC`-encoded mounted section before allowing the shot.
+- The visible HUD disable is a second, adjacent path: class-3 damage codes
+  (`0x28 + weaponSlot`) feed `Combat_UpdateWeaponDamageState_v123` (`0x0042bd10`),
+  which stores a non-zero weapon state and refreshes the local weapon/TIC HUD through
+  `FUN_00422860` and `FUN_00424f80`. So retail "weapon lost" behavior is:
+  internal section reaches zero -> shot gate fails, and a weapon-state update can grey
+  the slot out in the HUD.
+- Sample decrypted mount refs:
+  - `CPLT-C1`: slot refs `[RA, LA, RL, LL, CT, CT]` for `[LRM-15, LRM-15, Medium Laser, Medium Laser, Medium Laser, Medium Laser]`
+  - `CPLT-C4`: slot refs `[RA, LA, CT, CT]` for `[LRM-20, LRM-20, Small Laser, Small Laser]`
+  - `CPLT-K2`: slot refs `[RA, LA, RL, LL, RL, LL]` for `[PPC, PPC, Medium Laser, Medium Laser, Machine Gun, Machine Gun]`
+- This matches the remembered Catapult behavior closely enough to implement authoritative
+  server-side hardpoint loss from `.MEC` mount refs instead of guessing from chassis lore.
 
 ---
 
@@ -2604,6 +2904,81 @@ contracts / offers / duel terms.
 - Subtypes `5/6/7` are the **subcontract-specific** family.
 - Subtype `4` is separate and centered on membership bidding.
 - Subtype `3` is the duel branch.
+
+### Sanctioned-duel follow-on clues (2026-04-14)
+
+These findings do **not** fully map the sanctioned-duel ranking flow yet, but they
+narrow the missing public-results layer substantially:
+
+- `World_HandleCmd5SceneActionSubtype3_v123 @ 0x0041e5b0` is the duel stakes/details
+  panel. Its wire contract is:
+  - `subtype`
+  - `mode`
+  - `participantA`
+  - `participantB`
+  - `stakeA`
+  - `stakeB`
+  - `contextA`
+  - `contextB`
+  - `flagA`
+  - `flagB`
+- In editable mode, `World_HandleDuelTermsEditorInput_v123 @ 0x0041eac0` submits
+  `cmd 15` with the two type-4 stake values and shows `MPBT.MSG[0x115]`
+  (`Duel submitted`).
+- `MPBT.MSG` contains public-ranking and results labels that the current server does
+  not yet back:
+  - `266` — `Solaris Match Results`
+  - `1118` — `View Personal Tier Rankings`
+  - `1121` — `Tier Rankings`
+  - `1122` — `Class Rankings`
+  - `154` — `Rank    : %s`
+  - `155` — `Standing with %s : %s`
+  - `160` — `Battles to date: %ld`
+- `BT-MAN.txt` confirms the intended sanctioned-match behavior:
+  - sanctioned arena results are fed immediately into **SCentEx** (Solaris central
+    information exchange)
+  - SCentEx recalculates duelist rankings
+  - duel rebroadcasting is part of Solaris' public spectacle
+- `BT-MAN.txt` also describes the tier-ranking listing shape:
+  - rows show **ComStar ID**, **Handle**, **rank score**, and **win/loss ratio**
+  - this maps cleanly onto the client's generic keyed list layout (`itemId + 3 columns`)
+- Additional client request-path clue:
+  - `FUN_0040d2f0()` is the concrete outbound **`Cmd7`** writer:
+    `startCmd('\a') + type1(list_id) + type4(selection)`
+  - simple keyed lists use `Cmd7(list_id, item_id + 1)` on selection
+  - `Cmd44`, `Cmd45`, and `Cmd48` all preserve the server-supplied numeric `item_id`
+    and route ordinary selection through that same `Cmd7` path
+  - `Cmd45` only deviates when its latched `list_id == 0`, where Enter opens the
+    local synthetic `Personal inquiry on:` submenu instead of sending a wire request
+  - there is also a distinct outbound **`cmd 10`** bitmask submit path:
+    `FUN_0040d360()` emits `startCmd('\n') + type1(list_id) + type4(bitmask_plus_1)`,
+    and `FUN_00412580()` uses it for checkbox-style local multi-select pages
+  - the client also has a separate richer list-submit path `FUN_0040d430()` that emits
+    outbound command `0x10` (**`cmd 16`**) with a list id plus multiple
+    `(selector, value)` pairs
+  - narrowed further: the shared `Cmd26` / `Cmd32` numbered-list UI only flips into
+    that richer submit mode for list ids `0x20` and `0x3e`; other numbered lists stay
+    on the ordinary single-pick path
+  - the separate `Cmd45` scroll-list family (`Cmd58` sets its list id) also submits via
+    plain `Cmd7(list_id, item_id + 1)` on Enter
+  - current best inference: the current Solaris ranking/result candidates
+    (`Cmd44` chooser -> `Cmd45` paged results -> optional `Cmd46` detail page)
+    do **not** require either `cmd 10` or `cmd 16` unless capture/RE proves the result
+    set actually uses one of the special `Cmd26` / `Cmd32` multi-select list ids
+
+### Open sanctioned-duel questions
+
+- Which world command(s) populate the **Solaris Match Results** and **Tier Rankings**
+  views?
+- The current best-supported sanctioned-results model is now: **global `Cmd3`
+  rebroadcast for the live public winner/loser marquee, plus persisted data that
+  later populates `Solaris Match Results` / ranking views on demand**. No direct
+  evidence yet shows an additional server-pushed list/record refresh packet at
+  duel completion.
+- Are tier/class rankings delivered through `Cmd48`, `Cmd32`, or another world list
+  family?
+- If rankings use `Cmd32`, do they specifically use list id `0x20` or `0x3e`, or do
+  they remain on the ordinary `Cmd7` single-pick path?
 
 **Subtype 1/2 — Agreement field layout (`MPBT.MSG` 1-based indices)**
 

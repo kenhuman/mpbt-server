@@ -8,6 +8,16 @@ export type CombatAttachmentHitSection = {
   label: string;
 };
 
+export type CombatAttachmentImpactContext = {
+  impactX: number;
+  impactY: number;
+  impactZ: number;
+  targetX: number;
+  targetY: number;
+  targetZ: number;
+  facingAccumulator: number;
+};
+
 type ModelIndexEntry = {
   modelId: number;
   offset: number;
@@ -56,20 +66,85 @@ const MODEL_ID_BY_SUBTYPE = [
 ] as const;
 
 const CT_FRONT: CombatAttachmentHitSection = { armorIndex: 4, internalIndex: 4, label: 'ct-front' };
-const LT_FRONT: CombatAttachmentHitSection = { armorIndex: 5, internalIndex: 5, label: 'lt-front' };
-const RT_FRONT: CombatAttachmentHitSection = { armorIndex: 6, internalIndex: 6, label: 'rt-front' };
+const CT_REAR: CombatAttachmentHitSection = { armorIndex: 7, internalIndex: 4, label: 'ct-rear' };
+const LT_FRONT: CombatAttachmentHitSection = { armorIndex: 5, internalIndex: 2, label: 'lt-front' };
+const LT_REAR: CombatAttachmentHitSection = { armorIndex: 8, internalIndex: 2, label: 'lt-rear' };
+const RT_FRONT: CombatAttachmentHitSection = { armorIndex: 6, internalIndex: 3, label: 'rt-front' };
+const RT_REAR: CombatAttachmentHitSection = { armorIndex: 9, internalIndex: 3, label: 'rt-rear' };
 const HEAD: CombatAttachmentHitSection = { armorIndex: -1, internalIndex: 7, label: 'head' };
 const LEFT_ARM: CombatAttachmentHitSection = { armorIndex: 0, internalIndex: 0, label: 'left-arm' };
 const RIGHT_ARM: CombatAttachmentHitSection = { armorIndex: 1, internalIndex: 1, label: 'right-arm' };
-const LEFT_LEG: CombatAttachmentHitSection = { armorIndex: 2, internalIndex: 2, label: 'left-leg' };
-const RIGHT_LEG: CombatAttachmentHitSection = { armorIndex: 3, internalIndex: 3, label: 'right-leg' };
+const LEFT_LEG: CombatAttachmentHitSection = { armorIndex: 2, internalIndex: 5, label: 'left-leg' };
+const RIGHT_LEG: CombatAttachmentHitSection = { armorIndex: 3, internalIndex: 6, label: 'right-leg' };
+
+type Vec3 = readonly [number, number, number];
+type RootSplitReferences = {
+  leftRear: Vec3;
+  leftFront: Vec3;
+  rightRear: Vec3;
+  rightFront: Vec3;
+};
+
+const ROOT_FACING_OFFSET = 0x7ff8;
+const ANGLE_UNITS_PER_TURN = 0x10000;
+const ROOT_SPLIT_SHARED_REFS: RootSplitReferences = {
+  leftRear:  [0, -33, -39],
+  leftFront: [0, -6, -86],
+  rightRear: [0, 33, -37],
+  rightFront:[0, 5, -87],
+};
+const ROOT_SPLIT_REFS_BY_MODEL = new Map<number, Partial<RootSplitReferences>>([
+  [9, {
+    leftRear:   [0, -33, -39],
+    leftFront:  [0, -6, -86],
+    rightRear:  [0, 33, -37],
+    rightFront: [0, 5, -87],
+  }],
+  [13, {
+    leftRear:   [0, 0, 0],
+    leftFront:  [21, -24, -8],
+    rightRear:  [0, 24, -1],
+    rightFront: [21, 24, -8],
+  }],
+  [28, {
+    leftRear:   [0, 83, -60],
+    leftFront:  [-13, -15, -119],
+    rightRear:  [0, -84, -61],
+    rightFront: [0, 14, -100],
+  }],
+  [30, {
+    leftRear:   [0, -57, -43],
+    leftFront:  [-12, 0, -127],
+    rightFront: [-11, 0, -130],
+  }],
+  [43, {
+    leftRear:  [0, 0, 0],
+    leftFront: [0, 0, 0],
+  }],
+  [51, {
+    leftRear:   [0, -120, -71],
+    leftFront:  [-198, 0, 1],
+    rightFront: [-200.5, 0, -0.5],
+  }],
+  [59, {
+    leftRear: [0, 0, 0],
+  }],
+  [61, {
+    leftRear:   [-7, 50, -112],
+    leftFront:  [-321, 2, -73],
+    rightRear:  [3, -49, -128],
+    rightFront: [-3, 0, -163],
+  }],
+]);
 
 const SHARED_SECTION_BY_ATTACH = new Map<number, CombatAttachmentHitSection>([
-  [37, CT_FRONT],
+  [37, HEAD],
   [1, CT_FRONT],
-  [18, CT_FRONT],
-  [4, CT_FRONT],
+  [32, RT_FRONT],
+  [36, CT_REAR],
+  [18, LT_REAR],
   [19, LT_FRONT],
+  [4, RT_REAR],
   [5, RT_FRONT],
   [52, LEFT_ARM],
   [54, LEFT_ARM],
@@ -77,27 +152,13 @@ const SHARED_SECTION_BY_ATTACH = new Map<number, CombatAttachmentHitSection>([
   [38, RIGHT_ARM],
   [40, RIGHT_ARM],
   [41, RIGHT_ARM],
-  [31, LEFT_LEG],
-  [33, LEFT_LEG],
-  [36, LEFT_LEG],
-  [32, RIGHT_LEG],
+  [31, CT_FRONT],
+  [33, LT_FRONT],
   [34, RIGHT_LEG],
   [35, RIGHT_LEG],
 ]);
 
 const SECTION_BY_MODEL_AND_ATTACH = new Map<number, Map<number, CombatAttachmentHitSection>>([
-  [13, new Map<number, CombatAttachmentHitSection>([
-    [5, RIGHT_ARM],
-    [19, LEFT_ARM],
-    [35, RT_FRONT],
-    [36, LT_FRONT],
-    [38, RIGHT_LEG],
-    [40, RIGHT_LEG],
-    [41, RT_FRONT],
-    [52, LEFT_LEG],
-    [54, LEFT_LEG],
-    [55, LT_FRONT],
-  ])],
   [43, new Map<number, CombatAttachmentHitSection>([
     [43, LEFT_ARM],
     [44, LEFT_ARM],
@@ -284,6 +345,106 @@ function updateAttachmentStats(
   current.count = nextCount;
 }
 
+function mirrorAcrossLateral(point: Vec3): Vec3 {
+  return [point[0], -point[1], point[2]];
+}
+
+function midpoint(a: Vec3, b: Vec3): Vec3 {
+  return [
+    (a[0] + b[0]) / 2,
+    (a[1] + b[1]) / 2,
+    (a[2] + b[2]) / 2,
+  ];
+}
+
+function getRootSplitReferences(modelId: number | undefined): RootSplitReferences {
+  const partial = modelId === undefined ? undefined : ROOT_SPLIT_REFS_BY_MODEL.get(modelId);
+  const leftRear = partial?.leftRear
+    ?? (partial?.rightRear !== undefined
+      ? mirrorAcrossLateral(partial.rightRear)
+      : ROOT_SPLIT_SHARED_REFS.leftRear);
+  const leftFront = partial?.leftFront
+    ?? (partial?.rightFront !== undefined
+      ? mirrorAcrossLateral(partial.rightFront)
+      : ROOT_SPLIT_SHARED_REFS.leftFront);
+  const rightRear = partial?.rightRear
+    ?? (partial?.leftRear !== undefined
+      ? mirrorAcrossLateral(partial.leftRear)
+      : ROOT_SPLIT_SHARED_REFS.rightRear);
+  const rightFront = partial?.rightFront
+    ?? (partial?.leftFront !== undefined
+      ? mirrorAcrossLateral(partial.leftFront)
+      : ROOT_SPLIT_SHARED_REFS.rightFront);
+  return { leftRear, leftFront, rightRear, rightFront };
+}
+
+function rotateLocalPointToWorld(
+  point: Vec3,
+  context: CombatAttachmentImpactContext,
+): Vec3 {
+  const angleRaw = (context.facingAccumulator + ROOT_FACING_OFFSET) & 0xffff;
+  const radians = angleRaw * (Math.PI * 2 / ANGLE_UNITS_PER_TURN);
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  return [
+    context.targetX + (point[0] * cos) - (point[1] * sin),
+    context.targetY + (point[0] * sin) + (point[1] * cos),
+    context.targetZ + point[2],
+  ];
+}
+
+function squaredDistance3(a: Vec3, b: Vec3): number {
+  const dx = a[0] - b[0];
+  const dy = a[1] - b[1];
+  const dz = a[2] - b[2];
+  return dx * dx + dy * dy + dz * dz;
+}
+
+function resolveRootAttachmentHitSection(
+  modelId: number | undefined,
+  attach: number,
+  context: CombatAttachmentImpactContext | undefined,
+): CombatAttachmentHitSection | undefined {
+  if (context === undefined) return undefined;
+  if (attach !== 31 && attach !== 32 && attach !== 33) return undefined;
+
+  const refs = getRootSplitReferences(modelId);
+  let rearRef: Vec3;
+  let frontRef: Vec3;
+  let rearSection: CombatAttachmentHitSection;
+  let frontSection: CombatAttachmentHitSection;
+
+  switch (attach) {
+    case 33:
+      rearRef = refs.leftRear;
+      frontRef = refs.leftFront;
+      rearSection = LT_REAR;
+      frontSection = LT_FRONT;
+      break;
+    case 32:
+      rearRef = refs.rightRear;
+      frontRef = refs.rightFront;
+      rearSection = RT_REAR;
+      frontSection = RT_FRONT;
+      break;
+    case 31:
+      rearRef = midpoint(refs.leftRear, refs.rightRear);
+      frontRef = midpoint(refs.leftFront, refs.rightFront);
+      rearSection = CT_REAR;
+      frontSection = CT_FRONT;
+      break;
+    default:
+      return undefined;
+  }
+
+  const impactPoint: Vec3 = [context.impactX, context.impactY, context.impactZ];
+  const worldRear = rotateLocalPointToWorld(rearRef, context);
+  const worldFront = rotateLocalPointToWorld(frontRef, context);
+  return squaredDistance3(impactPoint, worldFront) <= squaredDistance3(impactPoint, worldRear)
+    ? frontSection
+    : rearSection;
+}
+
 function loadAttachmentStats(): LoadedAttachmentStats {
   if (cachedAttachmentStats !== null) return cachedAttachmentStats;
 
@@ -324,8 +485,8 @@ function classifyUnknownAttachment(modelId: number | undefined, attach: number):
     }
     if (vertical < -40 || depthSpan > 250) {
       return lateral <= 0
-        ? { armorIndex: 2, internalIndex: 2, label: 'left-leg' }
-        : { armorIndex: 3, internalIndex: 3, label: 'right-leg' };
+        ? { armorIndex: 2, internalIndex: 5, label: 'left-leg' }
+        : { armorIndex: 3, internalIndex: 6, label: 'right-leg' };
     }
     if (Math.abs(lateral) > 40) {
       return lateral < 0
@@ -334,8 +495,8 @@ function classifyUnknownAttachment(modelId: number | undefined, attach: number):
     }
     if (Math.abs(lateral) > 15) {
       return lateral < 0
-        ? { armorIndex: 5, internalIndex: 5, label: 'lt-front' }
-        : { armorIndex: 6, internalIndex: 6, label: 'rt-front' };
+        ? { armorIndex: 5, internalIndex: 2, label: 'lt-front' }
+        : { armorIndex: 6, internalIndex: 3, label: 'rt-front' };
     }
   }
   return { armorIndex: 4, internalIndex: 4, label: 'ct-front-fallback' };
@@ -356,8 +517,11 @@ export function resolveCombatAttachmentHitSection(
   mechId: number | undefined,
   attach: number,
   impactZ: number,
+  impactContext?: CombatAttachmentImpactContext,
 ): CombatAttachmentHitSection {
   const modelId = getCombatModelIdForMechId(mechId);
+  const rootSplit = resolveRootAttachmentHitSection(modelId, attach, impactContext);
+  if (rootSplit !== undefined) return rootSplit;
   const explicit = SECTION_BY_MODEL_AND_ATTACH.get(modelId ?? -1)?.get(attach)
     ?? SHARED_SECTION_BY_ATTACH.get(attach);
   if (explicit !== undefined) return explicit;

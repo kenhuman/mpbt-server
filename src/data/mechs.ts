@@ -92,13 +92,27 @@ function decryptMec(buf: Buffer, nameLower: string): void {
 function readMecFields(
   mecPath: string,
   nameLower: string,
-): { mecSpeed: number; extraCritCount: number; tonnage: number; armorLikeMaxValues: number[] } {
+): {
+  mecSpeed: number;
+  extraCritCount: number;
+  tonnage: number;
+  armorLikeMaxValues: number[];
+  weaponMountInternalIndices: number[];
+} {
   const raw = fs.readFileSync(mecPath);
   if (raw.length < 0x3e) {
     throw new Error(`${mecPath}: too short for mec fields (${raw.length} < 0x3e)`);
   }
   const buf = Buffer.from(raw); // mutable copy
   decryptMec(buf, nameLower);
+  const weaponCount = buf.readUInt16LE(0x3a);
+  const weaponMountOffset = 0x8e;
+  const weaponMountBytes = weaponCount * 2;
+  if (buf.length < weaponMountOffset + weaponMountBytes) {
+    throw new Error(
+      `${mecPath}: too short for weapon mount refs (${buf.length} < ${weaponMountOffset + weaponMountBytes})`,
+    );
+  }
   return {
     mecSpeed:       buf.readUInt16LE(0x16),
     tonnage:        buf.readUInt16LE(0x18),
@@ -115,6 +129,10 @@ function readMecFields(
       buf.readUInt16LE(0x2a), // LT rear
       buf.readUInt16LE(0x2c), // RT rear
     ],
+    weaponMountInternalIndices: Array.from(
+      { length: weaponCount },
+      (_, slot) => buf.readUInt16LE(weaponMountOffset + slot * 2),
+    ),
   };
 }
 
@@ -250,7 +268,7 @@ export function loadMechs(): MechEntry[] {
         );
       }
       const mecPath = path.join(mechDir, filename);
-      const { mecSpeed, extraCritCount, tonnage, armorLikeMaxValues } =
+      const { mecSpeed, extraCritCount, tonnage, armorLikeMaxValues, weaponMountInternalIndices } =
         readMecFields(mecPath, typeString.toLowerCase());
       return {
         id,
@@ -264,6 +282,7 @@ export function loadMechs(): MechEntry[] {
         extraCritCount,
         tonnage,
         armorLikeMaxValues,
+        weaponMountInternalIndices,
       };
     });
 
