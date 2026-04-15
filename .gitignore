@@ -47,8 +47,8 @@ Gnum*.md
 .env
 .env.*
 !.env.example
-*.mjs
-*.ps1
+tools/*.mjs
+tools/*.ps1
 
 # OS junk
 .DS_Store
