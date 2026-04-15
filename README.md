@@ -2,7 +2,7 @@
 
 A TypeScript server emulator for **Multiplayer BattleTech: Solaris** (Kesmai, 1996), the original online BattleTech MMO that ran on the GEnie and AOL networks.
 
-This project reverse-engineers the **ARIES** binary protocol used by `MPBTWIN.EXE` and re-implements the server-side handshake well enough to reach — and navigate — the mech selection lobby.
+This project reverse-engineers the **ARIES** binary protocol used by `MPBTWIN.EXE` and re-implements the server well enough to log in, enter the post-redirect world, travel Solaris, select mechs, and run supervised arena combat playtests.
 
 ## Status
 
@@ -22,11 +22,13 @@ This project reverse-engineers the **ARIES** binary protocol used by `MPBTWIN.EX
 | ComStar inquiry submenu — all-roster, addressed compose, personnel record | ✅ Complete |
 | World map travel (Solaris / IS sectors) | ✅ Complete |
 | ARIES type-0x05 keepalive (lobby + world) | ✅ Complete |
+| Lobby→world reconnect restore (room / mech / deferred duel notice) | ✅ Complete |
 | Combat bootstrap packet builders (cmd 64–73) | ✅ Complete |
-| Server-authoritative combat loop | 🔬 Under investigation |
+| Two-human sanctioned duel playtest | ✅ Complete |
+| Retail-faithful combat fidelity | 🔬 Under investigation |
 | Multi-client combat + match orchestration | 🔬 Under investigation |
 
-The client reaches the mech selection screen, confirms a mech selection, is redirected to the world server, creates a character, and enters a named room alongside other connected players.
+The client can select a mech, redirect to the world server, create or resume a character, travel between world rooms, enter Solaris arenas, and complete supervised two-human sanctioned duel playtests. Broader multi-client arena behavior, authentic Solaris layouts, and full late-1990s-faithful combat fidelity remain in progress.
 
 ## Game Data
 
@@ -49,7 +51,7 @@ mpbt-server/
 
 | File | Purpose | Missing behaviour |
 |------|---------|-------------------|
-| `mechdata/*.MEC` | Mech stats (armor, weapons, speed) for the cmd 26 lobby list and combat bootstrap | **Fatal** — lobby server refuses to start |
+| `mechdata/*.MEC` | Mech runtime data for lobby/world mech selection, examine/status surfaces, and combat bootstrap | **Fatal** — lobby server refuses to start |
 | `MPBT.MSG` | String table used to resolve mech variant IDs | **Fatal** — lobby server refuses to start |
 | `IS.MAP` | Inner Sphere room records (IS travel map) | Non-fatal — IS travel map unavailable |
 | `SOLARIS.MAP` | Solaris room records, names, and coordinates | Non-fatal — falls back to hardcoded 32-room list |
@@ -63,15 +65,6 @@ mpbt-server/
 MPBT ran on Kesmai's proprietary **ARIES** engine — the same engine that powered Air Warrior and Legends of Kesmai. The client (`MPBTWIN.EXE`) and its companion DLLs (`COMMEG32.DLL`, `INITAR.DLL`) have been extensively analyzed with Ghidra to reconstruct the wire protocol from scratch.
 
 No original server binary, source code, or protocol documentation is known to exist.
-
-For an AI-assisted Ghidra workflow aimed at the current post-redirect/world
-targets, see [`docs/ghidra-ai-workflow.md`](docs/ghidra-ai-workflow.md) and
-[`docs/ghidra-ai-prompts.md`](docs/ghidra-ai-prompts.md).
-
-If you are using the `bethington/ghidra-mcp` bridge/plugin stack, the
-tool-specific workflow is in [`docs/ghidra-mcp-workflow.md`](docs/ghidra-mcp-workflow.md),
-[`docs/ghidra-mcp-prompts.md`](docs/ghidra-mcp-prompts.md), and
-[`docs/ghidra-mcp-session-01-world-handshake.md`](docs/ghidra-mcp-session-01-world-handshake.md).
 
 ## Protocol
 
@@ -190,7 +183,7 @@ mpbt-server/
 │   ├── data/
 │   │   ├── maps.ts            # .MAP file parser (used by tools/dump-map.ts)
 │   │   ├── mechs.ts           # .MEC file loader → mech roster
-│   │   └── mech-stats.ts      # Static mech stats for cmd 20 examine response
+│   │   └── mech-stats.ts      # Manual-backed mech text + runtime .MEC summary helpers
 │   ├── db/
 │   │   ├── client.ts          # pg pool
 │   │   ├── schema.sql         # Canonical DB schema
@@ -210,7 +203,8 @@ mpbt-server/
 │   │   └── world.ts           # World-server protocol encoder (cmd 3–14, 48)
 │   ├── state/
 │   │   ├── launch.ts          # Lobby→world launch context (selectedMech, accountId)
-│   │   └── players.ts         # ClientSession interface, PlayerRegistry
+│   │   ├── players.ts         # ClientSession interface, PlayerRegistry
+│   │   └── world-resume.ts    # Reconnect snapshot registry for world room/mech restore
 │   └── util/
 │       ├── capture.ts         # Per-session packet capture logger
 │       └── logger.ts          # Structured logger
@@ -316,11 +310,11 @@ See [ROADMAP.md](ROADMAP.md) for the full milestone plan from current state to a
 This is an open research project. If you have:
 
 - Packet captures from the original GEnie/AOL servers
-- Knowledge of the post-redirect game world protocol
+- Knowledge of remaining multi-client arena, combat-fidelity, or late-world UI protocol details
 - Ghidra scripts or annotations for the MPBT binaries
 - Any Kesmai/ARIES protocol documentation
 
-...please open an issue or PR. The further sections of the protocol (combat, world navigation, the secondary connection via `DAT_1001a080`) are still under active investigation.
+...please open an issue or PR. The remaining gaps are no longer basic post-redirect connectivity; they are the harder late-stage details: combat fidelity, multi-client arena orchestration, authentic world/arena behavior, and the still-underdocumented edges of the secondary/world protocol.
 
 ## Legal
 

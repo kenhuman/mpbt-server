@@ -54,6 +54,12 @@ import {
   CLASS_RANKING_RESULTS_LIST_ID,
   PERSONNEL_LIST_ID,
   COMSTAR_ACCESS_ACTION_TYPE,
+  ARENA_SIDE_ACTION_TYPE,
+  ARENA_STATUS_ACTION_TYPE,
+  ARENA_SIDE_MENU_ID,
+  ARENA_STATUS_LIST_ID,
+  ARENA_READY_ROOM_MAX_PARTICIPANTS,
+  ARENA_SIDE_MENU_ITEMS,
   FALLBACK_MECH_ID,
   SOLARIS_TRAVEL_CONTEXT_ID,
   TERMINAL_MENU_ITEMS,
@@ -102,6 +108,19 @@ export function sendToWorldSession(session: ClientSession, pkt: Buffer, label: s
   session.socket.write(pkt);
 }
 
+function formatMechPickerVariantSummary(mech: {
+  tonnage: number;
+  walkSpeedMag: number;
+  maxSpeedMag: number;
+  jumpJetCount: number;
+}): string {
+  const parts = [`${mech.tonnage}T`, `${mechKph(mech.walkSpeedMag)}/${mechKph(mech.maxSpeedMag)}kph`];
+  if (mech.jumpJetCount > 0) {
+    parts.push(`JJ:${mech.jumpJetCount}`);
+  }
+  return parts.join(' ');
+}
+
 /**
  * Advance and return the session's outgoing sequence number.
  * Valid range: 0–42 (FUN_0040C2A0: val > 42 → treated as ACK request, not data).
@@ -143,6 +162,22 @@ export function getPresenceLocation(session: ClientSession): string {
   if (status <= 5) return `Standing in ${room}`;
   if (status <= 12) return `Booth ${status - 5} in ${room}`;
   return `Status ${status}`;
+}
+
+export function getArenaSideLabel(side: number | undefined): string {
+  if (side === undefined || side < 1 || side > 8) {
+    return 'Open';
+  }
+  return `Side ${side}`;
+}
+
+function getArenaReadyState(session: ClientSession): string {
+  if (session.selectedMechId === undefined) {
+    return 'No mech picked';
+  }
+  const mech = WORLD_MECH_BY_ID.get(session.selectedMechId);
+  const chassis = mech ? getMechChassis(mech.typeString) : `Mech ${session.selectedMechId}`;
+  return `Picked: ${chassis}`;
 }
 
 // ── Roster / presence queries ─────────────────────────────────────────────────
@@ -199,6 +234,28 @@ export function buildAllRosterEntries(players: PlayerRegistry) {
       col1:   getDisplayName(other),
       col2:   getSolarisRoomName(other.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID),
       col3:   getPresenceLocation(other),
+    }));
+}
+
+function buildArenaStatusEntries(players: PlayerRegistry, session: ClientSession) {
+  return players.inRoom(session.roomId)
+    .filter(other =>
+      other.phase === 'world' &&
+      other.worldInitialized &&
+      !other.socket.destroyed &&
+      other.worldRosterId !== undefined,
+    )
+    .slice()
+    .sort((a, b) => {
+      const sideDiff = (a.worldArenaSide ?? 9) - (b.worldArenaSide ?? 9);
+      if (sideDiff !== 0) return sideDiff;
+      return getDisplayName(a).localeCompare(getDisplayName(b));
+    })
+    .map(other => ({
+      itemId: getComstarId(other),
+      col1: getDisplayName(other),
+      col2: getArenaSideLabel(other.worldArenaSide),
+      col3: getArenaReadyState(other),
     }));
 }
 
@@ -359,7 +416,7 @@ export function buildSceneInitForSession(session: ClientSession) {
   // Room-type-aware action buttons.
   // actionType 4 → "Travel" (opens Cmd43 travel map).
   // actionType 5 → "Fight"  (enter combat; handled by cmd-5 dispatch in server-world.ts).
-  // actionType 6 → "Mech Bay" (opens the 3-step mech picker).
+  // actionType 6 → "Mech"/"Mech Bay" (opens the 3-step mech picker).
   // actionType 8 → "ComStar"/"Terminal" (opens the Cmd44 utility menu).
   // The client hard-codes actionType 0 (0x100 wire) as the local Help button.
   const isArena = mapRoom?.type === 'arena';
@@ -367,14 +424,19 @@ export function buildSceneInitForSession(session: ClientSession) {
   const arenaOptions: Array<{ type: number; label: string }> = [
     { type: 0, label: 'Help' },
     { type: 4, label: 'Travel' },
-    { type: 6, label: 'Mech Bay' },
-    { type: COMSTAR_ACCESS_ACTION_TYPE, label: hasRoomTerminal ? 'Terminal' : 'ComStar' },
   ];
   if (isArena) {
+    arenaOptions.push({ type: 6, label: 'Mech' });
+    arenaOptions.push({ type: ARENA_SIDE_ACTION_TYPE, label: 'Side' });
+    arenaOptions.push({ type: ARENA_STATUS_ACTION_TYPE, label: 'Status' });
+    arenaOptions.push({ type: COMSTAR_ACCESS_ACTION_TYPE, label: hasRoomTerminal ? 'Terminal' : 'ComStar' });
     if (session.duelTermsAvailable) {
       arenaOptions.push({ type: 7, label: 'Duel Terms' });
     }
     arenaOptions.push({ type: 5, label: 'Fight' });
+  } else {
+    arenaOptions.push({ type: 6, label: 'Mech Bay' });
+    arenaOptions.push({ type: COMSTAR_ACCESS_ACTION_TYPE, label: hasRoomTerminal ? 'Terminal' : 'ComStar' });
   }
 
   return buildCmd4SceneInitPacket(
@@ -453,6 +515,46 @@ export function sendAllRosterList(
     ),
     capture,
     'CMD48_ALL_ROSTER',
+  );
+}
+
+export function sendArenaSideMenu(
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  connLog.info('[world] sending arena side menu');
+  send(
+    session.socket,
+    buildMenuDialogPacket(
+      ARENA_SIDE_MENU_ID,
+      'Choose a side:',
+      [...ARENA_SIDE_MENU_ITEMS],
+      nextSeq(session),
+    ),
+    capture,
+    'CMD7_ARENA_SIDE_MENU',
+  );
+}
+
+export function sendArenaStatusList(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  const entries = buildArenaStatusEntries(players, session);
+  connLog.info('[world] sending arena status list (%d entries)', entries.length);
+  send(
+    session.socket,
+    buildCmd48KeyedTripleStringListPacket(
+      ARENA_STATUS_LIST_ID,
+      `Arena Status (${entries.length}/${ARENA_READY_ROOM_MAX_PARTICIPANTS})`,
+      entries,
+      nextSeq(session),
+    ),
+    capture,
+    'CMD48_ARENA_STATUS',
   );
 }
 
@@ -774,6 +876,7 @@ export function sendMechClassPicker(
       maxSpeedMag:    0,
       extraCritCount: 0,
       tonnage:        0,
+      jumpJetCount:   0,
       armorLikeMaxValues: Array<number>(10).fill(0),
       weaponMountInternalIndices: [],
     };
@@ -818,6 +921,7 @@ export function sendMechChassisPicker(
       maxSpeedMag: 0,
       extraCritCount: 0,
       tonnage:    0,
+      jumpJetCount: 0,
       armorLikeMaxValues: Array<number>(10).fill(0),
       weaponMountInternalIndices: [],
     };
@@ -854,12 +958,13 @@ export function sendMechVariantPicker(
     mechType:   mech.mechType,
     slot:       i,
     typeString: mech.typeString,
-    variant:    `${mechKph(mech.walkSpeedMag)}/${mechKph(mech.maxSpeedMag)} kph`,
+    variant:    formatMechPickerVariantSummary(mech),
     name:       mech.typeString,
     walkSpeedMag: mech.walkSpeedMag,
     maxSpeedMag: mech.maxSpeedMag,
     extraCritCount: mech.extraCritCount,
     tonnage:    mech.tonnage,
+    jumpJetCount: mech.jumpJetCount,
     armorLikeMaxValues: mech.armorLikeMaxValues,
     weaponMountInternalIndices: mech.weaponMountInternalIndices,
   }));

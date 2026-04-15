@@ -138,6 +138,11 @@ export interface ClientSession {
    */
   worldPresenceStatus?: number;
   /**
+   * Arena ready-room side selection (1..8) when the player has explicitly picked
+   * a side. Undefined means no side is currently selected for this room.
+   */
+  worldArenaSide?: number;
+  /**
    * Current map room/location identifier from IS.MAP / SOLARIS.MAP.
    * This is separate from roomId, which is a server-side grouping key.
    */
@@ -236,6 +241,14 @@ export interface ClientSession {
   combatJumpAltitude?: number;
   /** Prototype jump-jet fuel percentage (0..100). */
   combatJumpFuel?: number;
+  /** Timestamp of the most recent collision-candidate probe log for this actor. */
+  combatLastCollisionProbeAt?: number;
+  /** Timestamp of the most recent decoded client cmd13 combat contact report log. */
+  combatLastContactReportAt?: number;
+  /** Timestamp of the most recent local jump landing transition. */
+  combatLastJumpLandAt?: number;
+  /** Altitude immediately before the most recent local jump landing transition. */
+  combatLastJumpLandAltitude?: number;
   /** True after the first-stage eject control is armed; a second eject request confirms ejection. */
   combatEjectArmed?: boolean;
   /** Timestamp (ms) of the last cmd12/action 0 fire trigger frame from client. */

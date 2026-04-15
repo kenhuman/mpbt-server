@@ -50,9 +50,14 @@ export const CLASS_RANKING_CHOOSER_LIST_ID = 0x3ED;
 export const TIER_RANKING_RESULTS_LIST_ID = 0x3EC;
 export const CLASS_RANKING_RESULTS_LIST_ID = 0x3EB;
 export const MATCH_RESULTS_MENU_LIST_ID  = 0x3EA;
+export const ARENA_SIDE_MENU_ID         = 0x3F6;
+export const ARENA_STATUS_LIST_ID       = 0x3F5;
+export const ARENA_READY_ROOM_MAX_PARTICIPANTS = 8;
 export const PERSONNEL_MORE_ID          = 0x95;
 export const SOLARIS_TRAVEL_CONTEXT_ID  = 0xC6;
 export const COMSTAR_ACCESS_ACTION_TYPE = 0x08;
+export const ARENA_SIDE_ACTION_TYPE     = 0x09;
+export const ARENA_STATUS_ACTION_TYPE   = 0x0A;
 export const TERMINAL_MENU_LIST_ID      = 0x22;
 
 export const TERMINAL_MENU_ITEMS = [
@@ -101,6 +106,17 @@ export const CLASS_RANKING_CHOOSER_ITEMS = [
   { itemId: 1, text: 'Medium' },
   { itemId: 2, text: 'Heavy' },
   { itemId: 3, text: 'Assault' },
+] as const;
+
+export const ARENA_SIDE_MENU_ITEMS = [
+  'Side 1',
+  'Side 2',
+  'Side 3',
+  'Side 4',
+  'Side 5',
+  'Side 6',
+  'Side 7',
+  'Side 8',
 ] as const;
 
 // ── Per-connection session state ─────────────────────────────────────────────

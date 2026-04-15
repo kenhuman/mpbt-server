@@ -35,9 +35,10 @@ This is a long-haul reverse-engineering project. Every milestone below is blocke
 | Cmd 0x1D — cancel/ESC re-sends mech list | ✅ |
 | Cmd 20 — examine mech text-dialog response | ✅ |
 | `REDIRECT` packet (type `0x03`) | ✅ |
-| Post-redirect game world | 🔬 |
+| Post-redirect game world (world login, navigation, mech bay, combat handoff) | ✅ |
+| Two-human sanctioned duel playtest | ✅ |
 
-The client reaches the mech selection screen, browses mechs, confirms selection, and receives a `REDIRECT`. That is the furthest any known public attempt has reached.
+The emulator now goes well beyond the old redirect-only frontier: the client reaches the world, travels, selects mechs in-world, enters Solaris combat, and can complete supervised two-human sanctioned duel playtests. The remaining work is broader fidelity, richer multi-client arena behavior, and fuller late-1990s-faithful world/combat coverage.
 
 ---
 
@@ -190,13 +191,13 @@ The world uses two distinct room types: **bar** (social spaces, Tier Ranking ter
 |---|---|---|
 | RE server→client combat bootstrap / position sync | ✅ | Full bootstrap sequence documented in RESEARCH.md §19.9: Cmd72 (local mech init) → Cmd64 (remote actors) → Cmd65 (initial positions) → Cmd62 (combat-start, clears SPACEBAR block). SpeedMag Cmd65 echo implemented and confirmed on HUD gauge (§19.10). |
 | Combat movement + speedMag physics | ✅ | Cmd8 (coasting) and Cmd9 (moving) client→server parsed and handled. `maxSpeedMag = walk_mp × 450` from `.MEC` offset `0x16`. `signedSpeedMag = round(-throttlePct × maxSpeedMag / 45)`. Cmd65 echoed on Cmd9 only — echoing on Cmd8 causes physics deadlock. HUD speed gauge confirmed working. See RESEARCH.md §19.10. |
-| In-world 3-step mech picker (Mech Bay) | ✅ | Class → chassis → variant flow implemented. Safe listIds: `0x20` (class/variant), `0x3e` (chassis). Cursor-freeze fix: `Cmd5 CURSOR_NORMAL` sent after every `Cmd26` and after post-selection `Cmd3`. Selected mech slot stored in `session.selectedMechSlot`. See RESEARCH.md §23. |
+| In-world 3-step mech picker (Mech / Mech Bay) | ✅ | Class → chassis → variant flow implemented. Arena scenes now label action type `6` as `Mech`; non-arena rooms still show `Mech Bay`. Safe listIds: `0x20` (class/variant), `0x3e` (chassis). Cursor-freeze fix: `Cmd5 CURSOR_NORMAL` sent after every `Cmd26` and after post-selection `Cmd3`. Selected mech slot stored in `session.selectedMechSlot`. See RESEARCH.md §23. |
 | RE weapon fire packets | 🔧 | v1.23 client → server fire request is now partially decoded in RESEARCH.md §19.3: `Combat_SendCmd12Action_v123` emits `cmd 12`, and action `0` is the gated weapon-fire request from `Combat_InputActionDispatch_v123`. The local fire path also writes client `cmd 10` shot geometry without flushing there. Server `Cmd68` is projectile/effect spawn; `Cmd66`/`Cmd67` now carry damage code/value updates. |
 | RE TIC system | ✅ N/A | Three Targeting Interlock Circuits (A/B/C): v1.23 RE **confirms TIC is entirely client-local**. Toggle membership stored in local arrays (`DAT_004f2128`, `DAT_004f2150`, `DAT_004f2178`); TIC group fire calls a local effect path only. No separate network sender exists. No server-side TIC implementation is needed. Dynamic capture still needed to clarify whether `cmd 12/action 0` targets the selected weapon, selected TIC group, or all queued weapons. |
 | RE damage model | 🔧 | v1.23 damage-result path is partially decoded in RESEARCH.md §19.6.1: `Cmd66` applies actor damage code/value pairs, `Cmd67` applies local-actor pairs, and the shared classifier partitions codes into critical/system, armor-like, internal-like, weapon, and ammo-bin ranges. `.MEC` offset correction: `0x3c` is a signed critical/equipment range bound and weapon ids start at `0x3e`. Exact section labels, kill semantics, and heat/system-degradation mapping still need live capture. |
 | RE jump jets | 🔧 | Fire command **decoded** (§19.3): client sends ESC+'!'+0x2D+0x25+CRC (cmd=12, action=4) via `Combat_SendCmd12Action_v123('\x04')`; landing/touchdown sends `cmd 12/action 6`. The server now matches several confirmed client guards instead of the older loose prototype: jump fuel uses the client's `0x78`/`120` cap, start requires fuel `> 0x32`/`50`, duplicate airborne start is rejected, and grounded recharge follows a single timer path closer to the client's main-loop regen instead of the old per-frame + passive combo. Remaining 🔬: exact airborne drain breakdown by thrust/turn/velocity flags, authoritative altitude/landing semantics for `action 6`, and no-jump chassis validation against broader `.MEC` data. |
 | Implement `src/protocol/combat.ts` | ✅ | All combat packet builders: Cmd64–Cmd73 implemented; combat entry wired in server-world.ts via `/fight` text command; MMC welcome + Cmd72 bootstrap sent on trigger |
-| Selected mech → combat bootstrap propagation | 🔧 | `session.selectedMechSlot` and `session.pendingMechSlot` are stored by the mech picker. `sendCombatBootstrapSequence` must read these to use the player's chosen mech for Cmd72/Cmd65 identity fields. Currently bootstrap still uses a default mech. Codex task on `feature/mech-selection-codex`. |
+| Selected mech → combat bootstrap propagation | ✅ | World mech selection now feeds live combat bootstrap state. `tools\\duel-selected-mech-smoke.mjs` proves the shared duel path sends each pilot's chosen mech ID through `Cmd72` (local) and `Cmd64` (remote) on both clients. |
 | RE torso/leg independence | 🔬 | Legs = heading (KP4/6/2/8); torso = facing (WASD); server must track both; compass shows both simultaneously |
 | RE turn timer / match end | ✅ | **RE complete (issue #79, §23):** No server-to-client match-end packet exists. Win = client local sim kills enemy → results loop → exit key → TCP close. Loss = Cmd67 IS damage → actor-0 IS=0 → disconnect timer → TCP close. Server stops Cmd67 when `playerHealth ≤ 0`. |
 | RE physical combat | 🔬 | Death-from-above (DFA) and alpha strike — dedicated commands or derived from positional data? |
@@ -213,18 +214,21 @@ The world uses two distinct room types: **bar** (social spaces, Tier Ranking ter
 
 *Depends on M6.*
 
-8 sides available; players cannot all enter on the same side. **Sanctioned matches** use only arenas #1 and #2 per sector — results feed SCentEx (M9). The primary full-match use case is a **4v4 lance (8 total players)**.
+Manual-backed arena staging model: the ready room exposes `MECH`, `SIDE`, and `STATUS`; `SIDE` offers eight sides, and players on the same side are teammates. Current implementation assumption: cap an arena ready room at **8 participants**, matching the eight-side model, unless stronger contrary evidence appears. **Sanctioned matches** use only arenas #1 and #2 per sector — results feed SCentEx (M9). The primary full-match use case is a **4v4 lance (8 total players)**.
 
 | Task | Status | Notes |
 |---|---|---|
 | Room broadcast | ❌ | Sync combat state to all clients in the same arena |
-| Player enter / leave events | ❌ | Notify existing clients when a player joins or leaves |
-| Side assignment enforcement | ❌ | Cannot assign all players to the same side |
+| Player enter / leave events | ✅ | Generic same-room `Cmd13` arrival / `Cmd11(status=0)` departure already work for arena rooms, `tools\\arena-room-smoke.mjs` live-validates arena ready-room arrival/departure visibility, and the lone-pilot combat fallback now uses the same departure/restore announcement path. |
+| Side assignment enforcement | 🔧 | Arena scenes now expose `SIDE`, and same-side duel staging is rejected once both pilots explicitly pick the same side. Broader multi-party side-cap enforcement is still open. |
+| Arena ready-room roster / listing model | 🔧 | Manual proves `MECH` / `SIDE` / `STATUS` and eight sides; current server assumption is max 8 participants. Arena scenes now expose manual-aligned `MECH` / `SIDE` / `STATUS`, `STATUS` reports a baseline roster summary (callsign / side / mech-picked state), reports occupancy as `n/8`, and rejects the ninth entrant from a full arena ready room, but custom room naming, an explicit room-size selector, and explicit FFA/team-play labels remain unproven. |
 | Synchronized position | 🔬 | Each client sees other mechs move in real time. Current local Ghidra lead: combat cmd `65` / wire `0x66` (`FUN_00401820`) parses player id, X/Y/Z, rotation-ish bytes, and speed/throttle-ish byte; constants differ from RazorWing/solaris. |
 | Synchronized damage | ❌ | Damage dealt by one client is reflected in all clients' views |
-| Match orchestration | ❌ | Ready-up, start, 15-min timer, end, sanctioned-match flag |
+| Match orchestration | ❌ | Ready-up, start, 15-min timer, end, sanctioned-match flag. The old unsupported solo `Fight` fallback is now rejected whenever another live pilot is already present in the same arena ready room; staged/shared entry remains the only multi-pilot combat path. |
 | F7 — team / lance channel | 🔬 | Scoped broadcast to your lance teammates; v1.23 RE confirms F7 is local-only (no network packet). The server-side team-channel fan-out mechanism (identifying which clients are on the same lance) remains 🔬; wire format unknown. Requires `Cmd8` team assignment to be established. |
 | F8 — all-comm channel | 🔬 | Broadcast to all players in the current arena match; v1.23 RE confirms F8 is local-only (no network packet). The all-comm delivery mechanism and any associated server→client command remain 🔬. |
+
+Live robustness coverage now also includes `tools\\duel-reconnect-restore-smoke.mjs`, which reconnects a participant during the post-duel restore window and confirms deferred settlement delivery plus selected-mech persistence on the replacement session.
 
 **Verification:** Two `MPBTWIN.EXE` instances connect, enter the same arena, see each other, and fight to completion.
 
@@ -238,12 +242,12 @@ The world uses two distinct room types: **bar** (social spaces, Tier Ranking ter
 
 | Task | Status | Notes |
 |---|---|---|
-| All 161 mechs loaded from real `.MEC` files | 🔧 | `loadMechs()` scans/parses `mechdata/*.MEC` in M1; remaining work is validating and integrating all 161 mechs for actual gameplay |
+| All 161 mechs loaded from real `.MEC` files | 🔧 | `loadMechs()` scans/parses `mechdata/*.MEC` in M1. Mech examine/status surfaces and the world mech picker now expose `.MEC`-derived tonnage, walk/run speed, and jump-jet presence across all variants; remaining work is actual gameplay integration (armor, weapons, heat, internal state). |
 | Real Solaris arena layouts | ❌ | From M5 RE work |
 | Correct mech stat handling (armor, weapons, heat) | ❌ | From `.MEC` parser + damage model |
 | Client launcher — `play.pcgi` generator | ✅ | `npm run gen-pcgi` already works |
 | Basic observability (logs, session captures) | ✅ | Already implemented |
-| Graceful disconnect / reconnect handling | 🔬 | ARIES type-`0x05` keepalive is now sent periodically by the server and echoed by the client, matching COMMEG32.DLL `FUN_100014e0` case `5`. `ARIES_KEEPALIVE_INTERVAL_MS` and `SOCKET_IDLE_TIMEOUT_MS` are configurable so long GUI validation sessions are not cut off by the old hardcoded 120-second idle timeout. Real two-GUI validation on 2026-04-07 confirmed both `MPBTWIN.EXE` sessions remained connected beyond 120 seconds and replied to repeated world keepalive pings. Mid-match reconnect/recovery is still unimplemented. |
+| Graceful disconnect / reconnect handling | 🔧 | ARIES type-`0x05` keepalive is now sent periodically by the server and echoed by the client, matching COMMEG32.DLL `FUN_100014e0` case `5`. `ARIES_KEEPALIVE_INTERVAL_MS` and `SOCKET_IDLE_TIMEOUT_MS` are configurable so long GUI validation sessions are not cut off by the old hardcoded 120-second idle timeout. Real two-GUI validation on 2026-04-07 confirmed both `MPBTWIN.EXE` sessions remained connected beyond 120 seconds and replied to repeated world keepalive pings. Lobby→world reconnect now restores the previous room, selected mech, and deferred duel-settlement notice; replacement-session settlement sync also covers disconnect/reconnect timing races. Longer mid-match recovery and broader world-session restoration are still incomplete. |
 
 **Verification:** Full play session — two humans, real mechs, real arena, fight to conclusion — with no manual intervention.
 
@@ -294,6 +298,7 @@ These are gaps we know exist. They are not bugs — they are the RE frontier.
 - **`SOLARIS.MAP` / `IS.MAP` exit graph** — leading room tables are fully decoded (RESEARCH.md §19.7); the trailing binary section (picture/resource data) still needs a separate movement/topology RE pass to extract authentic room-to-room exit connections and room-type classifications.
 - **F7 / F8 chat channel differentiation** — two distinct broadcast channels exist (team/lance and all-comm); both are arena-phase constructs gated on `Cmd8` team assignment; wire-format difference is unknown. Tracked in M7.
 - **Bar booth terminal commands** — `KP5` → `Cmd48` all-roster query and `Cmd7(0x3f2)` personnel record are implemented; Tier Ranking terminal activation format is still unknown.
+- **Arena ready-room creation / listing UI** — manual evidence proves `MECH`, `SIDE`, and `STATUS` in the ready room plus an eight-side team model; current server work assumes up to 8 participants, but custom room naming, an explicit room-size selector, and explicit FFA/team-play labels remain unproven.
 - **Tram / monorail command** — ✅ **RESOLVED** (RESEARCH.md §19.10): T.O.F.S. uses the same `cmd5 actionType 4 → Cmd43 → cmd10` path as regular Solaris travel; no separate tram command. Closes issue #70.
 - **SCentEx result-reporting protocol** — how does the server communicate sanctioned match results?
 - **Server→client combat position sync (`Cmd65`)** — partially decoded (RESEARCH.md §19.6.1); signed direction conventions and exact payload layout need live capture confirmation.

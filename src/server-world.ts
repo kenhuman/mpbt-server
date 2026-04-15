@@ -53,6 +53,7 @@ import {
 } from './protocol/world.js';
 import { PlayerRegistry, ClientSession } from './state/players.js';
 import { launchRegistry } from './state/launch.js';
+import { worldResumeRegistry } from './state/world-resume.js';
 import {
   countSavedUnreadMessages,
 } from './db/messages.js';
@@ -77,6 +78,10 @@ import {
   CLASS_RANKING_RESULTS_LIST_ID,
   PERSONNEL_LIST_ID,
   PERSONNEL_MORE_ID,
+  ARENA_SIDE_MENU_ID,
+  ARENA_STATUS_LIST_ID,
+  ARENA_SIDE_ACTION_TYPE,
+  ARENA_STATUS_ACTION_TYPE,
   SOLARIS_TRAVEL_CONTEXT_ID,
   TERMINAL_MENU_LIST_ID,
   getSolarisRoomName,
@@ -96,6 +101,8 @@ import {
   buildSceneInitForSession,
   sendSceneRefresh,
   sendAllRosterList,
+  sendArenaSideMenu,
+  sendArenaStatusList,
   sendSolarisTravelMap,
   currentRoomPresenceEntries,
   sendMechClassPicker,
@@ -119,6 +126,7 @@ import {
   clearSessionDuelState,
   handleDuelTermsSubmit,
   tryStartStagedDuelCombat,
+  getArenaSoloFightRejection,
   sendStagedDuelTermsPanel,
   sendCombatBootstrapSequence,
   resetCombatState,
@@ -129,11 +137,14 @@ import {
   handleCombatMovementFrame,
   handleCombatWeaponFireFrame,
   handleCombatActionFrame,
+  handleCombatContactReportFrame,
   handleCombatEjectRequest,
   handleCombatKeepalivePacket,
   handleMechPickerCmd7,
   handleMechPickerCmd20,
   handleActiveScrollListMore,
+  handleArenaSideSelection,
+  flushPendingDuelSettlementNotice,
 } from './world/world-handlers.js';
 
 const WELCOME_TEXT = 'Welcome to the game world.';
@@ -192,28 +203,34 @@ async function handleWorldLogin(
     }
   }
 
+  const accountResume = worldResumeRegistry.consume(launch.accountId, session.username);
+  const restoredRoomId = accountResume?.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
+
   session.accountId       = launch.accountId;
-  session.displayName     = launch.displayName;
-  session.allegiance      = launch.allegiance;
-  session.cbills          = launch.cbills;
-  session.selectedMechId   = launch.mechId;
-  session.selectedMechSlot = launch.mechSlot;
+  session.displayName     = accountResume?.displayName ?? launch.displayName;
+  session.allegiance      = accountResume?.allegiance ?? launch.allegiance;
+  session.cbills          = accountResume?.cbills ?? launch.cbills;
+  session.selectedMechId   = accountResume?.selectedMechId ?? launch.mechId;
+  session.selectedMechSlot = accountResume?.selectedMechSlot ?? launch.mechSlot;
+  session.worldArenaSide   = accountResume?.worldArenaSide;
+  session.pendingDuelSettlementNotice = accountResume?.pendingDuelSettlementNotice;
   if (session.accountId !== undefined) {
     session.worldRosterId = 100000 + session.accountId;
   }
   connLog.info(
-    '[world-login] launch record found: displayName="%s" allegiance=%s mech=%s (id=%d slot=%d rosterId=%d)',
+    '[world-login] launch record found: displayName="%s" allegiance=%s mech=%s (id=%d slot=%d rosterId=%d room=%d)',
     session.displayName ?? session.username,
     session.allegiance ?? '(none)',
     launch.mechTypeString,
     launch.mechId,
     launch.mechSlot,
     session.worldRosterId ?? 0,
+    restoredRoomId,
   );
 
   session.phase          = 'world';
-  setSessionRoomPosition(session, DEFAULT_MAP_ROOM_ID);
-  session.roomId         = mapRoomKey(DEFAULT_MAP_ROOM_ID);
+  setSessionRoomPosition(session, restoredRoomId);
+  session.roomId         = mapRoomKey(restoredRoomId);
 
   connLog.info(
     '[world-login] accepted: user="%s" displayName="%s" allegiance=%s service="%s"',
@@ -332,6 +349,7 @@ function handleWorldGameData(
           connLog.error('[world] failed to query unread ComStar messages: %s', msg);
         });
     }
+    flushPendingDuelSettlementNotice(session);
 
   } else if (cmdIdx === 1) {
     // Cmd-1 PingAck: client acknowledging a server ping; no server reply needed.
@@ -378,6 +396,18 @@ function handleWorldGameData(
       }
       connLog.info('[world] /fightrestart: stopping timers and resetting combat state');
       resetCombatState(session);
+      if (session.phase === 'world') {
+        const soloFightRejection = getArenaSoloFightRejection(players, session);
+        if (soloFightRejection) {
+          send(
+            session.socket,
+            buildCmd3BroadcastPacket(soloFightRejection, nextSeq(session)),
+            capture,
+            'CMD3_FIGHT_ROOM_OCCUPIED',
+          );
+          return;
+        }
+      }
       sendCombatBootstrapSequence(players, session, connLog, capture);
       return;
     }
@@ -454,6 +484,17 @@ function handleWorldGameData(
         session.combatVerificationMode = undefined;
       }
       if (!session.combatInitialized && session.phase === 'world') {
+        const soloFightRejection = getArenaSoloFightRejection(players, session);
+        if (soloFightRejection) {
+          send(
+            session.socket,
+            buildCmd3BroadcastPacket(soloFightRejection, nextSeq(session)),
+            capture,
+            'CMD3_FIGHT_ROOM_OCCUPIED',
+          );
+          session.combatVerificationMode = undefined;
+          return;
+        }
         sendCombatBootstrapSequence(players, session, connLog, capture);
       } else {
         connLog.debug('[world] /fight ignored: combatInitialized=%s phase=%s',
@@ -497,6 +538,16 @@ function handleWorldGameData(
         return;
       }
       if (!session.combatInitialized && session.phase === 'world') {
+        const soloFightRejection = getArenaSoloFightRejection(players, session);
+        if (soloFightRejection) {
+          send(
+            session.socket,
+            buildCmd3BroadcastPacket(soloFightRejection, nextSeq(session)),
+            capture,
+            'CMD3_FIGHT_ROOM_OCCUPIED',
+          );
+          return;
+        }
         connLog.info('[world] cmd-5 Fight button: triggering combat bootstrap room=%d', currentRoomId);
         sendCombatBootstrapSequence(players, session, connLog, capture);
       } else {
@@ -513,7 +564,7 @@ function handleWorldGameData(
         connLog.warn('[world] cmd-5 combat action type=6 ignored outside active duel');
         return;
       }
-      // "Mech Bay" button — open the 3-step mech picker.
+      // "Mech"/"Mech Bay" button — open the 3-step mech picker.
       if (session.phase !== 'world') {
         connLog.warn('[world] cmd-5 mech bay ignored outside world phase: phase=%s', session.phase);
         return;
@@ -527,6 +578,30 @@ function handleWorldGameData(
         return;
       }
       sendStagedDuelTermsPanel(players, session, connLog, capture);
+      return;
+    }
+    if (parsed.actionType === ARENA_SIDE_ACTION_TYPE) {
+      if (session.phase !== 'world') {
+        connLog.warn('[world] cmd-5 arena side ignored outside world phase: phase=%s', session.phase);
+        return;
+      }
+      if (worldMapByRoomId.get(session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID)?.type !== 'arena') {
+        connLog.warn('[world] cmd-5 arena side ignored outside arena room: room=%d', session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID);
+        return;
+      }
+      sendArenaSideMenu(session, connLog, capture);
+      return;
+    }
+    if (parsed.actionType === ARENA_STATUS_ACTION_TYPE) {
+      if (session.phase !== 'world') {
+        connLog.warn('[world] cmd-5 arena status ignored outside world phase: phase=%s', session.phase);
+        return;
+      }
+      if (worldMapByRoomId.get(session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID)?.type !== 'arena') {
+        connLog.warn('[world] cmd-5 arena status ignored outside arena room: room=%d', session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID);
+        return;
+      }
+      sendArenaStatusList(players, session, connLog, capture);
       return;
     }
     if (parsed.actionType === COMSTAR_ACCESS_ACTION_TYPE) {
@@ -683,6 +758,16 @@ function handleWorldGameData(
       return;
     }
 
+    if (parsed.listId === ARENA_SIDE_MENU_ID) {
+      handleArenaSideSelection(players, session, parsed.selection, connLog, capture);
+      return;
+    }
+
+    if (parsed.listId === ARENA_STATUS_LIST_ID && parsed.selection > 0) {
+      sendPersonnelRecord(players, session, parsed.selection - 1, 1, connLog, capture);
+      return;
+    }
+
     if (parsed.listId === COMSTAR_SEND_TARGET_MENU_ID) {
       handleComstarSendTargetSelection(players, session, parsed.selection, connLog, capture);
       return;
@@ -749,6 +834,8 @@ function handleWorldGameData(
     // Combat-mode inbound frame (client sends Cmd8/Cmd9 for movement; weapon fire uses Cmd10).
     if (cmdIdx === 8 || cmdIdx === 9) {
       handleCombatMovementFrame(players, session, payload, connLog, capture);
+    } else if (cmdIdx === 13) {
+      handleCombatContactReportFrame(players, session, payload, connLog);
     } else if (cmdIdx === 12) {
       handleCombatActionFrame(players, session, payload, connLog, capture);
     } else if (cmdIdx === 20) {
@@ -922,6 +1009,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     );
     savePendingIncomingComstarPrompt(session, connLog, 'disconnect');
     clearSessionDuelState(players, session, connLog, 'player disconnected');
+    worldResumeRegistry.save(session);
     if (session.worldInitialized) {
       notifyRoomDeparture(players, session, connLog);
     }

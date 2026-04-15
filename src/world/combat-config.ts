@@ -22,11 +22,17 @@ export const BOT_FALLBACK_WEAPON_DAMAGE = 5;
 
 // ── Jump jets ──────────────────────────────────────────────────────────────────
 
-/** Prototype jump-jet altitude echoed through Cmd65 after cmd12/action 4. */
-export const JUMP_JET_ALTITUDE = 1200;
+/** Combat-world coordinate scale: 1000 units = 1 meter. */
+export const COMBAT_WORLD_UNITS_PER_METER = 1_000;
 
-/** Altitude step per jump-jet tick for the prototype ascent/descent arc. */
-export const JUMP_JET_STEP = 240;
+/**
+ * Fallback visible jump apex (meters) when a chassis has jump jets but no
+ * documented BT-MAN jump range yet.
+ */
+export const JUMP_JET_DEFAULT_APEX_METERS = 24;
+
+/** Number of ascent updates before the prototype jump arc peaks. */
+export const JUMP_JET_ASCENT_STEPS = 5;
 
 /** Tick interval (ms) for prototype jump-jet altitude updates. */
 export const JUMP_JET_TICK_MS = 120;
@@ -45,6 +51,20 @@ export const JUMP_JET_FUEL_REGEN_INTERVAL_MS = 100;
 
 /** Passive grounded jump-jet fuel regen amount per interval tick; client adds dt*10/100. */
 export const JUMP_JET_FUEL_REGEN_PER_TICK = 10;
+
+// ── Collision-damage research probes ───────────────────────────────────────────
+
+/** Horizontal distance (combat world units) considered "close contact" for probe logging. */
+export const COLLISION_PROBE_HORIZONTAL_DISTANCE = 18_000;
+
+/** Vertical tolerance for grounded overlap probes when neither actor is airborne. */
+export const COLLISION_PROBE_VERTICAL_TOLERANCE = 2_500;
+
+/** Cooldown between repeated collision-candidate probe logs for the same duel pair. */
+export const COLLISION_PROBE_LOG_COOLDOWN_MS = 1_500;
+
+/** Landing events inside this window are tagged as possible jump-impact candidates. */
+export const COLLISION_PROBE_LANDING_WINDOW_MS = 1_000;
 
 // ── Weapon fire gate ──────────────────────────────────────────────────────────
 

@@ -1292,7 +1292,7 @@ page opener itself:
     - **Arenas / ready rooms / battlegrounds** are real room/category concepts.
       - Manual: arenas, ready rooms, sanctioned arenas, and battleground entry are explicit.
       - Client/server RE: arena scenes get special scene options like
-        `Fight`, `Mech Bay`, and `Duel Terms`.
+        `Fight`, `Mech`, and `Duel Terms`.
     - **Tram / monorail travel** is real, but currently looks more like a
       **travel interaction/system** than a distinct packet family or proven universal
       room enum.
@@ -2633,12 +2633,46 @@ Additional jump-fuel findings from `FUN_0042cf60 -> FUN_0042c610`:
 - The local jump-ready indicator uses hysteresis: it flips back on when recharge crosses above `0x3c` (`60`) and flips off again once active fuel drops below `0x32` while still above `0x28` (`40`).
 - Grounded recharge is continuous in the main movement/update loop (`+ dt * 10 / 100`), not a separate movement-frame bonus plus passive timer.
 - The local jump input path also refuses start while jump state flags are already active, matching a server-side "ignore duplicate airborne start" guard more closely than the earlier prototype restart behavior.
+- `Combat_JumpJetInputTick_v123` also refuses jump when the local mech data field at `*(actor->mec + 0x38)` is zero. `Combat_InitActorRuntimeFromMec_v123` copies decrypted `.MEC` offset `0x38` into actor runtime offset `0x486`, and local `.MEC` cross-checks matched retail expectations (`JR7-D=5`, `JVN-10F=6`, `BJ-1=4`, while `AS7-D`, `ANH-1A`, `LCT-1E`, and `AWS-8R` all read `0`). Treat `.MEC + 0x38` as the current best jump-capability / jump-jet-count gate.
+- Live Moose/Cougar duel captures from 2026-04-15 showed repeated `cmd12/action 6` frames after later fuel-blocked `action 4` attempts while the actor was already grounded. Treat `action 6` as a jump-state transition that still needs local jump-state correlation, not as stand-alone proof that a real touchdown occurred.
 
 **Jump jet fire — `Combat_SendCmd12Action_v123('\x04')`:**
 ```
 Wire:  ESC '!'  [0x0C+0x21=0x2D]  [0x04+0x21=0x25]  [CRC]
                  cmd = 12 (0x0C)    action = 4
 ```
+
+**`cmd13` family follow-up — binary confirm vs combat contact report (NEW, PARTIAL):**
+
+- Static RE on 2026-04-15 found that `cmd13` (`0x0d`) is **not collision-exclusive**:
+  - `World_HandleBinarySceneOfferInput_v123` (`0x0041e2f0`) sends a **bare** `cmd13` on Enter / Return when confirming certain world opcode-17 binary offer panels.
+  - `FUN_00448b50 -> FUN_0040ea60` sends a **payload-bearing** `cmd13` from the combat mech-contact path.
+- So the useful distinction is **payload shape**, not the opcode byte alone.
+- The combat contact branch still does **not** use `cmd12`.
+- `FUN_004408f0` scans the active actor array rooted at `DAT_004f21cc` and returns the first actor whose:
+  - horizontal distance from the candidate point is within that actor's radius, and
+  - vertical span overlaps the candidate `z` against both actors' height bounds.
+- `FUN_00448b50` is the only current caller of that overlap test, and is itself called from the landing / ground-contact resolver `FUN_00448d80`.
+- On contact, `FUN_00448b50`:
+  - plays a collision/contact sound path (`FUN_0043b5e0(0x32)` / `FUN_0043b7b0(0x32,100)`),
+  - computes a short-lived response vector in `_DAT_004f203a/_004f203e/_004f2042`,
+  - sets an expiry timestamp `_DAT_004f2046 = timeGetTime() + 300`, and
+  - sends a tiny dedicated frame via `FUN_0040ea60`.
+- `FUN_0040ea60` writes:
+
+```text
+cmd 13
+  [contact actor id byte via DAT_00478dc0[index]]
+  [type2 response term A]
+  [type2 response term B]
+  [type2 response term C]
+```
+
+- The three `type2` payload values come from the current local response-vector fields:
+  - grounded path: `DAT_004f1d9e / DAT_004f1da2 / DAT_004f1da6`
+  - airborne/jump path: `DAT_004f1daa / DAT_004f1dae / DAT_004f1db2`
+- **Important:** this is strong evidence that retail has a real mech-contact report / feedback path, but the exact server-side semantics of the **payload-bearing combat `cmd13` variant** are still unresolved.
+- Server follow-up on 2026-04-15: `mpbt-server` now decodes inbound combat `cmd13` as `[actorId][type2 A][type2 B][type2 C]` and logs the parsed tuple alongside current local/peer movement and recent landing state. A synthetic live probe (`actorId=1`, responses `123/456/789`) hit the new logger successfully, so future real duel captures can be checked for authentic contact-report traffic without guessing at damage semantics.
 
 
 **Weapon/TIC local-selection paths — `Combat_InputActionDispatch_v123`:**
@@ -2924,6 +2958,71 @@ contracts / offers / duel terms.
 - Subtype `4` is separate and centered on membership bidding.
 - Subtype `3` is the duel branch.
 
+### Arena ready-room staging semantics (2026-04-15)
+
+Manual re-read plus follow-up static client RE tightened the current arena-room picture:
+
+- `BT-MAN.txt` explicitly identifies the **arena ready room** as the staging room from
+  which players enter combat.
+- The ready-room crossbar is documented as `MECH`, `SIDE`, and `STATUS`.
+- `SIDE` is documented as a menu of the **eight sides**; players on the same side are
+  teammates, and players may not all enter the arena while on the same side.
+- `STATUS` is documented as listing **every player in the arena ready room** together
+  with each player's side and whether that player has picked a BattleMech.
+
+**What this does and does not prove**
+
+- This is strong evidence for a side-based multiplayer staging room and makes an
+  eight-way free-for-all interpretation plausible if one player occupies each side.
+- The manual does **not** state a hard numeric player cap for the ready room.
+- For current server work, an **8-participant cap** is a practical implementation
+  assumption derived from the eight-side model, not a historically proven maximum.
+
+**Current client-RE implication**
+
+- Follow-up work on `FUN_0041BE90` / `World_HandleSceneActionResponsePacket_v123`
+  still points opcode `17` at agreement / duel / membership / subcontract panels.
+- No static evidence has yet shown a distinct arena-room-creation form with custom
+  room naming, an explicit room-size selector, or explicit `FFA` / `team play`
+  labels in `Mpbtwin.exe`.
+
+### Scene-action vs room-presence split (2026-04-15)
+
+Deeper tracing now makes the client structure look less like "arena room creation is
+hiding inside opcode 17" and more like "the world scene is a generic server-driven
+shell with separate presence/state feeds":
+
+- `World_ParseSceneInitCacheRow_v123` shows `Cmd4` carries a per-scene table of
+  **action ids + display text**. These become the clickable scene buttons shown in the
+  world window.
+- `World_HandleSceneRosterAction_v123` confirms those buttons are not hardwired to
+  special arena forms. Clicking one of the scene entries simply sends `cmd 5` with the
+  server-supplied scene action id from `g_world_SceneRosterEntryTable`.
+- `World_HandleSceneWindowInput_v123` confirms the scene window is a generic shell:
+  location buttons send `cmd 23`, scene-action buttons dispatch through
+  `World_HandleSceneRosterAction_v123`, and the special roster key/button path at
+  widget id `0x121` opens the separate room-roster UI.
+- `World_HandleRoomPresenceSync_v123`, `World_HandleRoomPresenceRename_v123`,
+  `World_HandleRoomPresenceEvent_v123`, and `World_HandleRoomPresenceArrival_v123`
+  maintain a **live room-presence table** completely outside opcode `17`.
+  This is currently the strongest client-side machinery for STATUS-like occupant lists.
+- The existing local roster consumer `FUN_00411750` / `FUN_00411da0` is the
+  already-documented **social-room booth roster** (`All`, `Stand`, `New Booth`,
+  `Join`) backed by that presence table plus `Cmd7(listId = 3, ...)`. That confirms at
+  least one room-roster surface is built from presence/state commands, not from opcode
+  `17`.
+
+**Current best inference**
+
+- Arena `MECH` / `SIDE` / `STATUS` are most likely ordinary **scene actions**
+  advertised by `Cmd4`, with server-selected follow-up replies.
+- The client does **not** currently show a proven bespoke "create named arena room"
+  modal in the same way it shows agreement / subcontract / duel opcode-17 panels.
+- If custom arena rooms existed, the strongest remaining candidates are:
+  1. server-defined scene-action flows opened after `cmd 5 <actionId>`
+  2. room-presence / roster command families (`Cmd10`-`Cmd13`)
+  3. string resources loaded from `MPBT.MSG` rather than literal `Mpbtwin.exe` text
+
 ### Sanctioned-duel follow-on clues (2026-04-14)
 
 These findings do **not** fully map the sanctioned-duel ranking flow yet, but they
@@ -2965,6 +3064,11 @@ narrow the missing public-results layer substantially:
 - `BT-MAN.txt` also describes the tier-ranking listing shape:
   - rows show **ComStar ID**, **Handle**, **rank score**, and **win/loss ratio**
   - this maps cleanly onto the client's generic keyed list layout (`itemId + 3 columns`)
+- Manual constraints on the ranking model are still directional rather than formula-complete:
+  - SCentEx compares **BattleMech effectiveness** and **MechWarrior rankings**
+  - rank gain is explicitly tied to **damage inflicted vs damage sustained**
+  - fighting a **lower-ranked** opponent or a **less-effective mech** reduces the gain
+  - the manual does **not** publish weights, thresholds, or the exact rank-score formula
 - Additional client request-path clue:
   - `FUN_0040d2f0()` is the concrete outbound **`Cmd7`** writer:
     `startCmd('\a') + type1(list_id) + type4(selection)`
@@ -2990,6 +3094,21 @@ narrow the missing public-results layer substantially:
     `cmd28` for page advance, and do **not** require either `cmd 10` or
     `cmd 16` unless future capture/RE proves the result set actually uses one of
     the special `Cmd26` / `Cmd32` multi-select list ids
+- Additional client-side negative evidence for `duel-ranking-model`:
+  - `World_HandleInfoPanelPacket_v123` (`004140b0`) reads one numeric
+    `Battles to date` field plus six server-supplied strings and formats the
+    personnel/ranking detail window; it does not derive a rank score locally
+  - `FUN_0040fe80()` (`0040fe80`) builds keyed ranking/result lists from
+    server-supplied `item_id + row string` entries and preserves those ids for
+    later `Cmd7` selection; again no local score math was found there
+  - nearby helpers `FUN_00415810()`, `FUN_00415a40()`, and `FUN_00415cf0()`
+    appear to be generic window/list/text-page helpers rather than SCentEx logic
+  - Ghidra string searches for ranking labels such as `Class Rankings`,
+    `Tier Rankings`, `Standing with`, and `Rank    :` produced no literal hits in
+    `Mpbtwin.exe`, which is consistent with those labels coming from `MPBT.MSG`
+  - current best inference: the retail client ranking UI is consuming
+    **server-provided rank values/strings**, and the actual SCentEx formula may be
+    entirely server-side
 
 ### Open sanctioned-duel questions
 
@@ -3133,6 +3252,80 @@ Key handlers for combat bootstrap and position sync:
 | 71 | `0x6c` | `FUN_0040eae0` | Resets the current projectile/effect globals by setting `DAT_00478df8` and `DAT_00478dfc` to `-1`. This likely brackets or clears the effect context used by cmd 66/67 follow-up damage pairs. |
 | 72 | `0x6d` | `FUN_00445110` | Local combat bootstrap. Reads the scenario/title, local actor slot, terrain/resource point lists, actor identity strings, initial coordinates, and local mech/damage-state block via `Combat_ReadLocalActorMechState_v123`; then sets `DAT_0047ef60 |= 1` and initializes local actor state at `DAT_004f1d30`. This is now traced enough for a conservative prototype builder, but several identity/status fields still need live capture labels. |
 | 73 | `0x6e` | `FUN_0040e2f0` | Actor rate/bias-field update. Reads actor slot plus two bytes, stores each as `(value - 0x2a) * 0x38e` into per-actor fields near `DAT_004f202a`/`DAT_004f202e`, and marks `_DAT_00478df4 = 1`. Exact combat meaning still needs dynamic capture. |
+
+#### §19.6.1a — v1.23 Mech Contact / Collision Response (NEW, PARTIAL)
+
+Follow-up Ghidra pass on 2026-04-15 traced the retail client's ordinary mech-contact path.
+
+**Confirmed local contact detection / response chain:**
+
+```text
+FUN_00449220             // per-actor movement tick
+  -> FUN_00448d80        // landing / ground-contact resolver
+     -> FUN_00448b50     // actor-contact branch
+        -> FUN_004408f0  // overlap detector against active actors
+        -> FUN_0040ea60  // payload-bearing cmd13 contact report
+        -> FUN_0043b5e0 / FUN_0043b7b0  // contact sound
+        -> writes _DAT_004f203a/_3e/_42 + _DAT_004f2046
+           -> FUN_0042c830 consumes those globals as a short-lived rebound / slide impulse
+```
+
+`FUN_004408f0` contact test:
+
+- iterates active actor slots
+- checks 2D radius overlap using actor center/radius
+- checks Z overlap using both actors' height bounds
+- returns the contacted actor struct when both conditions hold
+
+`FUN_0042c830` response behavior:
+
+- reads the temporary vector written by `FUN_00448b50`
+- applies it only while `timeGetTime() < _DAT_004f2046`
+- accumulates the result into the local movement delta fields
+- behaves like a short bump / rebound / slide response rather than a damage routine
+
+Follow-up airborne-state check:
+
+- `FUN_00449c60` (called from `FUN_00448d80` and `Combat_Cmd70_ActorAnimState_v123` subcommand `6`) only:
+  - checks an airborne/falling state,
+  - integrates a vertical response term into `*(param_1 + 0x82)`,
+  - sets bit `0x08` in `*(param_1 + 0xdc)`,
+  - and returns.
+- `Combat_Cmd70_ActorAnimState_v123` subcommands `4`, `6`, and `8` manipulate airborne / fall / landing animation state and call sound/animation helpers such as `FUN_0043b3e0`, `FUN_0043b400`, `FUN_0043b4a0`, and `FUN_00419100`.
+- This branch still does **not** enter `Combat_ApplyDamageCodeValue_v123`; so even the jump/landing-specific animation path currently looks like state sync + impulse + audio, not client-local DFA/collision damage.
+
+**Most important negative result:** this ordinary collision/contact branch still does **not** call the real damage applicators:
+
+- `Combat_ApplyDamagePairOrQueueEffect_v123` (`0040de90`)
+- `Combat_ApplyDamageCodeValue_v123` (`0040e100`)
+- `Combat_UpdateCriticalDamageState_v123` (`0042bd90`)
+
+The only non-packet caller now confirmed for `Combat_ApplyDamageCodeValue_v123` is the projectile/effect path:
+
+```text
+FUN_004409f0 -> FUN_00440c50 -> FUN_00441130 -> Combat_ApplyDamageCodeValue_v123
+```
+
+Effect / allocator follow-up:
+
+- `Combat_AllocateProjectileEffect_v123` (`0x00427400`) is only called by:
+  - `Combat_Cmd68_SpawnWeaponEffect_v123`
+  - `Combat_InputActionDispatch_v123`
+  - `Combat_FireSelectedTicGroup_v123`
+- `FUN_00424120` (the local immediate-impact helper for non-allocated / instant-hit weapon paths) is only called by:
+  - `Combat_InputActionDispatch_v123`
+  - `Combat_FireSelectedTicGroup_v123`
+- `FUN_00449480` (local `cmd10` shot-geometry writer) is likewise only called by:
+  - `Combat_InputActionDispatch_v123`
+  - `Combat_FireSelectedTicGroup_v123`
+- `FUN_00424120` can produce local impact FX + sound with no damage application when there is no valid actor / attachment target, but it still does **not** call `Combat_ApplyDamageCodeValue_v123`.
+- So far, the client's named damage-carrying effect machinery is still weapon-fire-specific, not collision-specific.
+
+So far, static RE supports:
+
+- **yes:** ordinary mech bumping/contact, impact sound, effect/report packet, and rebound response
+- **not yet found:** a client-local damage rule for ordinary mech-to-mech collision
+- **still open:** whether DFA / ram-style damage is server-decided from `cmd13`, or lives in a distinct branch not yet identified
 
 `Combat_Cmd72_InitLocalActor_v123` field flow:
 

@@ -83,6 +83,9 @@ function decryptMec(buf: Buffer, nameLower: string): void {
  * 0x00433910:
  *   walk speed register     = mec_speed * 300
  *   run/max forward speed   = round(mec_speed * 1.5) * 300
+ * jumpJetCount is confirmed by RE of Combat_JumpJetInputTick_v123 /
+ * Combat_InitActorRuntimeFromMec_v123:
+ *   decrypted .MEC offset 0x38 gates local jump start (0 = no jump capability)
  * extraCritCount is confirmed by RE of Combat_ReadLocalActorMechState_v123 @
  * 0x004456c0.
  *
@@ -94,6 +97,7 @@ function readMecFields(
   nameLower: string,
 ): {
   mecSpeed: number;
+  jumpJetCount: number;
   extraCritCount: number;
   tonnage: number;
   armorLikeMaxValues: number[];
@@ -116,6 +120,7 @@ function readMecFields(
   return {
     mecSpeed:       buf.readUInt16LE(0x16),
     tonnage:        buf.readUInt16LE(0x18),
+    jumpJetCount:   buf.readUInt16LE(0x38),
     extraCritCount: buf.readInt16LE(0x3c),
     armorLikeMaxValues: [
       buf.readUInt16LE(0x1a), // LA
@@ -268,7 +273,7 @@ export function loadMechs(): MechEntry[] {
         );
       }
       const mecPath = path.join(mechDir, filename);
-      const { mecSpeed, extraCritCount, tonnage, armorLikeMaxValues, weaponMountInternalIndices } =
+      const { mecSpeed, jumpJetCount, extraCritCount, tonnage, armorLikeMaxValues, weaponMountInternalIndices } =
         readMecFields(mecPath, typeString.toLowerCase());
       return {
         id,
@@ -281,6 +286,7 @@ export function loadMechs(): MechEntry[] {
         maxSpeedMag:  maxSpeedMagFromMecSpeed(mecSpeed),
         extraCritCount,
         tonnage,
+        jumpJetCount,
         armorLikeMaxValues,
         weaponMountInternalIndices,
       };

@@ -21,6 +21,8 @@
  * When disabled = false with null fields: data is partially documented.
  */
 
+import type { MechEntry } from '../protocol/game.js';
+
 export type WeightClass   = 'light' | 'medium' | 'heavy' | 'assault';
 export type ArmorClass    = 'light' | 'medium' | 'heavy' | 'assault';
 export type EffectiveRange = 'S' | 'M' | 'L';
@@ -574,6 +576,13 @@ const ENTRIES: MechStats[] = [
 export const MECH_STATS: ReadonlyMap<string, MechStats> =
   new Map(ENTRIES.map(e => [e.designation, e]));
 
+type RuntimeMechSummary = Pick<MechEntry, 'tonnage' | 'maxSpeedMag' | 'jumpJetCount'>;
+
+function runtimeMaxSpeedKph(mech: RuntimeMechSummary | undefined): number | null {
+  if (!mech || mech.maxSpeedMag <= 0) return null;
+  return Math.round(mech.maxSpeedMag * 16.2 / 450);
+}
+
 /**
  * Build the compact mech-stats text shown in the examine dialog (Cmd20).
  *
@@ -581,30 +590,32 @@ export const MECH_STATS: ReadonlyMap<string, MechStats> =
  * per FUN_00433310 RE.  0x1B is stripped to prevent CRC encoding failure.
  *
  * @param typeString  Uppercase variant designation, e.g. "ANH-1A".
+ * @param runtimeMech Optional `.MEC`-derived runtime data for variants whose
+ *                    manual entry is partial or missing.
  */
-export function buildMechExamineText(typeString: string): string {
+export function buildMechExamineText(typeString: string, runtimeMech?: RuntimeMechSummary): string {
   const SEP      = '\x5c';
   const sanitize = (s: string) => s.replace(/\x1b/g, '');
   const stats    = MECH_STATS.get(typeString);
 
-  if (!stats || stats.disabled) {
-    const safeType = sanitize(typeString);
-    const cls = stats
-      ? sanitize(stats.weightClass.charAt(0).toUpperCase() + stats.weightClass.slice(1))
-      : '';
-    return cls ? `${safeType}${SEP}${cls} Class` : safeType;
-  }
-
   const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
   const safeType = sanitize(typeString);
-  const safeName = stats.name ? sanitize(stats.name) : '';
+  const safeName = stats?.name ? sanitize(stats.name) : '';
   const title = safeName ? `${safeType}  ${safeName}` : safeType;
-  const specParts: string[] = [sanitize(cap(stats.weightClass))];
-  if (stats.tonnage     != null) specParts.push(`${stats.tonnage}T`);
-  if (stats.maxSpeedKph != null) specParts.push(`${stats.maxSpeedKph}kph`);
-  if (stats.jumpMeters  != null) specParts.push(`Jump:${stats.jumpMeters}m`);
+  const weightClass = stats?.weightClass ? sanitize(cap(stats.weightClass)) : '';
+  const tonnage = stats?.tonnage ?? runtimeMech?.tonnage ?? null;
+  const maxSpeedKph = stats?.maxSpeedKph ?? runtimeMaxSpeedKph(runtimeMech);
+  const specParts: string[] = [];
+  if (weightClass) specParts.push(weightClass);
+  if (tonnage != null) specParts.push(`${tonnage}T`);
+  if (maxSpeedKph != null) specParts.push(`${maxSpeedKph}kph`);
+  if (stats?.jumpMeters != null) {
+    specParts.push(`Jump:${stats.jumpMeters}m`);
+  } else if ((runtimeMech?.jumpJetCount ?? 0) > 0) {
+    specParts.push(`Jump Jets:${runtimeMech?.jumpJetCount}`);
+  }
   const specs = specParts.join('  ');
-  const arms  = Array.isArray(stats.armament) && stats.armament.length > 0
+  const arms  = Array.isArray(stats?.armament) && stats.armament.length > 0
     ? sanitize(stats.armament.join(' '))
     : '';
 

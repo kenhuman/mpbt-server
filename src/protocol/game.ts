@@ -342,6 +342,12 @@ export interface MechEntry {
    */
   tonnage: number;
   /**
+   * Jump-jet count / capability field from decrypted .MEC offset 0x38.
+   * Retail jump input refuses start when this field is zero
+   * (`Combat_JumpJetInputTick_v123` / `Combat_InitActorRuntimeFromMec_v123`).
+   */
+  jumpJetCount: number;
+  /**
    * Armor-like section maxima read from decrypted .MEC offsets 0x1a..0x2c.
    * Order matches Cmd66/67 class-1 codes 0x15..0x1e:
    * [LA, RA, LL, RL, CT front, LT front, RT front, CT rear, LT rear, RT rear]
@@ -607,6 +613,15 @@ export interface ClientCmd12Action {
   action: number;
 }
 
+/** Raw decoded fields from client cmd13 combat contact-report frame. */
+export interface ClientCmd13ContactReport {
+  seq: number;
+  contactActorId: number;
+  responseA: number;
+  responseB: number;
+  responseC: number;
+}
+
 /** Raw decoded fields from client cmd15 duel-terms submit. */
 export interface ClientCmd15DuelTerms {
   seq: number;
@@ -713,6 +728,26 @@ export function parseClientCmd12Action(payload: Buffer): ClientCmd12Action | nul
   return {
     seq: payload[1] - 0x21,
     action: payload[3] - 0x21,
+  };
+}
+
+/** Parse a client-sent combat cmd13 contact-report frame. */
+export function parseClientCmd13ContactReport(payload: Buffer): ClientCmd13ContactReport | null {
+  if (payload.length < 17 || payload[0] !== 0x1B) return null;
+  if (payload[2] - 0x21 !== 13) return null;
+  let off = 3;
+  const contactActorId = payload[off] - 0x21;
+  off += 1;
+  let responseA: number, responseB: number, responseC: number;
+  [responseA, off] = decodeArgType2(payload, off);
+  [responseB, off] = decodeArgType2(payload, off);
+  [responseC] = decodeArgType2(payload, off);
+  return {
+    seq: payload[1] - 0x21,
+    contactActorId,
+    responseA,
+    responseB,
+    responseC,
   };
 }
 

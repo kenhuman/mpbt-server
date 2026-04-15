@@ -20,6 +20,7 @@ import {
   buildCmd36MessageViewPacket,
   buildCmd37OpenComposePacket,
   parseClientCmd10WeaponFire,
+  parseClientCmd13ContactReport,
   parseClientCmd12Action,
   parseClientCmd8Coasting,
   parseClientCmd9Moving,
@@ -67,6 +68,7 @@ import {
   MOTION_NEUTRAL,
 } from '../protocol/combat.js';
 import { PlayerRegistry, ClientSession, type CombatSession } from '../state/players.js';
+import { worldResumeRegistry } from '../state/world-resume.js';
 import {
   countSavedUnreadMessages,
   fetchNextSavedUnreadMessage,
@@ -99,6 +101,9 @@ import {
   CLASS_RANKING_CHOOSER_LIST_ID,
   TIER_RANKING_RESULTS_LIST_ID,
   CLASS_RANKING_RESULTS_LIST_ID,
+  ARENA_SIDE_MENU_ID,
+  ARENA_STATUS_LIST_ID,
+  ARENA_READY_ROOM_MAX_PARTICIPANTS,
   SOLARIS_ROOM_BY_ID,
   worldCaptures,
   worldMapByRoomId,
@@ -123,8 +128,11 @@ import {
   getComstarId,
   findWorldTargetBySelectionId,
   buildComstarDeliveryText,
+  getArenaSideLabel,
   sendSceneRefresh,
   sendAllRosterList,
+  sendArenaSideMenu,
+  sendArenaStatusList,
   sendComstarSendTargetMenu,
   sendNewsCategoryMenu,
   sendNewsgridArticleMenu,
@@ -151,14 +159,19 @@ import {
   BOT_INITIAL_HEALTH,
   BOT_SPAWN_DISTANCE,
   BOT_FALLBACK_WEAPON_DAMAGE,
-  JUMP_JET_ALTITUDE,
-  JUMP_JET_STEP,
+  COMBAT_WORLD_UNITS_PER_METER,
+  JUMP_JET_DEFAULT_APEX_METERS,
+  JUMP_JET_ASCENT_STEPS,
   JUMP_JET_TICK_MS,
   JUMP_JET_FUEL_MAX,
   JUMP_JET_START_FUEL_THRESHOLD,
   JUMP_JET_FUEL_DRAIN_PER_TICK,
   JUMP_JET_FUEL_REGEN_INTERVAL_MS,
   JUMP_JET_FUEL_REGEN_PER_TICK,
+  COLLISION_PROBE_HORIZONTAL_DISTANCE,
+  COLLISION_PROBE_VERTICAL_TOLERANCE,
+  COLLISION_PROBE_LOG_COOLDOWN_MS,
+  COLLISION_PROBE_LANDING_WINDOW_MS,
   FIRE_ACTION_WINDOW_MS,
   BOT_FIRE_INTERVAL_MS,
   BOT_RETALIATION_DAMAGE,
@@ -181,8 +194,26 @@ function regenJumpFuelIfGrounded(
 
 function selectedMechSupportsJumpJets(session: ClientSession): boolean {
   const mechEntry = WORLD_MECH_BY_ID.get(session.selectedMechId ?? FALLBACK_MECH_ID);
+  if (mechEntry === undefined) return true;
+  return mechEntry.jumpJetCount > 0;
+}
+
+function getSelectedMechJumpArc(session: ClientSession): { apexUnits: number; stepUnits: number } {
+  const mechEntry = WORLD_MECH_BY_ID.get(session.selectedMechId ?? FALLBACK_MECH_ID);
   const stats = mechEntry ? MECH_STATS.get(mechEntry.typeString) : undefined;
-  return stats === undefined || stats.disabled || stats.jumpMeters !== null;
+  const documentedJumpMeters = stats?.jumpMeters;
+  const apexMeters =
+    documentedJumpMeters === null || documentedJumpMeters === undefined
+      ? JUMP_JET_DEFAULT_APEX_METERS
+      : Math.max(JUMP_JET_DEFAULT_APEX_METERS, Math.round(documentedJumpMeters / 5));
+  const apexUnits = apexMeters * COMBAT_WORLD_UNITS_PER_METER;
+  return {
+    apexUnits,
+    stepUnits: Math.max(
+      COMBAT_WORLD_UNITS_PER_METER,
+      Math.round(apexUnits / JUMP_JET_ASCENT_STEPS),
+    ),
+  };
 }
 
 const DEFAULT_BOT_ARMOR_VALUES = Array<number>(10).fill(10);
@@ -429,7 +460,94 @@ function getDuelStakeBalanceError(
   return undefined;
 }
 
-function flushPendingDuelSettlementNotice(session: ClientSession): void {
+function isArenaRoom(session: ClientSession): boolean {
+  const roomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
+  return worldMapByRoomId.get(roomId)?.type === 'arena';
+}
+
+function getSharedArenaSide(
+  session: ClientSession,
+  other: ClientSession,
+): number | undefined {
+  if (!isArenaRoom(session) || !isArenaRoom(other)) {
+    return undefined;
+  }
+  const side = session.worldArenaSide;
+  if (side === undefined || side !== other.worldArenaSide) {
+    return undefined;
+  }
+  return side;
+}
+
+function getLiveArenaRoomParticipants(players: PlayerRegistry, roomId: string): ClientSession[] {
+  return players.inRoom(roomId).filter(other =>
+    other.phase === 'world'
+    && other.worldInitialized
+    && !other.socket.destroyed,
+  );
+}
+
+function getArenaRoomEntryRejection(
+  players: PlayerRegistry,
+  session: ClientSession,
+  targetRoomId: number,
+): string | undefined {
+  if (worldMapByRoomId.get(targetRoomId)?.type !== 'arena') {
+    return undefined;
+  }
+  const targetRoomKey = mapRoomKey(targetRoomId);
+  const occupants = getLiveArenaRoomParticipants(players, targetRoomKey);
+  const occupantCountExcludingSelf = occupants.filter(other => other.id !== session.id).length;
+  if (occupantCountExcludingSelf < ARENA_READY_ROOM_MAX_PARTICIPANTS) {
+    return undefined;
+  }
+  return `Arena ready room full: ${getSolarisRoomName(targetRoomId)} already has ${ARENA_READY_ROOM_MAX_PARTICIPANTS} pilots.`;
+}
+
+export function getArenaSoloFightRejection(
+  players: PlayerRegistry,
+  session: ClientSession,
+): string | undefined {
+  if (!isArenaRoom(session)) {
+    return undefined;
+  }
+  const otherParticipants = getLiveArenaRoomParticipants(players, session.roomId)
+    .filter(other => other.id !== session.id);
+  if (otherParticipants.length === 0) {
+    return undefined;
+  }
+  return 'Arena ready room occupied: stage a duel before entering combat.';
+}
+
+function clearSameSideDuelRequest(
+  players: PlayerRegistry,
+  session: ClientSession,
+  peer: ClientSession,
+  connLog: Logger,
+): void {
+  clearSessionDuelState(players, session, connLog, 'same-side teammates');
+  const sideLabel = getArenaSideLabel(getSharedArenaSide(session, peer));
+  sendToWorldSession(
+    session,
+    buildCmd3BroadcastPacket(
+      `Duel request cleared: ${getDisplayName(peer)} is on ${sideLabel}. Same-side pilots are teammates.`,
+      nextSeq(session),
+    ),
+    'CMD3_DUEL_SAME_SIDE',
+  );
+  if (peer.phase === 'world' && peer.worldInitialized && !peer.socket.destroyed) {
+    sendToWorldSession(
+      peer,
+      buildCmd3BroadcastPacket(
+        `Duel request cleared: ${getDisplayName(session)} is on ${sideLabel}. Same-side pilots are teammates.`,
+        nextSeq(peer),
+      ),
+      'CMD3_DUEL_SAME_SIDE',
+    );
+  }
+}
+
+export function flushPendingDuelSettlementNotice(session: ClientSession): void {
   const notice = session.pendingDuelSettlementNotice;
   if (
     !notice
@@ -446,6 +564,27 @@ function flushPendingDuelSettlementNotice(session: ClientSession): void {
     buildCmd3BroadcastPacket(notice, nextSeq(session)),
     'CMD3_DUEL_SETTLEMENT',
   );
+}
+
+function syncSettlementStateToReplacementSession(
+  players: PlayerRegistry,
+  sourceSession: ClientSession,
+  cbills: number,
+  notice: string,
+): void {
+  if (sourceSession.accountId === undefined) {
+    return;
+  }
+
+  const replacement = players.findActiveSessionByAccountId(sourceSession.accountId, sourceSession.id);
+  if (!replacement) {
+    return;
+  }
+
+  replacement.cbills = cbills;
+  replacement.pendingDuelSettlementNotice = notice;
+  worldResumeRegistry.save(replacement);
+  flushPendingDuelSettlementNotice(replacement);
 }
 
 function persistDuelResult(
@@ -551,10 +690,16 @@ function settleDuelCbills(
   };
   settleDuelStakeTransfer(winnerAccountId, loserAccountId, transferCb)
     .then(({ winnerCbills, loserCbills }) => {
+      const winnerNotice = `Sanctioned settlement: +${transferCb} cb (balance ${winnerCbills} cb).`;
+      const loserNotice = `Sanctioned settlement: -${transferCb} cb (balance ${loserCbills} cb).`;
       winner.cbills = winnerCbills;
       loser.cbills = loserCbills;
-      winner.pendingDuelSettlementNotice = `Sanctioned settlement: +${transferCb} cb (balance ${winnerCbills} cb).`;
-      loser.pendingDuelSettlementNotice = `Sanctioned settlement: -${transferCb} cb (balance ${loserCbills} cb).`;
+      winner.pendingDuelSettlementNotice = winnerNotice;
+      loser.pendingDuelSettlementNotice = loserNotice;
+      worldResumeRegistry.save(winner);
+      worldResumeRegistry.save(loser);
+      syncSettlementStateToReplacementSession(players, winner, winnerCbills, winnerNotice);
+      syncSettlementStateToReplacementSession(players, loser, loserCbills, loserNotice);
       recordSettlement();
       flushPendingDuelSettlementNotice(winner);
       flushPendingDuelSettlementNotice(loser);
@@ -569,6 +714,20 @@ function settleDuelCbills(
       const detail = err instanceof Error ? err.message : String(err);
       winner.pendingDuelSettlementNotice = 'Sanctioned settlement failed; balances unchanged.';
       loser.pendingDuelSettlementNotice = 'Sanctioned settlement failed; balances unchanged.';
+      worldResumeRegistry.save(winner);
+      worldResumeRegistry.save(loser);
+      syncSettlementStateToReplacementSession(
+        players,
+        winner,
+        winner.cbills ?? 0,
+        winner.pendingDuelSettlementNotice,
+      );
+      syncSettlementStateToReplacementSession(
+        players,
+        loser,
+        loser.cbills ?? 0,
+        loser.pendingDuelSettlementNotice,
+      );
       flushPendingDuelSettlementNotice(winner);
       flushPendingDuelSettlementNotice(loser);
       connLog.error('[world/duel] failed to settle duel cbills: %s', detail);
@@ -1425,6 +1584,7 @@ function queueCombatResultTransition(
           : 'Combat over: defeat.',
       );
       notifyUnreadComstarMessages(session, connLog, capture);
+      notifyRoomArrival(players, session, connLog);
     }, RESULT_WORLD_RESTORE_DELAY_MS);
     session.combatWorldRestoreTimer.unref();
   }, delayMs);
@@ -1482,6 +1642,10 @@ export function resetCombatState(session: ClientSession): void {
   session.combatRetaliationCursor = undefined;
   session.combatJumpAltitude = undefined;
   session.combatJumpFuel = undefined;
+  session.combatLastCollisionProbeAt = undefined;
+  session.combatLastContactReportAt = undefined;
+  session.combatLastJumpLandAt = undefined;
+  session.combatLastJumpLandAltitude = undefined;
   session.combatEjectArmed = undefined;
   session.lastCombatFireActionAt = undefined;
   session.combatRequireAction0 = undefined;
@@ -1700,6 +1864,162 @@ function getCombatCmd65Facing(session: ClientSession): number {
   // ("turn momentum"/positional adjust), not from the absolute type2 heading field.
   return FACING_ACCUMULATOR_NEUTRAL +
     ((session.combatTurnMomentumRaw ?? MOTION_NEUTRAL) - MOTION_NEUTRAL) * MOTION_DIV;
+}
+
+function formatProbeAgeMs(ageMs: number | undefined): string {
+  if (ageMs === undefined || ageMs < 0) {
+    return 'n/a';
+  }
+  return `${ageMs}ms`;
+}
+
+function recordCombatLanding(session: ClientSession, landedFromAltitude: number): void {
+  session.combatLastJumpLandAt = Date.now();
+  session.combatLastJumpLandAltitude = Math.max(0, landedFromAltitude);
+}
+
+function maybeLogCombatContactReport(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+  source: string,
+  contactActorId: number,
+  responseA: number,
+  responseB: number,
+  responseC: number,
+): void {
+  const now = Date.now();
+  if (
+    session.combatLastContactReportAt !== undefined
+    && now - session.combatLastContactReportAt < COLLISION_PROBE_LOG_COOLDOWN_MS
+  ) {
+    return;
+  }
+  session.combatLastContactReportAt = now;
+
+  const peer = getActiveDuelPeer(players, session);
+  const localLandingAgeMs =
+    session.combatLastJumpLandAt === undefined ? undefined : now - session.combatLastJumpLandAt;
+  const peerLandingAgeMs =
+    peer?.combatLastJumpLandAt === undefined ? undefined : now - peer.combatLastJumpLandAt;
+
+  connLog.info(
+    '[world/combat] cmd-13 contact report: source=%s local="%s" peer="%s" actorId=%d response=(%d,%d,%d) local=(%d,%d,%d speed=%d throttle=%d leg=%d) peer=(%d,%d,%d speed=%d throttle=%d leg=%d) localLand=%s/%d peerLand=%s/%d',
+    source,
+    getDisplayName(session),
+    peer ? getDisplayName(peer) : '(none)',
+    contactActorId,
+    responseA,
+    responseB,
+    responseC,
+    session.combatX ?? 0,
+    session.combatY ?? 0,
+    session.combatJumpAltitude ?? 0,
+    session.combatSpeedMag ?? 0,
+    session.combatThrottle ?? 0,
+    session.combatLegVel ?? 0,
+    peer?.combatX ?? 0,
+    peer?.combatY ?? 0,
+    peer?.combatJumpAltitude ?? 0,
+    peer?.combatSpeedMag ?? 0,
+    peer?.combatThrottle ?? 0,
+    peer?.combatLegVel ?? 0,
+    formatProbeAgeMs(localLandingAgeMs),
+    session.combatLastJumpLandAltitude ?? 0,
+    formatProbeAgeMs(peerLandingAgeMs),
+    peer?.combatLastJumpLandAltitude ?? 0,
+  );
+}
+
+function maybeLogCollisionProbeCandidate(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+  source: string,
+): void {
+  const peer = getActiveDuelPeer(players, session);
+  if (!peer || peer.combatResultCode !== undefined) {
+    return;
+  }
+
+  const localX = session.combatX;
+  const localY = session.combatY;
+  const peerX = peer.combatX;
+  const peerY = peer.combatY;
+  if (
+    localX === undefined
+    || localY === undefined
+    || peerX === undefined
+    || peerY === undefined
+  ) {
+    return;
+  }
+
+  const localZ = session.combatJumpAltitude ?? 0;
+  const peerZ = peer.combatJumpAltitude ?? 0;
+  const horizontalDistance = Math.round(Math.hypot(localX - peerX, localY - peerY));
+  if (horizontalDistance > COLLISION_PROBE_HORIZONTAL_DISTANCE) {
+    return;
+  }
+
+  const now = Date.now();
+  const localLandingAgeMs =
+    session.combatLastJumpLandAt === undefined ? undefined : now - session.combatLastJumpLandAt;
+  const peerLandingAgeMs =
+    peer.combatLastJumpLandAt === undefined ? undefined : now - peer.combatLastJumpLandAt;
+  const landingWindowActive =
+    (localLandingAgeMs !== undefined
+      && localLandingAgeMs >= 0
+      && localLandingAgeMs <= COLLISION_PROBE_LANDING_WINDOW_MS)
+    || (peerLandingAgeMs !== undefined
+      && peerLandingAgeMs >= 0
+      && peerLandingAgeMs <= COLLISION_PROBE_LANDING_WINDOW_MS);
+
+  const verticalDistance = Math.abs(localZ - peerZ);
+  const airborneOrLanding =
+    localZ > 0
+    || peerZ > 0
+    || landingWindowActive;
+  if (!airborneOrLanding && verticalDistance > COLLISION_PROBE_VERTICAL_TOLERANCE) {
+    return;
+  }
+
+  const lastProbeAt = Math.max(
+    session.combatLastCollisionProbeAt ?? 0,
+    peer.combatLastCollisionProbeAt ?? 0,
+  );
+  if (lastProbeAt > 0 && now - lastProbeAt < COLLISION_PROBE_LOG_COOLDOWN_MS) {
+    return;
+  }
+
+  session.combatLastCollisionProbeAt = now;
+  peer.combatLastCollisionProbeAt = now;
+
+  connLog.info(
+    '[world/combat] collision probe candidate: source=%s local="%s" peer="%s" horiz=%d vert=%d local=(%d,%d,%d speed=%d throttle=%d leg=%d) peer=(%d,%d,%d speed=%d throttle=%d leg=%d) landingWindow=%s localLand=%s/%d peerLand=%s/%d',
+    source,
+    getDisplayName(session),
+    getDisplayName(peer),
+    horizontalDistance,
+    verticalDistance,
+    localX,
+    localY,
+    localZ,
+    session.combatSpeedMag ?? 0,
+    session.combatThrottle ?? 0,
+    session.combatLegVel ?? 0,
+    peerX,
+    peerY,
+    peerZ,
+    peer.combatSpeedMag ?? 0,
+    peer.combatThrottle ?? 0,
+    peer.combatLegVel ?? 0,
+    landingWindowActive ? 'yes' : 'no',
+    formatProbeAgeMs(localLandingAgeMs),
+    session.combatLastJumpLandAltitude ?? 0,
+    formatProbeAgeMs(peerLandingAgeMs),
+    peer.combatLastJumpLandAltitude ?? 0,
+  );
 }
 
 function stopSessionActiveCombatLoops(session: ClientSession): void {
@@ -2757,7 +3077,7 @@ export function handleComstarAccessSelection(
       );
       return;
     }
-    const examineText = buildMechExamineText(selectedMech.typeString);
+    const examineText = buildMechExamineText(selectedMech.typeString, selectedMech);
     connLog.info('[world] ComStar access: unit status mech_id=%d (%s)', selectedMech.id, selectedMech.typeString);
     send(
       session.socket,
@@ -3284,7 +3604,12 @@ export function sendCombatBootstrapSequence(
   }
   session.combatJumpAltitude = 0;
   session.combatJumpFuel = JUMP_JET_FUEL_MAX;
+  session.combatLastCollisionProbeAt = undefined;
+  session.combatLastJumpLandAt = undefined;
+  session.combatLastJumpLandAltitude = undefined;
   session.botHealth    = BOT_INITIAL_HEALTH;
+
+  notifyRoomDeparture(players, session, connLog);
 
   // 1. MMC SYNC — plain ARIES packet; no game-frame CRC.
   send(socket, buildCombatWelcomePacket(), capture, 'COMBAT_WELCOME_MMC');
@@ -3897,6 +4222,10 @@ function handleDuelTextCommand(
       sendLocalNotice('A staged duel is already active for one of the players.', 'CMD3_DUEL_ACCEPT_BUSY');
       return true;
     }
+    if (getSharedArenaSide(session, challenger) !== undefined) {
+      clearSameSideDuelRequest(players, session, challenger, connLog);
+      return true;
+    }
 
     const combatSession = players.createDuelCombatSession(challenger, session);
     challenger.outgoingDuelInviteTargetSessionId = undefined;
@@ -3964,6 +4293,13 @@ function handleDuelTextCommand(
     sendLocalNotice(`${getDisplayName(target)} is already busy with another duel request/session.`, 'CMD3_DUEL_TARGET_BUSY');
     return true;
   }
+  if (getSharedArenaSide(session, target) !== undefined) {
+    sendLocalNotice(
+      `${getDisplayName(target)} is on ${getArenaSideLabel(target.worldArenaSide)}. Same-side pilots are teammates.`,
+      'CMD3_DUEL_TARGET_TEAMMATE',
+    );
+    return true;
+  }
 
   session.outgoingDuelInviteTargetSessionId = target.id;
   target.pendingDuelInviteFromSessionId = session.id;
@@ -4001,7 +4337,7 @@ export function handleWorldTextCommand(
     return;
   }
 
-  if (clean.toLowerCase() === '/mechbay' || clean.toLowerCase() === '/mechs') {
+  if (clean.toLowerCase() === '/mech' || clean.toLowerCase() === '/mechbay' || clean.toLowerCase() === '/mechs') {
     sendMechClassPicker(session, connLog, capture);
     return;
   }
@@ -4177,10 +4513,22 @@ export function handleMapTravelReply(
     return;
   }
 
+  const arenaEntryRejection = getArenaRoomEntryRejection(players, session, selectedRoomId);
+  if (arenaEntryRejection) {
+    connLog.warn(
+      '[world] cmd-10 map reply rejected: target arena room=%d full for callsign="%s"',
+      selectedRoomId,
+      getDisplayName(session),
+    );
+    sendSceneRefresh(players, session, connLog, capture, arenaEntryRejection);
+    return;
+  }
+
   clearSessionDuelState(players, session, connLog, `left ${getSolarisRoomName(session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID)}`);
   notifyRoomDeparture(players, session, connLog);
   session.roomId = newRoomId;
   setSessionRoomPosition(session, selectedRoomId);
+  session.worldArenaSide = undefined;
   session.worldPresenceStatus = 5;
 
   sendSceneRefresh(
@@ -4237,10 +4585,22 @@ export function handleLocationAction(
     targetRoomId,
   );
 
+  const arenaEntryRejection = getArenaRoomEntryRejection(players, session, targetRoomId);
+  if (arenaEntryRejection) {
+    connLog.warn(
+      '[world] cmd-23 location rejected: target arena room=%d full for callsign="%s"',
+      targetRoomId,
+      getDisplayName(session),
+    );
+    sendSceneRefresh(players, session, connLog, capture, arenaEntryRejection);
+    return;
+  }
+
   clearSessionDuelState(players, session, connLog, `left ${getSolarisRoomName(currentRoomId)}`);
   notifyRoomDeparture(players, session, connLog);
   session.roomId = mapRoomKey(targetRoomId);
   setSessionRoomPosition(session, targetRoomId);
+  session.worldArenaSide = undefined;
   session.worldPresenceStatus = 5;
   sendSceneRefresh(
     players,
@@ -4304,6 +4664,45 @@ export function notifyRoomDeparture(
   connLog.info('[world] notified room of departure: rosterId=%d callsign="%s"', session.worldRosterId, callsign);
 }
 
+export function handleArenaSideSelection(
+  players: PlayerRegistry,
+  session: ClientSession,
+  selection: number,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  if (session.phase !== 'world' || !session.worldInitialized || !isArenaRoom(session)) {
+    connLog.warn('[world] arena side selection ignored outside arena room: phase=%s room=%d',
+      session.phase, session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID);
+    return;
+  }
+  if (selection < 1 || selection > 8) {
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket('Arena side selection cancelled.', nextSeq(session)),
+      capture,
+      'CMD3_ARENA_SIDE_CANCELLED',
+    );
+    return;
+  }
+
+  session.worldArenaSide = selection;
+  worldResumeRegistry.save(session);
+  send(
+    session.socket,
+    buildCmd3BroadcastPacket(`Arena side set: ${getArenaSideLabel(selection)}.`, nextSeq(session)),
+    capture,
+    'CMD3_ARENA_SIDE_SET',
+  );
+  sendArenaStatusList(players, session, connLog, capture);
+  connLog.info(
+    '[world] arena side selected: callsign="%s" side=%d room=%d',
+    getDisplayName(session),
+    selection,
+    session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID,
+  );
+}
+
 // ── Combat movement / action frames ───────────────────────────────────────────
 
 export function handleCombatMovementFrame(
@@ -4334,6 +4733,7 @@ export function handleCombatMovementFrame(
 
     if (clientSpeed !== 0) {
       mirrorDuelRemotePosition(players, session, 'CMD65_DUEL_REMOTE_COAST');
+      maybeLogCollisionProbeCandidate(players, session, connLog, 'CMD8_COAST');
       connLog.debug(
         '[world/combat] cmd8 coasting: x=%d y=%d heading=%d clientSpeed=%d -> no echo (trust local key events)',
         session.combatX, session.combatY, frame.headingRaw, clientSpeed,
@@ -4345,6 +4745,7 @@ export function handleCombatMovementFrame(
     // is treated as a fresh startup (breaks the trap correctly).
     session.combatSpeedMag  = 0;
     mirrorDuelRemotePosition(players, session, 'CMD65_DUEL_REMOTE_STOP');
+    maybeLogCollisionProbeCandidate(players, session, connLog, 'CMD8_STOP');
     connLog.debug(
       '[world/combat] cmd8 coasting: x=%d y=%d heading=%d clientSpeed=0 suppressing echo (stopped)',
       session.combatX, session.combatY, frame.headingRaw,
@@ -4406,6 +4807,7 @@ export function handleCombatMovementFrame(
       'CMD65_MOVEMENT',
     );
     mirrorDuelRemotePosition(players, session, 'CMD65_DUEL_REMOTE_MOVEMENT');
+    maybeLogCollisionProbeCandidate(players, session, connLog, 'CMD9_MOVEMENT');
   }
 }
 
@@ -4848,10 +5250,13 @@ export function handleCombatActionFrame(
     }
 
     let jumpDirection = 1;
+    const jumpArc = getSelectedMechJumpArc(session);
     session.combatJumpAltitude = Math.max(0, session.combatJumpAltitude ?? 0);
     session.combatThrottle = 0;
     session.combatLegVel = 0;
     session.combatSpeedMag = 0;
+    session.combatLastJumpLandAt = undefined;
+    session.combatLastJumpLandAltitude = undefined;
 
     const sendJumpUpdate = (tag: string): void => {
       const x = session.combatX ?? 0;
@@ -4878,15 +5283,17 @@ export function handleCombatActionFrame(
         tag,
       );
       mirrorDuelRemotePosition(players, session, `DUEL_${tag}`);
+      maybeLogCollisionProbeCandidate(players, session, connLog, tag);
     };
 
     // Emit the first ascent step immediately so jump feedback is visible without delay.
-    session.combatJumpAltitude = Math.min(JUMP_JET_ALTITUDE, (session.combatJumpAltitude ?? 0) + JUMP_JET_STEP);
+    session.combatJumpAltitude = Math.min(jumpArc.apexUnits, (session.combatJumpAltitude ?? 0) + jumpArc.stepUnits);
     session.combatJumpFuel = Math.max(0, fuel - JUMP_JET_FUEL_DRAIN_PER_TICK);
     connLog.info(
-      '[world/combat] cmd-12 jump action=4 altitude=%d fuel=%d (ascent start)',
+      '[world/combat] cmd-12 jump action=4 altitude=%d fuel=%d apex=%d (ascent start)',
       session.combatJumpAltitude,
       session.combatJumpFuel,
+      jumpArc.apexUnits,
     );
     sendJumpUpdate('CMD65_JUMP_ASCENT');
 
@@ -4900,23 +5307,25 @@ export function handleCombatActionFrame(
 
       const currentAltitude = session.combatJumpAltitude ?? 0;
       if (jumpDirection > 0) {
-        const nextAltitude = Math.min(JUMP_JET_ALTITUDE, currentAltitude + JUMP_JET_STEP);
+        const nextAltitude = Math.min(jumpArc.apexUnits, currentAltitude + jumpArc.stepUnits);
         session.combatJumpAltitude = nextAltitude;
         session.combatJumpFuel = Math.max(0, currentFuel - JUMP_JET_FUEL_DRAIN_PER_TICK);
         sendJumpUpdate('CMD65_JUMP_ASCENT');
-        if (nextAltitude >= JUMP_JET_ALTITUDE) {
+        if (nextAltitude >= jumpArc.apexUnits) {
           jumpDirection = -1;
         }
         return;
       }
 
-      const nextAltitude = Math.max(0, currentAltitude - JUMP_JET_STEP);
+      const nextAltitude = Math.max(0, currentAltitude - jumpArc.stepUnits);
       session.combatJumpAltitude = nextAltitude;
       session.combatJumpFuel = Math.max(0, currentFuel - JUMP_JET_FUEL_DRAIN_PER_TICK);
       sendJumpUpdate('CMD65_JUMP_DESCENT');
       if (nextAltitude <= 0) {
+        recordCombatLanding(session, currentAltitude);
         clearInterval(session.combatJumpTimer);
         session.combatJumpTimer = undefined;
+        maybeLogCollisionProbeCandidate(players, session, connLog, 'CMD65_JUMP_TOUCHDOWN');
         connLog.info('[world/combat] jump arc complete (fuel=%d)', session.combatJumpFuel ?? 0);
       }
     }, JUMP_JET_TICK_MS);
@@ -4925,11 +5334,17 @@ export function handleCombatActionFrame(
   }
 
   if (action.action === 6) {
+    const landedFromAltitude = session.combatJumpAltitude ?? 0;
+    if (session.combatJumpTimer === undefined && landedFromAltitude <= 0) {
+      connLog.info('[world/combat] cmd-12 jump action=6 ignored (no active jump)');
+      return;
+    }
     if (session.combatJumpTimer !== undefined) {
       clearInterval(session.combatJumpTimer);
       session.combatJumpTimer = undefined;
     }
     session.combatJumpAltitude = 0;
+    recordCombatLanding(session, landedFromAltitude);
 
     const x = session.combatX ?? 0;
     const y = session.combatY ?? 0;
@@ -4937,7 +5352,7 @@ export function handleCombatActionFrame(
     const legVel = session.combatLegVel ?? 0;
     const speedMag = session.combatSpeedMag ?? 0;
 
-    connLog.info('[world/combat] cmd-12 jump action=6 altitude=0 (forced land)');
+    connLog.info('[world/combat] cmd-12 jump action=6 altitude=0 (landing sync)');
     send(
       session.socket,
       buildCmd65PositionSyncPacket(
@@ -4957,6 +5372,7 @@ export function handleCombatActionFrame(
       'CMD65_JUMP_LAND',
     );
     mirrorDuelRemotePosition(players, session, 'DUEL_CMD65_JUMP_LAND');
+    maybeLogCollisionProbeCandidate(players, session, connLog, 'CMD65_JUMP_LAND');
     return;
   }
 
@@ -4965,6 +5381,30 @@ export function handleCombatActionFrame(
   // arrive from the client.  Speed is driven entirely by the Cmd9
   // throttleRaw → THROTTLE_RUN_SCALE path; no server response is needed here.
   connLog.debug('[world/combat] cmd-12 combat action=%d — no response', action.action);
+}
+
+export function handleCombatContactReportFrame(
+  players: PlayerRegistry,
+  session: ClientSession,
+  payload: Buffer,
+  connLog: Logger,
+): void {
+  const report = parseClientCmd13ContactReport(payload);
+  if (!report) {
+    connLog.warn('[world/combat] cmd-13 contact report parse failed');
+    return;
+  }
+
+  maybeLogCombatContactReport(
+    players,
+    session,
+    connLog,
+    'CMD13_CONTACT',
+    report.contactActorId,
+    report.responseA,
+    report.responseB,
+    report.responseC,
+  );
 }
 
 // ── 3-step mech picker — Cmd7 routing ─────────────────────────────────────────
@@ -5032,6 +5472,7 @@ export function handleMechPickerCmd7(
     session.mechPickerClass        = undefined;
     session.mechPickerChassis      = undefined;
     session.mechPickerChassisPage  = undefined;
+    worldResumeRegistry.save(session);
 
     connLog.info('[world] mech selected: callsign="%s" slot=%d id=%d typeString=%s',
       getDisplayName(session), chosen.slot, chosen.id, chosen.typeString);
@@ -5103,7 +5544,7 @@ export function handleMechPickerCmd20(
     return true;
   }
 
-  const examineText = buildMechExamineText(chosen.typeString);
+  const examineText = buildMechExamineText(chosen.typeString, chosen);
   connLog.info('[world] cmd-20 mech picker examine: slot=%d mech_id=%d (%s) → %j',
     slot, chosen.id, chosen.typeString, examineText);
   send(

@@ -587,7 +587,7 @@ function handleGameData(
       }
     }
     const mech = MECHS[slot];
-    const examineText = buildMechExamineText(mech.typeString);
+    const examineText = buildMechExamineText(mech.typeString, mech);
     connLog.info('[game] cmd 20 (examine): slot=%d mech_id=%d (%s) → %j',
       slot, mech.id, mech.typeString, examineText);
     send(session.socket, buildCmd20Packet(CMD20_DIALOG_ID, 2, examineText, nextSeq(session)), capture, 'CMD20_STATS');
