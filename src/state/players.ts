@@ -40,16 +40,20 @@ export interface CombatSession {
 }
 
 export interface WorldScrollListState {
-  /** Active Cmd58/Cmd45 list id echoed back through cmd-7 row selection. */
+  /** Active paged result-list id echoed back through cmd-7 row selection. */
   listId: number;
-  /** Server-side source of the currently open scroll shell. */
+  /** Server-side source of the currently open paged result list. */
   kind: 'tier-ranking' | 'class-ranking' | 'match-results';
-  /** Zero-based page index currently shown in the shell. */
+  /** Zero-based page index currently shown in the client list. */
   pageIndex: number;
   /** Rows requested per page. */
   pageSize: number;
-  /** Visible heading line embedded into the shell body. */
+  /** Visible heading line embedded into the current list. */
   title: string;
+  /** Item ids backing the currently visible selection rows in order. */
+  visibleItemIds?: number[];
+  /** True when the current page appends a trailing "More..." row. */
+  hasMore?: boolean;
   /** Tier filter for tier-ranking shells. */
   tierKey?: 'UNRANKED' | 'NOVICE' | 'AMATEUR' | 'PROFESSIONAL' | 'VETERAN' | 'MASTER' | 'BATTLEMASTER' | 'CHAMPION';
   /** Weight-class filter for class-ranking shells. */

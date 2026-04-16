@@ -139,7 +139,6 @@ import {
   sendTierRankingChooser,
   sendClassRankingChooser,
   sendRankingResultsList,
-  sendMatchResultsMenu,
   sendPersonnelRecord,
   sendSolarisTravelMap,
   sendMechClassPicker,
@@ -777,6 +776,10 @@ function buildRankingInfoPanelLines(
   ];
 }
 
+function buildPersonalTierChooserTitle(standing: SolarisStanding): string {
+  return `Rank: ${formatSolarisRankLabel(standing)} / Score: ${standing.score}`.slice(0, 84);
+}
+
 function sendRankingInfoPanel(
   session: ClientSession,
   standing: SolarisStanding,
@@ -837,9 +840,8 @@ function classKeyFromSelection(selection: number): SolarisClassKey | undefined {
   }
 }
 
-const RANKING_SHELL_PAGE_SIZE = 10;
-const MATCH_RESULTS_SHELL_PAGE_SIZE = 10;
-const SCROLL_SHELL_INTERNAL_ID_BASE = 100000;
+const RANKING_SHELL_PAGE_SIZE = 5;
+const MATCH_RESULTS_SHELL_PAGE_SIZE = 5;
 const TIER_RANKING_KEYS: SolarisTierKey[] = [
   'UNRANKED',
   'NOVICE',
@@ -861,27 +863,17 @@ const TIER_RANKING_LABELS = new Map<SolarisTierKey, string>([
   ['CHAMPION', 'Champion'],
 ]);
 
-function buildRankingShellRows(standings: SolarisStanding[]) {
+function buildRankingMenuRows(standings: SolarisStanding[]) {
   return standings.map((standing) => ({
     itemId: standing.comstarId,
     text: `${String(standing.comstarId).padStart(6)} ${standing.displayName.slice(0, 8).padEnd(8)} ${String(standing.score).padStart(5)} ${standing.ratioText.padStart(5)}`,
   }));
 }
 
-function makeScrollShellInternalId(rawId: number): number {
-  return SCROLL_SHELL_INTERNAL_ID_BASE + rawId;
-}
-
-function parseScrollShellRawId(selection: number): number | undefined {
-  const storedId = selection - 1;
-  if (storedId < SCROLL_SHELL_INTERNAL_ID_BASE) return undefined;
-  return storedId - SCROLL_SHELL_INTERNAL_ID_BASE;
-}
-
-function buildMatchResultShellRows(results: DuelResultRow[]) {
+function buildMatchResultMenuRows(results: DuelResultRow[]) {
   return results.map((result) => ({
-    itemId: makeScrollShellInternalId(result.id),
-    text: `${result.winner_display_name.slice(0, 10)} v ${result.loser_display_name.slice(0, 10)} @ ${result.room_name.slice(0, 6)}`,
+    itemId: result.id,
+    text: `${result.winner_display_name.slice(0, 8)} vs ${result.loser_display_name.slice(0, 8)}`,
   }));
 }
 
@@ -902,11 +894,15 @@ function sendRankingPage(
     return;
   }
   const hasMore = start + pageStandings.length < standings.length;
+  if (session.worldScrollList?.listId === listId) {
+    session.worldScrollList.visibleItemIds = pageStandings.map(standing => standing.comstarId);
+    session.worldScrollList.hasMore = hasMore;
+  }
   sendRankingResultsList(
     session,
     listId,
     title,
-    buildRankingShellRows(pageStandings),
+    buildRankingMenuRows(pageStandings),
     hasMore,
     connLog,
     capture,
@@ -928,15 +924,13 @@ function showPersonalTierRanking(
       session.worldScrollList = undefined;
       const standings = computeSolarisStandings(results, characters);
       const standing = standings.find(entry => entry.accountId === accountId);
-      const latestResult = standing ? findLatestResultForAccount(results, standing.accountId) : undefined;
       if (!standing || session.socket.destroyed || !session.socket.writable) {
         if (!standing && !session.socket.destroyed && session.socket.writable) {
           sendNoNewsAvailable(session, capture);
         }
         return;
       }
-      sendRankingInfoPanel(session, standing, latestResult, capture, 'CMD46_PERSONAL_TIER_RANK');
-      sendTierRankingChooser(session, connLog, capture);
+      sendTierRankingChooser(session, connLog, capture, buildPersonalTierChooserTitle(standing));
     })
     .catch((err: unknown) => {
       const detail = err instanceof Error ? err.message : String(err);
@@ -1103,12 +1097,15 @@ function showMatchResults(
         pageIndex,
         pageSize: MATCH_RESULTS_SHELL_PAGE_SIZE,
         title: 'Solaris Match Results',
+        visibleItemIds: pageResults.map(result => result.id),
+        hasMore: start + pageResults.length < results.length,
       };
+      session.pendingMatchResultIds = pageResults.map(result => result.id);
       sendRankingResultsList(
         session,
         MATCH_RESULTS_MENU_LIST_ID,
         'Solaris Match Results',
-        buildMatchResultShellRows(pageResults),
+        buildMatchResultMenuRows(pageResults),
         start + pageResults.length < results.length,
         connLog,
         capture,
@@ -3334,10 +3331,20 @@ export function handleRankingResultsSelection(
     return;
   }
   const pager = session.worldScrollList;
+  const visibleItemIds = pager?.visibleItemIds ?? [];
+  if (pager?.hasMore && selection === visibleItemIds.length + 1) {
+    handleActiveScrollListMore(session, connLog, capture);
+    return;
+  }
+  const comstarId = visibleItemIds[selection - 1];
   session.worldScrollList = undefined;
+  if (!comstarId) {
+    connLog.warn('[world] ranking result selection missing: selection=%d', selection);
+    return;
+  }
   showStandingDetailByComstarId(
     session,
-    selection - 1,
+    comstarId,
     connLog,
     capture,
     pager?.kind === 'tier-ranking'
@@ -3392,8 +3399,13 @@ export function handleMatchResultsSelection(
     connLog.info('[world] Solaris match results menu closed');
     return;
   }
-  const shellResultId = parseScrollShellRawId(selection);
-  const resultId = shellResultId ?? session.pendingMatchResultIds?.[selection - 1];
+  const pager = session.worldScrollList;
+  const visibleItemIds = pager?.visibleItemIds ?? [];
+  if (pager?.kind === 'match-results' && pager.hasMore && selection === visibleItemIds.length + 1) {
+    showMatchResults(session, connLog, capture, pager.pageIndex + 1);
+    return;
+  }
+  const resultId = visibleItemIds[selection - 1] ?? session.pendingMatchResultIds?.[selection - 1];
   if (!resultId) {
     session.pendingMatchResultIds = undefined;
     session.worldScrollList = undefined;

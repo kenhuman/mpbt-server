@@ -20,14 +20,10 @@ import {
   buildCmd6CursorBusyPacket,
   buildCmd10RoomPresenceSyncPacket,
   buildCmd14PersonnelRecordPacket,
-  buildCmd45ScrollListContent,
-  buildCmd45ScrollListShellPacket,
   buildCmd43SolarisMapPacket,
   buildCmd48KeyedTripleStringListPacket,
-  buildCmd58SetScrollListIdPacket,
 } from '../protocol/world.js';
 import {
-  buildCmd44KeyedSingleStringListPacket,
   buildMenuDialogPacket,
   buildMechListPacket,
 } from '../protocol/game.js';
@@ -41,6 +37,7 @@ import {
   ALL_ROSTER_LIST_ID,
   COMSTAR_SEND_TARGET_MENU_ID,
   COMSTAR_SEND_TARGET_MENU_ITEMS,
+  COMSTAR_ACCESS_MENU_ID,
   INQUIRY_MENU_ID,
   MATCH_RESULTS_MENU_LIST_ID,
   NEWS_CATEGORY_MENU_ID,
@@ -62,8 +59,8 @@ import {
   ARENA_SIDE_MENU_ITEMS,
   FALLBACK_MECH_ID,
   SOLARIS_TRAVEL_CONTEXT_ID,
+  GLOBAL_COMSTAR_MENU_ITEMS,
   TERMINAL_MENU_ITEMS,
-  TERMINAL_MENU_LIST_ID,
   worldMapByRoomId,
   WORLD_MECH_BY_ID,
   getSolarisRoomExits,
@@ -417,7 +414,7 @@ export function buildSceneInitForSession(session: ClientSession) {
   // actionType 4 → "Travel" (opens Cmd43 travel map).
   // actionType 5 → "Fight"  (enter combat; handled by cmd-5 dispatch in server-world.ts).
   // actionType 6 → "Mech"/"Mech Bay" (opens the 3-step mech picker).
-  // actionType 8 → "ComStar"/"Terminal" (opens the Cmd44 utility menu).
+  // actionType 8 → "ComStar"/"Terminal" (opens the world-safe Cmd7 utility menu).
   // The client hard-codes actionType 0 (0x100 wire) as the local Help button.
   const isArena = mapRoom?.type === 'arena';
   const hasRoomTerminal = mapRoom?.type === 'bar' || mapRoom?.type === 'terminal';
@@ -565,17 +562,17 @@ export function sendComstarAccessMenu(
 ): void {
   const roomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
   const roomType = worldMapByRoomId.get(roomId)?.type;
-  connLog.info('[world] sending Cmd44 ComStar access menu: room=%d type=%s', roomId, roomType ?? 'unknown');
+  connLog.info('[world] sending Cmd7 ComStar access menu: room=%d type=%s', roomId, roomType ?? 'unknown');
   send(
     session.socket,
-    buildCmd44KeyedSingleStringListPacket(
-      TERMINAL_MENU_LIST_ID,
+    buildMenuDialogPacket(
+      COMSTAR_ACCESS_MENU_ID,
       'Choose option:',
-      [...TERMINAL_MENU_ITEMS],
+      [...GLOBAL_COMSTAR_MENU_ITEMS],
       nextSeq(session),
     ),
     capture,
-    'CMD44_COMSTAR_MENU',
+    'CMD7_COMSTAR_MENU',
   );
 }
 
@@ -643,18 +640,19 @@ export function sendTierRankingChooser(
   session: ClientSession,
   connLog: Logger,
   capture: CaptureLogger,
+  title = 'Choose a ranking tier:',
 ): void {
-  connLog.info('[world] sending tier ranking chooser');
+  connLog.info('[world] sending Cmd7 tier ranking chooser');
   send(
     session.socket,
-    buildCmd44KeyedSingleStringListPacket(
+    buildMenuDialogPacket(
       TIER_RANKING_CHOOSER_LIST_ID,
-      'Choose a ranking tier:',
-      [...TIER_RANKING_CHOOSER_ITEMS],
+      title,
+      TIER_RANKING_CHOOSER_ITEMS.map(item => item.text),
       nextSeq(session),
     ),
     capture,
-    'CMD44_TIER_RANKING_CHOOSER',
+    'CMD7_TIER_RANKING_CHOOSER',
   );
 }
 
@@ -663,17 +661,17 @@ export function sendClassRankingChooser(
   connLog: Logger,
   capture: CaptureLogger,
 ): void {
-  connLog.info('[world] sending class ranking chooser');
+  connLog.info('[world] sending Cmd7 class ranking chooser');
   send(
     session.socket,
-    buildCmd44KeyedSingleStringListPacket(
+    buildMenuDialogPacket(
       CLASS_RANKING_CHOOSER_LIST_ID,
       'Choose a mech class:',
-      [...CLASS_RANKING_CHOOSER_ITEMS],
+      CLASS_RANKING_CHOOSER_ITEMS.map(item => item.text),
       nextSeq(session),
     ),
     capture,
-    'CMD44_CLASS_RANKING_CHOOSER',
+    'CMD7_CLASS_RANKING_CHOOSER',
   );
 }
 
@@ -686,26 +684,29 @@ export function sendRankingResultsList(
   connLog: Logger,
   capture: CaptureLogger,
 ): void {
-  const content = buildCmd45ScrollListContent(title, rows);
-  const mode = hasMore ? 2 : 0;
+  const items = rows.map(row => row.text);
+  if (hasMore) items.push('More...');
+  const label = listId === MATCH_RESULTS_MENU_LIST_ID
+    ? 'CMD7_MATCH_RESULTS_MENU'
+    : listId === TIER_RANKING_RESULTS_LIST_ID
+      ? 'CMD7_TIER_RANKINGS'
+      : 'CMD7_CLASS_RANKINGS';
   connLog.info(
-    '[world] sending Cmd45 ranking shell: listId=%d rows=%d mode=%d more=%s',
+    '[world] sending Cmd7 paged results menu: listId=%d rows=%d more=%s',
     listId,
     rows.length,
-    mode,
     hasMore ? 'true' : 'false',
   );
   send(
     session.socket,
-    buildCmd58SetScrollListIdPacket(listId, nextSeq(session)),
+    buildMenuDialogPacket(
+      listId,
+      title,
+      items,
+      nextSeq(session),
+    ),
     capture,
-    'CMD58_SCROLL_LIST_ID',
-  );
-  send(
-    session.socket,
-    buildCmd45ScrollListShellPacket(mode, content, nextSeq(session)),
-    capture,
-    listId === TIER_RANKING_RESULTS_LIST_ID ? 'CMD45_TIER_RANKINGS' : 'CMD45_CLASS_RANKINGS',
+    label,
   );
 }
 

@@ -69,6 +69,7 @@ import {
   ALL_ROSTER_LIST_ID,
   COMSTAR_SEND_TARGET_MENU_ID,
   COMSTAR_ACCESS_ACTION_TYPE,
+  COMSTAR_ACCESS_MENU_ID,
   INQUIRY_MENU_ID,
   MATCH_RESULTS_MENU_LIST_ID,
   NEWS_CATEGORY_MENU_ID,
@@ -84,7 +85,6 @@ import {
   ARENA_SIDE_ACTION_TYPE,
   ARENA_STATUS_ACTION_TYPE,
   SOLARIS_TRAVEL_CONTEXT_ID,
-  TERMINAL_MENU_LIST_ID,
   getSolarisRoomName,
   setSessionRoomPosition,
   worldMapByRoomId,
@@ -822,7 +822,7 @@ function handleWorldGameData(
       return;
     }
 
-    if (parsed.listId === TERMINAL_MENU_LIST_ID) {
+    if (parsed.listId === COMSTAR_ACCESS_MENU_ID) {
       handleComstarAccessSelection(players, session, parsed.selection, connLog, capture);
       return;
     }

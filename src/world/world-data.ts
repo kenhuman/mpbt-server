@@ -50,6 +50,7 @@ export const CLASS_RANKING_CHOOSER_LIST_ID = 0x3ED;
 export const TIER_RANKING_RESULTS_LIST_ID = 0x3EC;
 export const CLASS_RANKING_RESULTS_LIST_ID = 0x3EB;
 export const MATCH_RESULTS_MENU_LIST_ID  = 0x3EA;
+export const COMSTAR_ACCESS_MENU_ID     = 0x3E9;
 export const ARENA_SIDE_MENU_ID         = 0x3F6;
 export const ARENA_STATUS_LIST_ID       = 0x3F5;
 export const ARENA_READY_ROOM_MAX_PARTICIPANTS = 8;
@@ -58,7 +59,6 @@ export const SOLARIS_TRAVEL_CONTEXT_ID  = 0xC6;
 export const COMSTAR_ACCESS_ACTION_TYPE = 0x08;
 export const ARENA_SIDE_ACTION_TYPE     = 0x09;
 export const ARENA_STATUS_ACTION_TYPE   = 0x0A;
-export const TERMINAL_MENU_LIST_ID      = 0x22;
 
 export const TERMINAL_MENU_ITEMS = [
   { itemId: 0, text: 'Send a ComStar message' },
@@ -74,6 +74,12 @@ export const TERMINAL_MENU_ITEMS = [
   { itemId: 10, text: 'Review Personal Status' },
   { itemId: 11, text: 'Examine my Contract' },
   { itemId: 12, text: 'Review Unit Status' },
+] as const;
+
+export const GLOBAL_COMSTAR_MENU_ITEMS = [
+  'Send a ComStar message',
+  'Receive a ComStar message',
+  'Check News Grid',
 ] as const;
 
 export const COMSTAR_SEND_TARGET_MENU_ITEMS = [
