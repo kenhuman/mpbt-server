@@ -1500,7 +1500,7 @@ Frame-reading helpers referenced below:
 | 1 | `0x22` | `FUN_0040C030` | `Cmd1_PingAck` | Reads one seq byte; if it matches `g_expectedSeq` (`DAT_004e2c44`): records RTT elapsed (`FUN_004292b0`) and advances the round-robin seq slot (`FUN_00429380`). Silently drops frame on seq mismatch. |
 | 2 | `0x23` | `FUN_0040C060` | `Cmd2_PingRequest` | If `g_expectedSeq ≠ 0`: records current RTT, then calls `FUN_00429280(connObj, newSeq)` which sets a new expected-ack value, fires `COMMEG32.Ordinal_7` to send the reply packet to the server, and resets the RTT timer. Server is requesting a latency probe reply. |
 | 3 | `0x24` | `FUN_0040C190` | `Cmd3_TextBroadcast` | **Corrects §8 label.** In RPS mode: `Frame_ReadString` → display received text in chat scroll-window (`DAT_00472c90`); only effective after `g_chatReady` (`DAT_00472c84 ≠ 0`). In combat mode: reads data and XOR-processes it. Server sends a plain text announcement to the client. |
-| 4 | `0x25` | `FUN_00414B70` | `Cmd4_SceneInit` | Large UI-initialization command (~2836 bytes). Reads: `type1` context/scene id, 1-byte session flags (`0x10` = read scene slot/name payload, `0x20` = clear cached scene table, low nibble enables four scene-location icons), 1-byte current client scene slot, and `type1` current scene visual id; optionally reads four target scene-slot bytes plus four target visual ids, then callsign and scene name strings; finally reads a 1-byte scene-option count plus option type/string pairs. Creates the main world window, chat scroll-window, location icons, action buttons, and status boxes. Sets `g_chatReady = 1` at completion. Earlier docs described the four slots as opponent/mech entries; `FUN_00419390` confirms they are also the ordinary scene location-icon targets for world navigation. |
+| 4 | `0x25` | `FUN_00414B70` | `Cmd4_SceneInit` | Large UI-initialization command (~2836 bytes). Reads: `type1` context/scene id, 1-byte session flags (`0x10` = read scene slot/name payload, `0x20` = clear cached scene table, low nibble enables four scene-location icons), 1-byte current client scene slot, and `type1` current scene visual id; optionally reads four target scene-slot bytes plus four target visual ids, then **two scene-header strings** (a `Frame_ReadArg` string plus a counted string). `World_HandleSceneInitPacket_v123` formats those two strings into the visible world header as `"          %s\\\\%s"`, so this path is packet-text driven rather than a proven automatic room-description lookup from the local map table. The packet then reads a 1-byte scene-option count plus option type/string pairs, creates the main world window, chat scroll-window, location icons, action buttons, and status boxes, and sets `g_chatReady = 1` at completion. Earlier docs described the four slots as opponent/mech entries; `FUN_00419390` confirms they are also the ordinary scene location-icon targets for world navigation. |
 | 5 | `0x26` | `FUN_0040C2F0` | `Cmd5_CursorNormal` | Calls `FUN_00433ec0` → loads `IDC_ARROW` cursor (`0x7f00`), clears `DAT_00474d00`. Server signals "loading complete; restore normal cursor". |
 | 6 | `0x27` | `FUN_0040C300` | `Cmd6_CursorBusy` | Calls `FUN_00433ef0` → loads `IDC_WAIT` cursor (`0x7f02`), sets `DAT_00474d00 = 1`. Server signals "processing; show hourglass". |
 | 7 | `0x28` | `FUN_004112B0` | `Cmd7_ParseMenuDialog` | Menu dialog renderer — documented in §11. |
@@ -1715,17 +1715,16 @@ are silently discarded if `g_chatReady == 0`.
 -- if flags & 0x10 --
 [byte × 4: opp_type + 1]       0x21 = "no opponent" for all 4 slots
 [B85_1 × 4: opp_mech_id + 1]  0x2121 = "no opponent" for all 4
-[string: callsign]             player display name
-[string: scene_name]           "Solaris Arena" — may embed `\x5C` (0x5C) as a hard
-                               line-break; `FUN_00431320` and `FUN_00416710` both
-                               treat 0x5C as an explicit newline, allowing multi-line
-                               text (e.g. room description) below the scene title.
-                               Live retail validation on 2026-04-16 showed that a
-                               title-only `scene_name` leaves the lower description
-                               pane blank on the current world-entry path, so the
-                               current best-fit server behavior is still inline
-                               `title + \x5C + room description` when description
-                               text should appear there.
+[string: scene_header]         first `%s` in the world-header format
+[string: scene_detail]         second `%s` in the world-header format. The
+                               ordinary world `Cmd4` / cache-row path is
+                               packet-text-driven; current RE now shows no call
+                               path from `World_HandleSceneInitPacket_v123` or
+                               `World_ParseSceneInitCacheRow_v123` into the
+                               local `SOLARIS.MAP` room-description renderer
+                               (`FUN_0041fa30`). The client-local room lookup
+                               exists in the travel/map UI state machine, not
+                               in the ordinary world header path.
 [byte: arena_option_count]     0 → 2D world mode, no arena buttons
 ```
 
@@ -1828,10 +1827,9 @@ Confirmed correct order for entering the 2D game world with no arena slots:
 
 ```
 Server → Client: Cmd6  CursorBusy      (hourglass)
-Server → Client: Cmd4  SceneInit       (world frame; current best fit is inline
-                                       `title + \x5C + room desc` when a room
-                                       description should appear in the lower
-                                       scene panel)
+Server → Client: Cmd4  SceneInit       (world frame; the lower scene panel is
+                                       fed by the second native scene-header
+                                       string in the ordinary world path)
 Server → Client: Cmd9  RoomRoster      (count=0; sets ready flag)
 Server → Client: Cmd10 RoomPresence    (self slot + sentinel; empty room)
 Server → Client: Cmd3  TextBroadcast   (room description / welcome message)
@@ -2230,6 +2228,20 @@ manual Travel click emitted client `cmd 5 / action 4`, the server replied with
 `cmd 10` with `selection=148` (`selectedRoomId=147`), and the refreshed scene
 displayed `Travel complete: Ishiyama Arena.` plus the room label `Ishiyama
 Arena`.
+
+Deeper client RE now clarifies the split between the ordinary world scene and
+the travel-map UI:
+
+- `World_HandleSceneWindowInput_v123` only sends scene actions / `cmd 23`
+  location-clicks and can write the unavailable-location message into
+  `g_world_SceneStatusTextWidget`; it does **not** call the local map renderer.
+- The local `SOLARIS.MAP` room description path is the dedicated map window:
+  `FUN_00420690` builds the map UI and immediately calls `FUN_0041f350`
+  (Inner Sphere) or `FUN_0041f7d0` (Solaris), both of which call
+  `FUN_0041fa30` to render the selected room's local name/description.
+- The map table itself is loaded by `FUN_00421f40` during client startup and
+  mode reset, so the data is available globally, but the ordinary world header
+  still has no discovered path that rewrites itself from that local room table.
 
 Adjacent scene location icons take a different path: `FUN_00419390` sends
 client `cmd 23` (`0x38` wire command) with one encoded byte selecting one of
@@ -3752,6 +3764,12 @@ regular Solaris map travel.  There is no tram-specific command or context value:
    corresponds to a tram-only command.
 3. The `MPBT.MSG` string table has no dedicated tram string; `MSG[0x131]` = `"Travel"`
    is the only relevant string (used for the "Travel" button label when `contextId == 0xc6`).
+
+Additional RE detail: the incoming map-open packet leads into the dedicated map
+window builder (`FUN_00420690`), which then calls the Solaris/IS map-specific
+UI builders (`FUN_0041f7d0` / `FUN_0041f350`). Those builders call
+`FUN_0041fa30`, which is the proven local renderer for the selected room's
+`SOLARIS.MAP` / `IS.MAP` name and description text.
 
 **Cmd43 packet structure (for reference):**
 

@@ -241,13 +241,17 @@ export function usesClientMapDescription(roomId: number): boolean {
 }
 
 export function getSolarisRoomDescription(roomId: number): string {
-  return SOLARIS_ROOM_BY_ID.get(roomId)?.description ?? '';
+  return worldMapByRoomId.get(roomId)?.description
+      ?? SOLARIS_ROOM_BY_ID.get(roomId)?.description
+      ?? '';
 }
 
-export function getSolarisSceneHeaderText(roomId: number): string {
-  const name = getSolarisRoomName(roomId);
-  const desc = getSolarisRoomDescription(roomId);
-  return desc ? `${name}\x5c${desc}` : name;
+export function getSolarisSceneHeaderTitle(roomId: number): string {
+  return getSolarisRoomName(roomId);
+}
+
+export function getSolarisSceneHeaderDetail(roomId: number): string {
+  return getSolarisRoomDescription(roomId);
 }
 
 export function uniqueRoomIds(roomIds: number[]): number[] {

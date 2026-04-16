@@ -85,6 +85,7 @@ import {
   ARENA_SIDE_ACTION_TYPE,
   ARENA_STATUS_ACTION_TYPE,
   SOLARIS_TRAVEL_CONTEXT_ID,
+  getSolarisSceneHeaderDetail,
   getSolarisRoomName,
   setSessionRoomPosition,
   worldMapByRoomId,
@@ -884,7 +885,12 @@ function sendWorldInitSequence(
   // Cmd4 — SceneInit: create the world scene, chat window, scene action
   // buttons, and up to four adjacent location icons.
   const roomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
-  connLog.info('[world] sending Cmd4 SceneInit (room=%d scene="%s" callsign="%s")', roomId, getSolarisRoomName(roomId), getDisplayName(session));
+  connLog.info(
+    '[world] sending Cmd4 SceneInit (room=%d header="%s" detail="%s")',
+    roomId,
+    getSolarisRoomName(roomId),
+    getSolarisSceneHeaderDetail(roomId),
+  );
   send(socket, buildSceneInitForSession(session), capture, 'CMD4_SCENE_INIT');
 
   // Cmd10 — RoomPresenceSync: seed the live room roster table before later

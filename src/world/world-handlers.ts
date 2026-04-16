@@ -4298,8 +4298,8 @@ export function handleWorldTextCommand(
             { type: 0, mechId: base + 2 },
             { type: 0, mechId: base + 3 },
           ],
-          callsign:  getDisplayName(session),
-          sceneName: `Icons ${base}–${base + 3}`,
+          sceneHeader: `Icons ${base}–${base + 3}`,
+          sceneDetail: '',
           arenaOptions: [
             { type: 0, label: 'Help' },
             { type: 4, label: 'Travel' },

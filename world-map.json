@@ -3,6 +3,7 @@
     {
       "roomId": 161,
       "_name": "Wasteland",
+      "description": "This grim, deadly jungle of abandoned manufacturing plants, warehouses, foundries and offices hold only the desperate, luckless and ruthless, who accept the brutal living conditions as the price of a great hiding place. The street layout is complex.",
       "type": "street",
       "sector": "montenegro",
       "icon": 53,
@@ -19,6 +20,7 @@
     {
       "roomId": 151,
       "_name": "Kobe Slums",
+      "description": "Despite Kobe's general high standard of living, some still live in poverty, pursued by the demons of gambling addiction and crime. The street layout is complex.",
       "type": "street",
       "sector": "kobe",
       "icon": 57,
@@ -35,6 +37,7 @@
     {
       "roomId": 157,
       "_name": "Factory",
+      "description": "A refitted shuttle production facility, The Factory has enjoyed remarkable success despite its small size and lack of sophistication.  Situated within the industrial sector, it draws consistent crowds, who suffer the cramped conditions gladly. The street layout is very simple.",
       "type": "arena",
       "sector": "montenegro",
       "icon": 12,
@@ -111,6 +114,7 @@
     {
       "roomId": 149,
       "_name": "White Lotus",
+      "description": "The standard of living in White Lotus is second only to the Chancellor's Quarter in Cathay, and security in the district is the best on the planet. The street layout is of average complexity.",
       "type": "bar",
       "sector": "kobe",
       "icon": 26,
@@ -157,6 +161,7 @@
     {
       "roomId": 148,
       "_name": "Government House",
+      "description": "With a sweeping view of War Memorial Park, this district is the center of civil administration for the sector. The stately white Government House is the official home of the Kobe governor. The street layout is simple.",
       "type": "terminal",
       "sector": "kobe",
       "icon": 45,
@@ -323,6 +328,7 @@
     {
       "roomId": 2,
       "_name": "Kobe Sector",
+      "description": "The Kurita sector is beautiful as well as safe. The tourist trade is detoured around those areas with a higher crime rate, and the corruption within Kobe authority is not obvious to the outsider. The fixed arenas in Kobe use desert terrain.",
       "type": "sector",
       "sector": "kobe",
       "icon": 6,
@@ -489,6 +495,7 @@
     {
       "roomId": 4,
       "_name": "Montenegro Sector",
+      "description": "Montenegro is an ugly place, with its abandoned industrial complexes and fierce commercialization. Authorities are far more concerned about maintaining the ties between member-states than improving living and working conditions in the sector. The fixed arenas in Montenegro use tropical terrain.",
       "type": "sector",
       "sector": "montenegro",
       "icon": 35,
@@ -595,6 +602,7 @@
     {
       "roomId": 159,
       "_name": "Allman",
+      "description": "The common people's residential area is every bit as bleak and charmless as the rest of Montenegro, with anonymous high-rises and row houses as the rule. The street layout is of average complexity.",
       "type": "street",
       "sector": "montenegro",
       "icon": 54,
@@ -611,6 +619,7 @@
     {
       "roomId": 150,
       "_name": "Waterfront",
+      "description": "Shrines, parks and statuary line the immaculate waterfront of Kobe. The high security is used to advantage by the crime bosses for their meetings, much to the exasperation of the Kobe upper-class. The street layout is of average complexity.",
       "type": "bar",
       "sector": "kobe",
       "icon": 46,
@@ -657,6 +666,7 @@
     {
       "roomId": 147,
       "_name": "Ishiyama Arena",
+      "description": "Iron Mountain, the centerpiece of Kobe and the destination of thousands of game fans each week, stands here. Ishiyama is perhaps the most feared arena by Mechwarriors, perhaps accounting for its consistently high ratings and huge waiting list. The street layout is very simple.",
       "type": "arena",
       "sector": "kobe",
       "icon": 28,
@@ -748,6 +758,7 @@
     {
       "roomId": 158,
       "_name": "Marik Tower",
+      "description": "This brand-new mountain of glass and steel bears the Marik eagle proudly over its main entrance, and is the center of Montenegro civic authority, as well as the diplomatic and governmental quarter of the sector. The street layout is simple.",
       "type": "terminal",
       "sector": "montenegro",
       "icon": 17,
@@ -839,6 +850,7 @@
     {
       "roomId": 160,
       "_name": "Riverfront",
+      "description": "A place of burned-out warehouses and the twisted remains of dock cranes and loaders, the Riverfront, like the Wasteland, is home to numerous gangs, squatters and other criminals. The street layout is of average complexity.",
       "type": "street",
       "sector": "silesia",
       "icon": 53,
@@ -885,6 +897,7 @@
     {
       "roomId": 170,
       "_name": "Marina",
+      "description": "This opulent district is the resort of many wealthy Davions, who keep their yachts (or floating palaces) here for parties and getaways. The street layout is of average complexity.",
       "type": "bar",
       "sector": "kobe",
       "icon": 1,
@@ -1066,6 +1079,7 @@
     {
       "roomId": 165,
       "_name": "Rivertown",
+      "description": "The lowest level of the Cathay slums lies along this filthy stretch of water, and the houseboats and shacks on rickety piers frequently crowd as many as ten adults into a single cramped room. The street layout is of average complexity.",
       "type": "street",
       "sector": "montenegro",
       "icon": 51,
@@ -1157,6 +1171,7 @@
     {
       "roomId": 153,
       "_name": "Lyran Building",
+      "description": "The armored fist of House Steiner graces the entrance to this grim, gray structure, where Lyran officials administer their sector of Solaris. The street layout is of average complexity.",
       "type": "terminal",
       "sector": "silesia",
       "icon": 17,
@@ -1293,6 +1308,7 @@
     {
       "roomId": 155,
       "_name": "Riverside",
+      "description": "Within sight of Cathay River Town, the Silesian waterfront is the location of numerous high-class hotels and condominiums. The street layout is of average complexity.",
       "type": "bar",
       "sector": "silesia",
       "icon": 46,
@@ -1309,6 +1325,7 @@
     {
       "roomId": 171,
       "_name": "Viewpoint",
+      "description": "This magnificent vantage point looks out over the whole of Solaris City, and plaques and memorials point out the sights to the masses of tourists. The street layout is complex.",
       "type": "street",
       "sector": "blackhills",
       "icon": 53,
@@ -1370,6 +1387,7 @@
     {
       "roomId": 167,
       "_name": "Davion Arena",
+      "description": "The Davion Arena is the largest and most sophisticated Arena on Solaris, seating half again as many as its nearest rival. This ultra-modern edifice towers over the defunct industrial park in which it was built. The street layout is very simple.",
       "type": "arena",
       "sector": "silesia",
       "icon": 32,
@@ -1461,6 +1479,7 @@
     {
       "roomId": 166,
       "_name": "Maze",
+      "description": "The absolute center of Cathay's crome and poverty, this twosting labyrinth of streets, burned-out storefronts, decayed shacks, tottering tenements, bars and opium dens is home to many of the area's major gangs and crime families. The street layout is complex.",
       "type": "street",
       "sector": "silesia",
       "icon": 54,
@@ -1582,6 +1601,7 @@
     {
       "roomId": 169,
       "_name": "Guzman Park",
+      "description": "The centerpiece of the Black Hill's residential district, the winding trails and sports fields of this heavily forested park become virtual battlegrounds after dark as slum gangs fight their turf wars. The street layout is of average complexity.",
       "type": "street",
       "sector": "blackhills",
       "icon": 53,
@@ -1673,6 +1693,7 @@
     {
       "roomId": 162,
       "_name": "Jungle",
+      "description": "The Jungle rises above the Cathay slums, a tribute to the greatness of House Liao amid the pathetic tenements of the teeming masses. Its lush interior is in stark contrast to the intimidating bulk of this massive ferrocrete pyramidal stadium.. The street layout is very simple.",
       "type": "arena",
       "sector": "cathay",
       "icon": 31,
@@ -1749,6 +1770,7 @@
     {
       "roomId": 152,
       "_name": "Steiner Stadium",
+      "description": "Looking like a tremendous Roman coliseum, Steiner Stadium is the only arena to offer seating within the actual arena for spectators, and utilizes lostech to protect them from weapons fire and explosions from the fierce battles taking place within this neoclassical edifice. The street layout is very simple.",
       "type": "arena",
       "sector": "silesia",
       "icon": 29,
@@ -1765,6 +1787,7 @@
     {
       "roomId": 168,
       "_name": "Sortek Building",
+      "description": "The ugly brick Sortek Building characterizes much of this district, heavy on administrative muscle and rather short on style. The street layout is simple.",
       "type": "terminal",
       "sector": "blackhills",
       "icon": 17,
@@ -1901,6 +1924,7 @@
     {
       "roomId": 164,
       "_name": "Middletown",
+      "description": "The middle-class of Cathay enjoy a relatively comfortable existence here, positioned between the crime and poverty of the slums and the wealth and influence of the upper-class Liaoists. The street layout is of average complexity.",
       "type": "street",
       "sector": "cathay",
       "icon": 57,
@@ -2112,6 +2136,7 @@
     {
       "roomId": 3,
       "_name": "Silesia Sector",
+      "description": "Despite official attempts to maintain Silesia as a showpiece of Lyran culture, it suffers the same problems as the rest of the City. The beautiful private estates of the Sector are frequently financed by the very crime that devastates its poorer areas. The fixed arenas in Silesia use temperate terrain.",
       "type": "sector",
       "sector": "silesia",
       "icon": 34,
@@ -2188,6 +2213,7 @@
     {
       "roomId": 146,
       "_name": "Solaris Starport",
+      "description": "This area, composed primarily of public-works installations and tourist areas, is under the direct control of the Solaris central authority. There are no arenas in this sector.",
       "type": "hub",
       "sector": "international",
       "icon": 4,
@@ -2249,6 +2275,7 @@
     {
       "roomId": 6,
       "_name": "Black Hills Sector",
+      "description": "The Davion sector presents itself as a high-tech bastion of civilization and virtue, but squalor and crime are just as prevalent here as anywhere in the city. The fixed arenas in Black Hills use arctic terrain.",
       "type": "sector",
       "sector": "blackhills",
       "icon": 37,
@@ -2340,6 +2367,7 @@
     {
       "roomId": 5,
       "_name": "Cathay Sector",
+      "description": "Cathay displays the sharpest contrasts between the classes. A large body of what are essentially working-class serfs maintain the luxurious splendor of the small upper class. Crime and gang activity is rampant, despite the ruthless efficiency of Cathay Security. The fixed arenas in Cathay use temperate and tropical terrain.",
       "type": "sector",
       "sector": "cathay",
       "icon": 36,
@@ -2506,6 +2534,7 @@
     {
       "roomId": 154,
       "_name": "Chahar Park",
+      "description": "The man-made lake at the center of the park is well-loved by boaters and picnickers, but night brings muggers and drug dealers, who have thus far resisted the stepped-up patrols instituted by F-C security forces. The street layout is simple.",
       "type": "street",
       "sector": "silesia",
       "icon": 45,
@@ -2597,6 +2626,7 @@
     {
       "roomId": 163,
       "_name": "Chancellor's Quarters",
+      "description": "A stark contrast to the slums below, the Chancellor's Quarter is home to Cathay's elite. Boasting the highest standard of living in Solaris City, gleaming towers and rambling estates are the rule here. The street layout is simple.",
       "type": "terminal",
       "sector": "cathay",
       "icon": 45,
@@ -2673,6 +2703,7 @@
     {
       "roomId": 156,
       "_name": "Black Throne",
+      "description": "Parts of this district live in relative comfort, but other areas still experience a high crime rate, and many citizens arm themselves for protection against the organized crime triads. The street layout is complex.",
       "type": "street",
       "sector": "cathay",
       "icon": 48,
@@ -2689,6 +2720,7 @@
     {
       "roomId": 1,
       "_name": "International Sector",
+      "description": "This area, composed primarily of public-works installations and tourist areas, is under the direct control of the Solaris central authority. There are no arenas in this sector.",
       "type": "sector",
       "sector": "international",
       "icon": 6,
@@ -2754,5 +2786,8 @@
       "_gridCol": 12,
       "_gridRow": 14
     }
-  ]
+  ],
+  "_schema": {
+    "description": "Optional lower scene-header text, mirrored from SOLARIS.MAP for stock rooms."
+  }
 }

@@ -65,10 +65,10 @@ export function buildCmd3BroadcastPacket(text: string, seq = 0): Buffer {
 //                                          "no location" → stored -1 → wire byte 0x21
 //     [type1 2B × 4: location_icon[i]+1] FUN_00402b10(1) ×4 → stored as (val - 1)
 //                                          "no location" → stored -1 → wire [0x21, 0x21]
-//     [Frame_ReadArg: callsign]           FUN_0040c0d0 = encodeString format (1B len + raw)
-//     [Frame_ReadString: scene_name]      FUN_0040c130 = encodeB85_1(len) + raw bytes
+//     [Frame_ReadArg: scene_header]       FUN_0040c0d0 = encodeString format (1B len + raw)
+//     [Frame_ReadString: scene_detail]    FUN_0040c130 = encodeB85_1(len) + raw bytes
 //   ELSE (no-opponents branch):
-//     (no additional wire bytes — callsign copied from prev stored data in DAT_00481a70)
+//     (no additional wire bytes — header/detail copied from the previously cached scene row)
 //
 //   [byte: arena_option_count]    FUN_00402f40 → DAT_004e6a70
 //   [loop arena_option_count times:
@@ -97,7 +97,7 @@ export interface Cmd4Options {
   /**
    * Session flags byte:
    *   bits 0..3 = enable location icon slots 0..3
-   *   0x10 = has location slot/callsign/scene reads from wire
+   *   0x10 = has location slot/header/detail reads from wire
    *   0x20 = clear arena data (client memsets its arena data block on receipt)
    * Default: 0x30 (fresh scene entry with location-slot reads enabled).
    */
@@ -114,17 +114,19 @@ export interface Cmd4Options {
    */
   opponents?: Array<OpponentEntry | undefined>;
   /**
-   * Player callsign string (FUN_0040c0d0 / encodeString format; max 84 bytes).
+   * Top scene-header line (FUN_0040c0d0 / encodeString format; max 84 bytes).
    * Required when sessionFlags & 0x10 is set.
-   * Displayed as the window title alongside the scene name.
+   *
+   * RE: `World_HandleSceneInitPacket_v123` later formats the world header as
+   * `"          %s\\\\%s"`, so this first string is a header field rather than a
+   * standalone player-callsign slot.
    */
-  callsign?: string;
+  sceneHeader?: string;
   /**
-   * Arena / scene name string (FUN_0040c130 / encodeB85_1 format).
+   * Lower scene-header line (FUN_0040c130 / encodeB85_1 format).
    * Required when sessionFlags & 0x10 is set.
-   * Displayed as the window title alongside the callsign.
    */
-  sceneName?: string;
+  sceneDetail?: string;
   /**
    * Scene action entries displayed as option buttons. Pressing one sends
    * client cmd-5 with the entry's type byte (FUN_00413790 -> FUN_0040d2d0).
@@ -160,11 +162,11 @@ function buildCmd4Args(opts: Cmd4Options): Buffer {
       const opp = opts.opponents?.[i];
       parts.push(encodeB85_1(opp ? opp.mechId + 1 : 0));
     }
-    // Callsign via FUN_0040c0d0 (encodeString: 1B length + raw bytes)
-    parts.push(encodeString((opts.callsign ?? '').slice(0, 84)));
-    // Scene name via FUN_0040c130 (encodeB85_1(len) + raw bytes)
-    const sceneRaw = Buffer.from((opts.sceneName ?? ''), 'latin1');
-    if (sceneRaw.includes(0x1b)) throw new RangeError('buildCmd4Args: scene name must not contain ESC');
+    // Scene header line 1 via FUN_0040c0d0 (encodeString: 1B length + raw bytes)
+    parts.push(encodeString((opts.sceneHeader ?? '').slice(0, 84)));
+    // Scene header line 2 via FUN_0040c130 (encodeB85_1(len) + raw bytes)
+    const sceneRaw = Buffer.from((opts.sceneDetail ?? ''), 'latin1');
+    if (sceneRaw.includes(0x1b)) throw new RangeError('buildCmd4Args: scene detail must not contain ESC');
     parts.push(encodeB85_1(sceneRaw.length), sceneRaw);
   }
 

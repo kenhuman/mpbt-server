@@ -247,6 +247,8 @@ export interface WorldMapRoom {
   roomId: number;
   /** Human-readable room name (_name or name field from the JSON). */
   name?: string;
+  /** Room-description text for the lower world scene header line, when known. */
+  description?: string;
   sector: string;
   type: RoomType;
   /**
@@ -255,8 +257,8 @@ export interface WorldMapRoom {
    */
   icon: number | null;
   /**
-   * When true, the server should send only the room name in Cmd4 and let the
-   * retail client render the room description from its local SOLARIS.MAP data.
+   * True for stock Solaris rooms whose name/description metadata originates in
+   * the retail client's SOLARIS.MAP file and is mirrored into world-map.json.
    */
   clientMapDescription?: boolean;
   /** Cardinal exits.  null = no exit in that direction.  Values are roomIds. */
@@ -299,6 +301,7 @@ export function loadWorldMap(filePath?: string): WorldMap | null {
       name:   typeof r['_name'] === 'string' ? r['_name'] as string
               : typeof r['name']  === 'string' ? r['name']  as string
               : undefined,
+      description: typeof r['description'] === 'string' ? r['description'] as string : undefined,
       sector: String(r['sector'] ?? ''),
       type:   String(r['type']   ?? 'street') as RoomType,
       icon:   typeof r['icon'] === 'number' ? r['icon'] as number : null,

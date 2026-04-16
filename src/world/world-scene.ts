@@ -65,7 +65,8 @@ import {
   getSolarisRoomExits,
   getSolarisSceneIndex,
   getSolarisRoomName,
-  getSolarisSceneHeaderText,
+  getSolarisSceneHeaderDetail,
+  getSolarisSceneHeaderTitle,
   getSolarisRoomIcon,
   WORLD_MECHS,
   getMechChassis,
@@ -452,8 +453,8 @@ export function buildSceneInitForSession(session: ClientSession) {
         }
         return arr;
       })(),
-      callsign:         getDisplayName(session),
-      sceneName:        getSolarisSceneHeaderText(roomId),
+      sceneHeader:      getSolarisSceneHeaderTitle(roomId),
+      sceneDetail:      getSolarisSceneHeaderDetail(roomId),
       arenaOptions,
     },
     nextSeq(session),
