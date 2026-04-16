@@ -1,0 +1,125 @@
+# Bumps the version in package.json and package-lock.json when a PR targeting
+# master is opened or reopened — BUT ONLY if one of these conditions is true:
+#
+#   1. The PR description contains an explicit @version directive (see below), OR
+#   2. A git tag for the current version (v{current}) already exists, meaning
+#      that version has been released and this PR must ship as a new version.
+#
+# If neither condition is met the workflow exits silently (no bump, no commit).
+#
+# @version directives (place anywhere in the PR body):
+#
+#   @version patch            0.1.45 → 0.1.46   (default when directive present but no keyword)
+#   @version minor            0.1.45 → 0.2.0
+#   @version major            0.1.45 → 1.0.0
+#   @version 1.2.3            sets an explicit version
+#
+# The bump commit is tagged "[skip ci]" so the release workflow does not fire.
+
+name: Version bump
+
+on:
+  pull_request:
+    types: [opened, reopened]
+    branches: [master]
+
+permissions:
+  contents: write   # required to push the bump commit to the PR branch
+
+jobs:
+  bump-version:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Checkout the PR's head branch (not the merge commit) ──────────────
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      # ── Parse @version directive and calculate new version ─────────────────
+      - name: Resolve new version
+        id: resolve
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          # Extract first @version token from the PR body (case-insensitive)
+          DIRECTIVE=$(printf '%s' "$PR_BODY" | grep -oiP '(?<=@version )\S+' | head -1)
+
+          CURRENT=$(node -p "require('./package.json').version")
+
+          # Condition 1: explicit @version directive in PR body
+          HAS_DIRECTIVE=false
+          [ -n "$DIRECTIVE" ] && HAS_DIRECTIVE=true
+
+          # Condition 2: a release tag for the current version already exists
+          git fetch --tags --quiet
+          TAG_EXISTS=false
+          git tag -l "v${CURRENT}" | grep -q . && TAG_EXISTS=true
+
+          if [ "$HAS_DIRECTIVE" = "false" ] && [ "$TAG_EXISTS" = "false" ]; then
+            echo "No @version directive and tag v${CURRENT} does not exist — skipping bump."
+            echo "should_bump=false" >> "$GITHUB_OUTPUT"
+            echo "current=$CURRENT"  >> "$GITHUB_OUTPUT"
+            echo "new=$CURRENT"      >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          MAJ=$(echo "$CURRENT" | cut -d. -f1)
+          MIN=$(echo "$CURRENT" | cut -d. -f2)
+          PAT=$(echo "$CURRENT" | cut -d. -f3)
+
+          # Explicit semver overrides everything; named keywords bump that component
+          if printf '%s' "$DIRECTIVE" | grep -qP '^\d+\.\d+\.\d+$'; then
+            NEW="$DIRECTIVE"
+          elif [ "${DIRECTIVE,,}" = "major" ]; then
+            NEW="$((MAJ+1)).0.0"
+          elif [ "${DIRECTIVE,,}" = "minor" ]; then
+            NEW="${MAJ}.$((MIN+1)).0"
+          else
+            # "patch" keyword, unknown keyword, or no directive (tag-triggered) → patch bump
+            NEW="${MAJ}.${MIN}.$((PAT+1))"
+          fi
+
+          echo "should_bump=true" >> "$GITHUB_OUTPUT"
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "new=$NEW"         >> "$GITHUB_OUTPUT"
+          echo "directive=${DIRECTIVE:-<none — tag-triggered patch bump>}"
+          echo "Bumping $CURRENT → $NEW"
+
+      # ── Update the version files ──────────────────────────────────────────
+      - name: Apply version bump
+        if: steps.resolve.outputs.should_bump == 'true' && steps.resolve.outputs.current != steps.resolve.outputs.new
+        env:
+          V: ${{ steps.resolve.outputs.new }}
+        run: |
+          # package.json
+          node -e "
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            p.version = process.env.V;
+            fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+          "
+
+          # package-lock.json — update both top-level version and packages[""].version
+          node -e "
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+            p.version = process.env.V;
+            if (p.packages && p.packages['']) p.packages[''].version = process.env.V;
+            fs.writeFileSync('package-lock.json', JSON.stringify(p, null, 2) + '\n');
+          "
+
+      # ── Commit and push ────────────────────────────────────────────────────
+      - name: Commit and push
+        if: steps.resolve.outputs.should_bump == 'true' && steps.resolve.outputs.current != steps.resolve.outputs.new
+        env:
+          V: ${{ steps.resolve.outputs.new }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "chore: bump version to ${V} [skip ci]"
+          git push
