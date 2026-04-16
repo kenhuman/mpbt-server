@@ -2788,6 +2788,7 @@
     }
   ],
   "_schema": {
-    "description": "Optional lower scene-header text, mirrored from SOLARIS.MAP for stock rooms."
+    "description": "Optional lower scene-header text, mirrored from SOLARIS.MAP for stock rooms.",
+    "clientMapDescription": "Optional boolean. When true, the client should use the room's description in the map/scene header context for stock rooms."
   }
 }
