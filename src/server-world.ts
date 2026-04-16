@@ -22,6 +22,7 @@
 
 import * as net    from 'net';
 import * as crypto from 'crypto';
+import { readFileSync } from 'fs';
 
 import { WORLD_PORT, Msg } from './protocol/constants.js';
 import { PacketParser, buildPacket, hexDump } from './protocol/aries.js';
@@ -147,7 +148,8 @@ import {
   flushPendingDuelSettlementNotice,
 } from './world/world-handlers.js';
 
-const WELCOME_TEXT = 'Welcome to the game world.';
+const _pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+const WELCOME_TEXT = `Welcome to the game world.  (Server v${_pkg.version})`;
 
 // ── Login handler ─────────────────────────────────────────────────────────────
 
