@@ -1,56 +1,57 @@
-# Bumps the version in package.json and package-lock.json when a PR targeting
-# master is opened or reopened — BUT ONLY if one of these conditions is true:
+# Bumps the version in package.json and package-lock.json on every push to
+# master — BUT ONLY if one of these conditions is true:
 #
-#   1. The PR description contains an explicit @version directive (see below), OR
+#   1. The squash-merge commit message contains an explicit @version directive
+#      (GitHub includes the PR description in squash-merge commit messages), OR
 #   2. A git tag for the current version (v{current}) already exists, meaning
-#      that version has been released and this PR must ship as a new version.
+#      that version has been released and this commit must ship as a new version.
 #
 # If neither condition is met the workflow exits silently (no bump, no commit).
+# The bump commit contains "[skip ci]" so it does not re-trigger this workflow.
 #
-# @version directives (place anywhere in the PR body):
+# @version directives (place anywhere in the PR body / commit message):
 #
 #   @version patch            0.1.45 → 0.1.46   (default when directive present but no keyword)
 #   @version minor            0.1.45 → 0.2.0
 #   @version major            0.1.45 → 1.0.0
 #   @version 1.2.3            sets an explicit version
 #
-# The bump commit is tagged "[skip ci]" so the release workflow does not fire.
+# Deploy is chained via workflow_run so it always fires AFTER the bump commit
+# has been pushed, ensuring the deployed image carries the correct version.
 
 name: Version bump
 
 on:
-  pull_request:
-    types: [opened, reopened]
+  push:
     branches: [master]
 
 permissions:
-  contents: write   # required to push the bump commit to the PR branch
+  contents: write   # required to push the bump commit
 
 jobs:
   bump-version:
     runs-on: ubuntu-latest
 
     steps:
-      # ── Checkout the PR's head branch (not the merge commit) ──────────────
-      - name: Checkout PR branch
+      # ── Checkout master ────────────────────────────────────────────────────
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref }}
-          token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       # ── Parse @version directive and calculate new version ─────────────────
       - name: Resolve new version
         id: resolve
-        env:
-          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          # Extract first @version token from the PR body (case-insensitive)
-          DIRECTIVE=$(printf '%s' "$PR_BODY" | grep -oiP '(?<=@version )\S+' | head -1)
+          # Read @version from the squash-merge commit message (which GitHub
+          # populates with the PR title + body on squash merges).
+          COMMIT_MSG=$(git log -1 --format='%B')
+          DIRECTIVE=$(printf '%s' "$COMMIT_MSG" | grep -oiP '(?<=@version )\S+' | head -1)
 
           CURRENT=$(node -p "require('./package.json').version")
 
-          # Condition 1: explicit @version directive in PR body
+          # Condition 1: explicit @version directive in commit message
           HAS_DIRECTIVE=false
           [ -n "$DIRECTIVE" ] && HAS_DIRECTIVE=true
 
@@ -86,8 +87,7 @@ jobs:
           echo "should_bump=true" >> "$GITHUB_OUTPUT"
           echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
           echo "new=$NEW"         >> "$GITHUB_OUTPUT"
-          echo "directive=${DIRECTIVE:-<none — tag-triggered patch bump>}"
-          echo "Bumping $CURRENT → $NEW"
+          echo "Bumping $CURRENT → $NEW (directive: ${DIRECTIVE:-<none — tag-triggered patch bump>})"
 
       # ── Update the version files ──────────────────────────────────────────
       - name: Apply version bump

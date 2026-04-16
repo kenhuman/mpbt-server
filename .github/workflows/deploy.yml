@@ -1,7 +1,11 @@
 name: Deploy Game Server
 
 on:
-  push:
+  # Run after version-bump completes so deploy always uses the bumped version.
+  # workflow_dispatch bypasses the chain for manual hotfix deploys.
+  workflow_run:
+    workflows: [Version bump]
+    types: [completed]
     branches: [master]
   workflow_dispatch:
 
@@ -12,6 +16,9 @@ env:
 jobs:
   build-push-deploy:
     runs-on: ubuntu-latest
+    # For workflow_run: only deploy when version-bump succeeded.
+    # workflow_dispatch always runs (no workflow_run event present).
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     permissions:
       contents: read
       packages: write
