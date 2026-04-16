@@ -236,8 +236,19 @@ export function getSolarisRoomName(roomId: number): string {
   return getSolarisRoomInfo(roomId).name;
 }
 
+export function usesClientMapDescription(roomId: number): boolean {
+  return worldMapByRoomId.get(roomId)?.clientMapDescription === true;
+}
+
 export function getSolarisRoomDescription(roomId: number): string {
   return SOLARIS_ROOM_BY_ID.get(roomId)?.description ?? '';
+}
+
+export function getSolarisSceneHeaderText(roomId: number): string {
+  const name = getSolarisRoomName(roomId);
+  if (usesClientMapDescription(roomId)) return name;
+  const desc = getSolarisRoomDescription(roomId);
+  return desc ? `${name}\x5c${desc}` : name;
 }
 
 export function uniqueRoomIds(roomIds: number[]): number[] {

@@ -65,7 +65,7 @@ import {
   getSolarisRoomExits,
   getSolarisSceneIndex,
   getSolarisRoomName,
-  getSolarisRoomDescription,
+  getSolarisSceneHeaderText,
   getSolarisRoomIcon,
   WORLD_MECHS,
   getMechChassis,
@@ -453,12 +453,7 @@ export function buildSceneInitForSession(session: ClientSession) {
         return arr;
       })(),
       callsign:         getDisplayName(session),
-      sceneName:        (() => {
-        const name = getSolarisRoomName(roomId);
-        const desc = getSolarisRoomDescription(roomId);
-        // 0x5C (\) is a hard line-break in both FUN_00416710 and FUN_00431320
-        return desc ? `${name}\x5c${desc}` : name;
-      })(),
+      sceneName:        getSolarisSceneHeaderText(roomId),
       arenaOptions,
     },
     nextSeq(session),

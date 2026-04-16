@@ -1822,7 +1822,10 @@ Confirmed correct order for entering the 2D game world with no arena slots:
 
 ```
 Server → Client: Cmd6  CursorBusy      (hourglass)
-Server → Client: Cmd4  SceneInit       (world frame; sceneName = title + \x5C + room desc)
+Server → Client: Cmd4  SceneInit       (world frame; sceneName may be title-only for
+                                       rooms backed by client-local SOLARIS.MAP
+                                       descriptions, with inline `title + \x5C + room desc`
+                                       reserved for fallback/non-map-backed cases)
 Server → Client: Cmd9  RoomRoster      (count=0; sets ready flag)
 Server → Client: Cmd10 RoomPresence    (self slot + sentinel; empty room)
 Server → Client: Cmd3  TextBroadcast   (room description / welcome message)

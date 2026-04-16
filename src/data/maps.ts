@@ -254,6 +254,11 @@ export interface WorldMapRoom {
    * null = not yet known; server falls back to scene-slot index.
    */
   icon: number | null;
+  /**
+   * When true, the server should send only the room name in Cmd4 and let the
+   * retail client render the room description from its local SOLARIS.MAP data.
+   */
+  clientMapDescription?: boolean;
   /** Cardinal exits.  null = no exit in that direction.  Values are roomIds. */
   exits: {
     north: number | null;
@@ -297,6 +302,7 @@ export function loadWorldMap(filePath?: string): WorldMap | null {
       sector: String(r['sector'] ?? ''),
       type:   String(r['type']   ?? 'street') as RoomType,
       icon:   typeof r['icon'] === 'number' ? r['icon'] as number : null,
+      clientMapDescription: r['clientMapDescription'] === true,
       exits: {
         north: typeof exits['north'] === 'number' ? exits['north'] as number : null,
         south: typeof exits['south'] === 'number' ? exits['south'] as number : null,

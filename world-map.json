@@ -13,7 +13,8 @@
         "east": null
       },
       "_gridCol": 24,
-      "_gridRow": 5
+      "_gridRow": 5,
+      "clientMapDescription": true
     },
     {
       "roomId": 151,
@@ -28,7 +29,8 @@
         "east": null
       },
       "_gridCol": 7,
-      "_gridRow": 6
+      "_gridRow": 6,
+      "clientMapDescription": true
     },
     {
       "roomId": 157,
@@ -43,7 +45,8 @@
         "east": 2129
       },
       "_gridCol": 20,
-      "_gridRow": 6
+      "_gridRow": 6,
+      "clientMapDescription": true
     },
     {
       "roomId": 2129,
@@ -118,7 +121,8 @@
         "east": 2094
       },
       "_gridCol": 3,
-      "_gridRow": 7
+      "_gridRow": 7,
+      "clientMapDescription": true
     },
     {
       "roomId": 2094,
@@ -163,7 +167,8 @@
         "east": 2088
       },
       "_gridCol": 10,
-      "_gridRow": 7
+      "_gridRow": 7,
+      "clientMapDescription": true
     },
     {
       "roomId": 2088,
@@ -328,7 +333,8 @@
         "east": 2003
       },
       "_gridCol": 7,
-      "_gridRow": 8
+      "_gridRow": 8,
+      "clientMapDescription": true
     },
     {
       "roomId": 2003,
@@ -493,7 +499,8 @@
         "east": 2047
       },
       "_gridCol": 18,
-      "_gridRow": 8
+      "_gridRow": 8,
+      "clientMapDescription": true
     },
     {
       "roomId": 2047,
@@ -598,7 +605,8 @@
         "east": null
       },
       "_gridCol": 20,
-      "_gridRow": 9
+      "_gridRow": 9,
+      "clientMapDescription": true
     },
     {
       "roomId": 150,
@@ -613,7 +621,8 @@
         "east": null
       },
       "_gridCol": 4,
-      "_gridRow": 10
+      "_gridRow": 10,
+      "clientMapDescription": true
     },
     {
       "roomId": 2086,
@@ -658,7 +667,8 @@
         "east": 2072
       },
       "_gridCol": 10,
-      "_gridRow": 10
+      "_gridRow": 10,
+      "clientMapDescription": true
     },
     {
       "roomId": 2072,
@@ -748,7 +758,8 @@
         "east": null
       },
       "_gridCol": 16,
-      "_gridRow": 10
+      "_gridRow": 10,
+      "clientMapDescription": true
     },
     {
       "roomId": 2052,
@@ -838,7 +849,8 @@
         "east": null
       },
       "_gridCol": 20,
-      "_gridRow": 11
+      "_gridRow": 11,
+      "clientMapDescription": true
     },
     {
       "roomId": 2147,
@@ -883,7 +895,8 @@
         "east": null
       },
       "_gridCol": 8,
-      "_gridRow": 12
+      "_gridRow": 12,
+      "clientMapDescription": true
     },
     {
       "roomId": 2078,
@@ -1063,7 +1076,8 @@
         "east": null
       },
       "_gridCol": 16,
-      "_gridRow": 13
+      "_gridRow": 13,
+      "clientMapDescription": true
     },
     {
       "roomId": 2055,
@@ -1153,7 +1167,8 @@
         "east": null
       },
       "_gridCol": 24,
-      "_gridRow": 13
+      "_gridRow": 13,
+      "clientMapDescription": true
     },
     {
       "roomId": 2149,
@@ -1288,7 +1303,8 @@
         "east": null
       },
       "_gridCol": 21,
-      "_gridRow": 14
+      "_gridRow": 14,
+      "clientMapDescription": true
     },
     {
       "roomId": 171,
@@ -1303,7 +1319,8 @@
         "east": null
       },
       "_gridCol": 6,
-      "_gridRow": 15
+      "_gridRow": 15,
+      "clientMapDescription": true
     },
     {
       "roomId": 2141,
@@ -1363,7 +1380,8 @@
         "east": 2138
       },
       "_gridCol": 11,
-      "_gridRow": 15
+      "_gridRow": 15,
+      "clientMapDescription": true
     },
     {
       "roomId": 2138,
@@ -1453,7 +1471,8 @@
         "east": null
       },
       "_gridCol": 17,
-      "_gridRow": 15
+      "_gridRow": 15,
+      "clientMapDescription": true
     },
     {
       "roomId": 2028,
@@ -1573,7 +1592,8 @@
         "east": null
       },
       "_gridCol": 8,
-      "_gridRow": 17
+      "_gridRow": 17,
+      "clientMapDescription": true
     },
     {
       "roomId": 2038,
@@ -1663,7 +1683,8 @@
         "east": 2098
       },
       "_gridCol": 16,
-      "_gridRow": 17
+      "_gridRow": 17,
+      "clientMapDescription": true
     },
     {
       "roomId": 2098,
@@ -1738,7 +1759,8 @@
         "east": null
       },
       "_gridCol": 21,
-      "_gridRow": 17
+      "_gridRow": 17,
+      "clientMapDescription": true
     },
     {
       "roomId": 168,
@@ -1753,7 +1775,8 @@
         "east": 2143
       },
       "_gridCol": 5,
-      "_gridRow": 18
+      "_gridRow": 18,
+      "clientMapDescription": true
     },
     {
       "roomId": 2143,
@@ -1888,7 +1911,8 @@
         "east": null
       },
       "_gridCol": 16,
-      "_gridRow": 19
+      "_gridRow": 19,
+      "clientMapDescription": true
     },
     {
       "roomId": 2020,
@@ -2098,7 +2122,8 @@
         "east": 2022
       },
       "_gridCol": 21,
-      "_gridRow": 20
+      "_gridRow": 20,
+      "clientMapDescription": true
     },
     {
       "roomId": 2022,
@@ -2173,7 +2198,8 @@
         "east": 2066
       },
       "_gridCol": 4,
-      "_gridRow": 21
+      "_gridRow": 21,
+      "clientMapDescription": true
     },
     {
       "roomId": 2066,
@@ -2233,7 +2259,8 @@
         "east": null
       },
       "_gridCol": 8,
-      "_gridRow": 21
+      "_gridRow": 21,
+      "clientMapDescription": true
     },
     {
       "roomId": 2019,
@@ -2323,7 +2350,8 @@
         "east": 2057
       },
       "_gridCol": 14,
-      "_gridRow": 22
+      "_gridRow": 22,
+      "clientMapDescription": true
     },
     {
       "roomId": 2057,
@@ -2488,7 +2516,8 @@
         "east": null
       },
       "_gridCol": 25,
-      "_gridRow": 22
+      "_gridRow": 22,
+      "clientMapDescription": true
     },
     {
       "roomId": 2001,
@@ -2578,7 +2607,8 @@
         "east": null
       },
       "_gridCol": 14,
-      "_gridRow": 24
+      "_gridRow": 24,
+      "clientMapDescription": true
     },
     {
       "roomId": 2127,
@@ -2653,7 +2683,8 @@
         "east": null
       },
       "_gridCol": 20,
-      "_gridRow": 24
+      "_gridRow": 24,
+      "clientMapDescription": true
     },
     {
       "roomId": 1,
@@ -2668,7 +2699,8 @@
         "east": null
       },
       "_gridCol": 4,
-      "_gridRow": 25
+      "_gridRow": 25,
+      "clientMapDescription": true
     },
     {
       "roomId": 2056,
