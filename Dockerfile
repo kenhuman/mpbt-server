@@ -21,6 +21,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 
 COPY --from=builder /app/dist ./dist
+COPY world-map.json ./
 
 # mechdata/ and MPBT.MSG are proprietary and gitignored — they cannot be baked
 # into the image.  Mount them from the VPS host via volumes (see deploy/).
