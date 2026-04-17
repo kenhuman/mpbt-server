@@ -50,7 +50,6 @@ import {
   TIER_RANKING_RESULTS_LIST_ID,
   CLASS_RANKING_RESULTS_LIST_ID,
   PERSONNEL_LIST_ID,
-  ARENA_READY_ACTION_TYPE,
   ARENA_READY_ROOM_MENU_ID,
   ARENA_SIDE_ACTION_TYPE,
   ARENA_STATUS_ACTION_TYPE,
@@ -465,8 +464,9 @@ export function buildSceneInitForSession(session: ClientSession) {
   // actionType 5 → "Fight"  (enter combat; handled by cmd-5 dispatch in server-world.ts).
   // actionType 6 → "Mech"/"Mech Bay" (opens the 3-step mech picker).
   // The client hard-codes button 0x100 as a local-only Help slot and only
-  // dispatches 0x101..0x105, so label slot 0 as Help and use the remaining
-  // forwarded slots for real server-driven actions.
+  // dispatches 0x101..0x105, so arena rows must fit within 5 forwarded buttons.
+  // Preserve the retail-style MECH/SIDE/STATUS/FIGHT surface in arenas and
+  // leave READY on the text-command path.
   const roomType = mapRoom?.type;
   const isArena = roomType === 'arena';
   const hasTerminalAccess = roomType === 'bar' || roomType === 'terminal';
@@ -476,9 +476,13 @@ export function buildSceneInitForSession(session: ClientSession) {
     { type: SOLARIS_TRAVEL_ACTION_TYPE, label: 'Travel' },
   ];
   if (isArena) {
-    arenaOptions.push({ type: ARENA_READY_ACTION_TYPE, label: session.worldArenaReady ? 'Unready' : 'Ready' });
+    arenaOptions.push({ type: 6, label: 'Mech' });
     arenaOptions.push({ type: ARENA_SIDE_ACTION_TYPE, label: 'Side' });
-    arenaOptions.push({ type: ARENA_STATUS_ACTION_TYPE, label: 'Status' });
+    if (session.duelTermsAvailable) {
+      arenaOptions.push({ type: 7, label: 'Duel Terms' });
+    } else {
+      arenaOptions.push({ type: ARENA_STATUS_ACTION_TYPE, label: 'Status' });
+    }
     arenaOptions.push({ type: 5, label: 'Fight' });
   } else {
     arenaOptions.push({ type: 6, label: 'Mech Bay' });

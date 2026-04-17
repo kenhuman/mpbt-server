@@ -577,6 +577,7 @@ function listArenaReadyRoomMenuOptions(
     const parsed = parseArenaReadyRoomKey(other.roomId);
     if (
       parsed?.roomId === arenaRoomId
+      && other.phase === 'world'
       && other.worldInitialized
       && !other.socket.destroyed
     ) {
@@ -594,8 +595,7 @@ function listArenaReadyRoomMenuOptions(
     emptyRoomId += 1;
   }
 
-  const roomIds = [...occupiedRoomIds].sort((a, b) => a - b);
-  roomIds.push(emptyRoomId);
+  const roomIds = [...occupiedRoomIds, emptyRoomId].sort((a, b) => a - b);
 
   return roomIds.map(readyRoomId => {
     const participants = getArenaReadyRoomParticipants(players, arenaRoomId, readyRoomId);
@@ -5373,18 +5373,46 @@ export function handleWorldTextCommand(
   capture: CaptureLogger,
 ): void {
   const clean = text.replace(/\x1b/g, '?').trim();
+  const lower = clean.toLowerCase();
   if (clean.length === 0) {
     connLog.debug('[world] cmd-4 text ignored (empty)');
     return;
   }
 
-  if (clean.toLowerCase() === '/map' || clean.toLowerCase() === '/travel') {
+  if (lower === '/map' || lower === '/travel') {
     sendSolarisTravelMap(session, connLog, capture);
     return;
   }
 
-  if (clean.toLowerCase() === '/mech' || clean.toLowerCase() === '/mechbay' || clean.toLowerCase() === '/mechs') {
+  if (lower === '/mech' || lower === '/mechbay' || lower === '/mechs') {
     sendMechClassPicker(session, connLog, capture);
+    return;
+  }
+
+  if (lower === '/ready' || lower === '/unready' || lower === '/notready') {
+    if (session.phase !== 'world' || !session.worldInitialized || !isArenaRoom(session)) {
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket('READY commands only work in arena ready rooms.', nextSeq(session)),
+        capture,
+        'CMD3_ARENA_READY_CMD_INVALID',
+      );
+      return;
+    }
+    const wantReady = lower === '/ready';
+    if ((session.worldArenaReady === true) === wantReady) {
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket(
+          wantReady ? 'Arena ready already set.' : 'Arena ready already clear.',
+          nextSeq(session),
+        ),
+        capture,
+        wantReady ? 'CMD3_ARENA_READY_ALREADY_SET' : 'CMD3_ARENA_READY_ALREADY_CLEAR',
+      );
+      return;
+    }
+    handleArenaReadyToggle(players, session, connLog, capture);
     return;
   }
 
