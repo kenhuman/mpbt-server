@@ -14,23 +14,29 @@ export type SessionPhase =
   | 'combat'        // in a combat arena; client uses combat dispatch table
   | 'closing';      // disconnect in progress
 
-export interface CombatSession {
+interface CombatSessionBase {
   /** Unique combat-session ID for a staged or active PvP match. */
   id: string;
   /** Combat mode this shared session represents. */
-  mode: 'duel';
+  mode: 'duel' | 'arena';
   /** Server-side room key where the duel was staged. */
   roomId: string;
   /** World-map room ID where the duel was staged. */
   worldMapRoomId: number;
-  /** The two world-session IDs participating in the duel. */
-  participantSessionIds: [string, string];
+  /** World-session IDs participating in the shared combat session. */
+  participantSessionIds: string[];
   /** Current lifecycle state of the duel session. */
   state: 'staged' | 'active' | 'completed';
   /** Creation timestamp in ms since epoch. */
   createdAt: number;
   /** Start timestamp once combat bootstrap begins. */
   startedAt?: number;
+}
+
+export interface DuelCombatSession extends CombatSessionBase {
+  mode: 'duel';
+  /** The two world-session IDs participating in the duel. */
+  participantSessionIds: [string, string];
   /** Shared duel stake values in participant order [A, B]. */
   duelStakeValues: [number, number];
   /** Most recent participant who submitted duel terms. */
@@ -38,6 +44,12 @@ export interface CombatSession {
   /** Timestamp of the most recent duel-terms submission. */
   duelTermsUpdatedAt?: number;
 }
+
+export interface ArenaCombatSession extends CombatSessionBase {
+  mode: 'arena';
+}
+
+export type CombatSession = DuelCombatSession | ArenaCombatSession;
 
 export interface WorldScrollListState {
   /** Active paged result-list id echoed back through cmd-7 row selection. */
@@ -152,6 +164,25 @@ export interface ClientSession {
    */
   worldArenaSide?: number;
   /**
+   * Arena ready-room READY toggle. Undefined/false means not ready.
+   * This is intentionally ephemeral and does not persist across reconnects.
+   */
+  worldArenaReady?: boolean;
+  /**
+   * Arena ready-room identifier within the current arena.
+   * Persisted across reconnects so players return to the same staging room.
+   */
+  worldArenaReadyRoomId?: number;
+  /**
+   * Pending ready-room choices shown in the current arena-entry menu.
+   * Stored in display order so Cmd7 selections can be resolved safely.
+   */
+  pendingArenaReadyRoomChoices?: number[];
+  /**
+   * Pending arena-room selection target while the menu is open.
+   */
+  pendingArenaReadyRoomArenaId?: number;
+  /**
    * Current map room/location identifier from IS.MAP / SOLARIS.MAP.
    * This is separate from roomId, which is a server-side grouping key.
    */
@@ -243,10 +274,7 @@ export interface ClientSession {
   combatLegVel?: number;
   /** Current speedMag echoed in Cmd65 responses. */
   combatSpeedMag?: number;
-  /**
-   * Prototype jump-jet altitude echoed in Cmd65 responses.
-   * This is a server-side estimate only; real fuel/arc physics remain unknown.
-   */
+  /** Nominal airborne altitude used for peer sync / collision logging only. */
   combatJumpAltitude?: number;
   /** Prototype jump-jet fuel percentage (0..100). */
   combatJumpFuel?: number;
@@ -394,8 +422,8 @@ export class PlayerRegistry {
     );
   }
 
-  createDuelCombatSession(sessionA: ClientSession, sessionB: ClientSession): CombatSession {
-    const combatSession: CombatSession = {
+  createDuelCombatSession(sessionA: ClientSession, sessionB: ClientSession): DuelCombatSession {
+    const combatSession: DuelCombatSession = {
       id:                  randomUUID(),
       mode:                'duel',
       roomId:              sessionA.roomId,
@@ -404,6 +432,23 @@ export class PlayerRegistry {
       state:               'staged',
       createdAt:           Date.now(),
       duelStakeValues:     [0, 0],
+    };
+    this.combatSessions.set(combatSession.id, combatSession);
+    return combatSession;
+  }
+
+  createArenaCombatSession(participants: readonly ClientSession[]): ArenaCombatSession {
+    if (participants.length < 2) {
+      throw new Error('arena combat sessions require at least two participants');
+    }
+    const combatSession: ArenaCombatSession = {
+      id:                    randomUUID(),
+      mode:                  'arena',
+      roomId:                participants[0].roomId,
+      worldMapRoomId:        participants[0].worldMapRoomId ?? 0,
+      participantSessionIds: participants.map(participant => participant.id),
+      state:                 'active',
+      createdAt:             Date.now(),
     };
     this.combatSessions.set(combatSession.id, combatSession);
     return combatSession;
