@@ -3694,104 +3694,102 @@ export function sendCombatBootstrapSequence(
     }, JUMP_JET_FUEL_REGEN_INTERVAL_MS);
     session.combatJumpFuelRegenTimer.unref();
 
-    // Bot fires back at the player every BOT_FIRE_INTERVAL_MS milliseconds.
-    // Stops once the server-side per-location local durability state shows the
-    // player has been structurally destroyed.
-    session.botFireTimer = setInterval(() => {
-    if (session.socket.destroyed || !session.socket.writable) return;
-
-    const playerArmorValues = [...(session.combatPlayerArmorValues ?? DEFAULT_BOT_ARMOR_VALUES)];
-    const playerInternalValues = [...(session.combatPlayerInternalValues ?? DEFAULT_BOT_INTERNAL_VALUES)];
-    const playerCriticalStateBytes = [...(session.combatPlayerCriticalStateBytes ?? createCriticalStateBytes(mechEntry?.extraCritCount))];
-    const playerHeadArmor = session.combatPlayerHeadArmor ?? HEAD_ARMOR_VALUE;
-    if (isActorDestroyed(playerInternalValues)) {
-      clearInterval(session.botFireTimer);
-      session.botFireTimer = undefined;
-      connLog.info('[world/combat] player IS depleted (server-side estimate) — bot stopped firing');
-      queueCombatResultTransition(
-        players,
-        session,
-        connLog,
-        capture,
-        COMBAT_RESULT_LOSS,
-        'player already structurally destroyed',
-        PLAYER_RESULT_DELAY_MS,
-      );
-      return;
-    }
-
-    const hitSection = verificationMode === 'headtest'
-      ? HEAD_RETALIATION_SECTION
-      : chooseRetaliationHitSection(session, playerArmorValues, playerInternalValues, playerHeadArmor);
-    const previousInternalValues = [...playerInternalValues];
-    const damageResult = applyDamageToSection(
-      playerArmorValues,
-      playerInternalValues,
-      hitSection,
-      BOT_RETALIATION_DAMAGE,
-      playerHeadArmor,
-    );
-    session.combatPlayerArmorValues = playerArmorValues;
-    session.combatPlayerInternalValues = playerInternalValues;
-    const headCriticalUpdates =
-      hitSection.internalIndex === 7 && damageResult.updates.some(update => update.damageCode === 0x27)
-        ? applyHeadCriticalStateUpdates(playerCriticalStateBytes, playerInternalValues[7] ?? 0)
-        : [];
-    const weaponSectionUpdates = getWeaponSectionLossUpdates(
-      session.selectedMechId,
-      previousInternalValues,
-      playerInternalValues,
-    );
-    session.combatPlayerCriticalStateBytes = playerCriticalStateBytes;
-    session.combatPlayerHeadArmor = damageResult.headArmor;
-    session.playerHealth = getCombatDurability(playerArmorValues, playerInternalValues);
-    session.playerHealth += damageResult.headArmor;
-    const allUpdates = [...damageResult.updates, ...headCriticalUpdates, ...weaponSectionUpdates];
-    const armorRemaining = hitSection.armorIndex >= 0
-      ? `${playerArmorValues[hitSection.armorIndex] ?? 0}`
-      : `${damageResult.headArmor}`;
-    connLog.debug(
-      '[world/combat] bot fires Cmd67: damage=%d hit=%s playerHealth=%d armor=%s internal=%d updates=%s',
-      BOT_RETALIATION_DAMAGE,
-      hitSection.label,
-      session.playerHealth,
-      armorRemaining,
-      playerInternalValues[hitSection.internalIndex] ?? 0,
-      allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join(',') || 'none',
-    );
-    for (const update of allUpdates) {
-      send(
-        session.socket,
-        buildCmd67LocalDamagePacket(update.damageCode, update.damageValue, nextSeq(session)),
-        capture,
-        `CMD67_BOT_RETALIATION_${update.damageCode.toString(16)}`,
-      );
-    }
-    if (isActorDestroyed(playerInternalValues)) {
-      clearInterval(session.botFireTimer);
-      session.botFireTimer = undefined;
-      const fatalReason = (playerInternalValues[7] ?? 0) <= 0
-        ? 'head destroyed'
-        : 'center torso destroyed';
-      connLog.info(
-        '[world/combat] player IS depleted by hit=%s (%s, server-side section tracking) — bot stopped firing',
-        hitSection.label,
-        fatalReason,
-      );
-      queueCombatResultTransition(
-        players,
-        session,
-        connLog,
-        capture,
-        COMBAT_RESULT_LOSS,
-        fatalReason,
-        PLAYER_RESULT_DELAY_MS,
-      );
-    }
-    }, BOT_FIRE_INTERVAL_MS);
-    session.botFireTimer.unref();
-
     const verificationMode = session.combatVerificationMode;
+    if (verificationMode === 'headtest') {
+      // Keep scripted retaliation only for the explicit headtest verifier.
+      session.botFireTimer = setInterval(() => {
+        if (session.socket.destroyed || !session.socket.writable) return;
+
+        const playerArmorValues = [...(session.combatPlayerArmorValues ?? DEFAULT_BOT_ARMOR_VALUES)];
+        const playerInternalValues = [...(session.combatPlayerInternalValues ?? DEFAULT_BOT_INTERNAL_VALUES)];
+        const playerCriticalStateBytes = [...(session.combatPlayerCriticalStateBytes ?? createCriticalStateBytes(mechEntry?.extraCritCount))];
+        const playerHeadArmor = session.combatPlayerHeadArmor ?? HEAD_ARMOR_VALUE;
+        if (isActorDestroyed(playerInternalValues)) {
+          clearInterval(session.botFireTimer);
+          session.botFireTimer = undefined;
+          connLog.info('[world/combat] player IS depleted (server-side estimate) — bot stopped firing');
+          queueCombatResultTransition(
+            players,
+            session,
+            connLog,
+            capture,
+            COMBAT_RESULT_LOSS,
+            'player already structurally destroyed',
+            PLAYER_RESULT_DELAY_MS,
+          );
+          return;
+        }
+
+        const hitSection = HEAD_RETALIATION_SECTION;
+        const previousInternalValues = [...playerInternalValues];
+        const damageResult = applyDamageToSection(
+          playerArmorValues,
+          playerInternalValues,
+          hitSection,
+          BOT_RETALIATION_DAMAGE,
+          playerHeadArmor,
+        );
+        session.combatPlayerArmorValues = playerArmorValues;
+        session.combatPlayerInternalValues = playerInternalValues;
+        const headCriticalUpdates =
+          hitSection.internalIndex === 7 && damageResult.updates.some(update => update.damageCode === 0x27)
+            ? applyHeadCriticalStateUpdates(playerCriticalStateBytes, playerInternalValues[7] ?? 0)
+            : [];
+        const weaponSectionUpdates = getWeaponSectionLossUpdates(
+          session.selectedMechId,
+          previousInternalValues,
+          playerInternalValues,
+        );
+        session.combatPlayerCriticalStateBytes = playerCriticalStateBytes;
+        session.combatPlayerHeadArmor = damageResult.headArmor;
+        session.playerHealth = getCombatDurability(playerArmorValues, playerInternalValues);
+        session.playerHealth += damageResult.headArmor;
+        const allUpdates = [...damageResult.updates, ...headCriticalUpdates, ...weaponSectionUpdates];
+        const armorRemaining = hitSection.armorIndex >= 0
+          ? `${playerArmorValues[hitSection.armorIndex] ?? 0}`
+          : `${damageResult.headArmor}`;
+        connLog.debug(
+          '[world/combat] bot fires Cmd67: damage=%d hit=%s playerHealth=%d armor=%s internal=%d updates=%s',
+          BOT_RETALIATION_DAMAGE,
+          hitSection.label,
+          session.playerHealth,
+          armorRemaining,
+          playerInternalValues[hitSection.internalIndex] ?? 0,
+          allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join(',') || 'none',
+        );
+        for (const update of allUpdates) {
+          send(
+            session.socket,
+            buildCmd67LocalDamagePacket(update.damageCode, update.damageValue, nextSeq(session)),
+            capture,
+            `CMD67_BOT_RETALIATION_${update.damageCode.toString(16)}`,
+          );
+        }
+        if (isActorDestroyed(playerInternalValues)) {
+          clearInterval(session.botFireTimer);
+          session.botFireTimer = undefined;
+          const fatalReason = (playerInternalValues[7] ?? 0) <= 0
+            ? 'head destroyed'
+            : 'center torso destroyed';
+          connLog.info(
+            '[world/combat] player IS depleted by hit=%s (%s, server-side section tracking) — bot stopped firing',
+            hitSection.label,
+            fatalReason,
+          );
+          queueCombatResultTransition(
+            players,
+            session,
+            connLog,
+            capture,
+            COMBAT_RESULT_LOSS,
+            fatalReason,
+            PLAYER_RESULT_DELAY_MS,
+          );
+        }
+      }, BOT_FIRE_INTERVAL_MS);
+      session.botFireTimer.unref();
+    }
+
     session.combatVerificationMode = undefined;
     session.combatRequireAction0 = verificationMode === 'strictfire';
     session.combatShotsAccepted = 0;
