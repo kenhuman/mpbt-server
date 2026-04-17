@@ -5828,9 +5828,9 @@ export function handleCombatMovementFrame(
     session.combatTurnMomentumRaw = frame.turnMomRaw;
 
     const clientSpeed       = frame.rotationRaw - MOTION_NEUTRAL;
-    session.combatSpeedMag  = clientSpeed;
 
     if (clientSpeed !== 0) {
+      session.combatSpeedMag = clientSpeed;
       mirrorCombatRemotePosition(players, session, 'CMD65_COMBAT_REMOTE_COAST');
       maybeLogCollisionProbeCandidate(players, session, connLog, 'CMD8_COAST');
       connLog.debug(
