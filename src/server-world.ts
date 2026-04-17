@@ -80,6 +80,8 @@ import {
   CLASS_RANKING_RESULTS_LIST_ID,
   PERSONNEL_LIST_ID,
   PERSONNEL_MORE_ID,
+  ARENA_READY_ROOM_MENU_ID,
+  ARENA_READY_ACTION_TYPE,
   ARENA_SIDE_MENU_ID,
   ARENA_STATUS_LIST_ID,
   ARENA_SIDE_ACTION_TYPE,
@@ -96,6 +98,7 @@ import {
   nextSeq,
   getDisplayName,
   mapRoomKey,
+  arenaReadyRoomKey,
   getComstarId,
   findWorldTargetBySelectionId,
   sendComstarAccessMenu,
@@ -128,8 +131,7 @@ import {
   handleBotMechTextCommand,
   clearSessionDuelState,
   handleDuelTermsSubmit,
-  tryStartStagedDuelCombat,
-  getArenaSoloFightRejection,
+  tryStartArenaReadyRoomCombat,
   sendStagedDuelTermsPanel,
   sendCombatBootstrapSequence,
   resetCombatState,
@@ -143,9 +145,12 @@ import {
   handleCombatContactReportFrame,
   handleCombatEjectRequest,
   handleCombatKeepalivePacket,
+  handleArenaCombatDisconnect,
   handleMechPickerCmd7,
   handleMechPickerCmd20,
   handleActiveScrollListMore,
+  handleArenaReadyToggle,
+  handleArenaReadyRoomSelection,
   handleArenaSideSelection,
   flushPendingDuelSettlementNotice,
 } from './world/world-handlers.js';
@@ -217,6 +222,7 @@ async function handleWorldLogin(
   session.selectedMechId   = accountResume?.selectedMechId ?? launch.mechId;
   session.selectedMechSlot = accountResume?.selectedMechSlot ?? launch.mechSlot;
   session.worldArenaSide   = accountResume?.worldArenaSide;
+  session.worldArenaReadyRoomId = accountResume?.worldArenaReadyRoomId;
   session.pendingDuelSettlementNotice = accountResume?.pendingDuelSettlementNotice;
   if (session.accountId !== undefined) {
     session.worldRosterId = 100000 + session.accountId;
@@ -234,7 +240,12 @@ async function handleWorldLogin(
 
   session.phase          = 'world';
   setSessionRoomPosition(session, restoredRoomId);
-  session.roomId         = mapRoomKey(restoredRoomId);
+  session.roomId         = (
+    worldMapByRoomId.get(restoredRoomId)?.type === 'arena'
+    && session.worldArenaReadyRoomId !== undefined
+  )
+    ? arenaReadyRoomKey(restoredRoomId, session.worldArenaReadyRoomId)
+    : mapRoomKey(restoredRoomId);
 
   connLog.info(
     '[world-login] accepted: user="%s" displayName="%s" allegiance=%s service="%s"',
@@ -401,14 +412,7 @@ function handleWorldGameData(
       connLog.info('[world] /fightrestart: stopping timers and resetting combat state');
       resetCombatState(session);
       if (session.phase === 'world') {
-        const soloFightRejection = getArenaSoloFightRejection(players, session);
-        if (soloFightRejection) {
-          send(
-            session.socket,
-            buildCmd3BroadcastPacket(soloFightRejection, nextSeq(session)),
-            capture,
-            'CMD3_FIGHT_ROOM_OCCUPIED',
-          );
+        if (tryStartArenaReadyRoomCombat(players, session, connLog)) {
           return;
         }
       }
@@ -456,11 +460,8 @@ function handleWorldGameData(
         session.combatVerificationMode = undefined;
         return;
       }
-      const stagedDuel = players.getCombatSession(session.combatSessionId);
-      if (stagedDuel?.mode === 'duel') {
-        if (tryStartStagedDuelCombat(players, session, connLog)) {
-          connLog.info('[world] %s: triggered shared duel bootstrap session=%s', textCmd, stagedDuel.id);
-        }
+      if (tryStartArenaReadyRoomCombat(players, session, connLog)) {
+        session.combatVerificationMode = undefined;
         return;
       }
       if (textCmd === '/fightwin') {
@@ -488,17 +489,6 @@ function handleWorldGameData(
         session.combatVerificationMode = undefined;
       }
       if (!session.combatInitialized && session.phase === 'world') {
-        const soloFightRejection = getArenaSoloFightRejection(players, session);
-        if (soloFightRejection) {
-          send(
-            session.socket,
-            buildCmd3BroadcastPacket(soloFightRejection, nextSeq(session)),
-            capture,
-            'CMD3_FIGHT_ROOM_OCCUPIED',
-          );
-          session.combatVerificationMode = undefined;
-          return;
-        }
         sendCombatBootstrapSequence(players, session, connLog, capture);
       } else {
         connLog.debug('[world] /fight ignored: combatInitialized=%s phase=%s',
@@ -540,26 +530,16 @@ function handleWorldGameData(
       if (mapRoom?.type !== 'arena') {
         connLog.warn('[world] cmd-5 Fight rejected: room %d is not an arena (type=%s)',
           currentRoomId, mapRoom?.type ?? 'unknown');
+        send(session.socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
         return;
       }
-      const stagedDuel = players.getCombatSession(session.combatSessionId);
-      if (stagedDuel?.mode === 'duel') {
-        if (tryStartStagedDuelCombat(players, session, connLog)) {
-          connLog.info('[world] cmd-5 Fight button: triggered shared duel bootstrap session=%s', stagedDuel.id);
+      if (tryStartArenaReadyRoomCombat(players, session, connLog)) {
+        if (session.phase === 'world' && !session.combatInitialized) {
+          send(session.socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
         }
         return;
       }
       if (!session.combatInitialized && session.phase === 'world') {
-        const soloFightRejection = getArenaSoloFightRejection(players, session);
-        if (soloFightRejection) {
-          send(
-            session.socket,
-            buildCmd3BroadcastPacket(soloFightRejection, nextSeq(session)),
-            capture,
-            'CMD3_FIGHT_ROOM_OCCUPIED',
-          );
-          return;
-        }
         connLog.info('[world] cmd-5 Fight button: triggering combat bootstrap room=%d', currentRoomId);
         sendCombatBootstrapSequence(players, session, connLog, capture);
       } else {
@@ -602,6 +582,10 @@ function handleWorldGameData(
         return;
       }
       sendArenaSideMenu(session, connLog, capture);
+      return;
+    }
+    if (parsed.actionType === ARENA_READY_ACTION_TYPE) {
+      handleArenaReadyToggle(players, session, connLog, capture);
       return;
     }
     if (parsed.actionType === ARENA_STATUS_ACTION_TYPE) {
@@ -772,6 +756,11 @@ function handleWorldGameData(
 
     if (parsed.listId === ARENA_SIDE_MENU_ID) {
       handleArenaSideSelection(players, session, parsed.selection, connLog, capture);
+      return;
+    }
+
+    if (parsed.listId === ARENA_READY_ROOM_MENU_ID) {
+      handleArenaReadyRoomSelection(players, session, parsed.selection, connLog, capture);
       return;
     }
 
@@ -1025,6 +1014,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
       session.phase, session.bytesReceived,
     );
     savePendingIncomingComstarPrompt(session, connLog, 'disconnect');
+    handleArenaCombatDisconnect(players, session, connLog);
     clearSessionDuelState(players, session, connLog, 'player disconnected');
     worldResumeRegistry.save(session);
     if (session.worldInitialized) {

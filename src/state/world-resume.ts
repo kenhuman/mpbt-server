@@ -16,6 +16,7 @@ export interface PendingWorldResume {
   cbills?: number;
   worldMapRoomId?: number;
   worldArenaSide?: number;
+  worldArenaReadyRoomId?: number;
   selectedMechId?: number;
   selectedMechSlot?: number;
   pendingDuelSettlementNotice?: string;
@@ -30,6 +31,7 @@ type ResumeSnapshotSource = Pick<
   | 'cbills'
   | 'worldMapRoomId'
   | 'worldArenaSide'
+  | 'worldArenaReadyRoomId'
   | 'selectedMechId'
   | 'selectedMechSlot'
   | 'pendingDuelSettlementNotice'
@@ -61,6 +63,7 @@ class WorldResumeRegistry {
       cbills: source.cbills,
       worldMapRoomId: source.worldMapRoomId,
       worldArenaSide: source.worldArenaSide,
+      worldArenaReadyRoomId: source.worldArenaReadyRoomId,
       selectedMechId: source.selectedMechId,
       selectedMechSlot: source.selectedMechSlot,
       pendingDuelSettlementNotice: source.pendingDuelSettlementNotice,

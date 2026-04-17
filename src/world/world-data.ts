@@ -53,6 +53,7 @@ export const MATCH_RESULTS_MENU_LIST_ID  = 0x3EA;
 export const COMSTAR_ACCESS_MENU_ID     = 0x3E9;
 export const ARENA_SIDE_MENU_ID         = 0x3F6;
 export const ARENA_STATUS_LIST_ID       = 0x3F5;
+export const ARENA_READY_ROOM_MENU_ID   = 0x3F7;
 export const ARENA_READY_ROOM_MAX_PARTICIPANTS = 8;
 export const PERSONNEL_MORE_ID          = 0x95;
 export const SOLARIS_TRAVEL_CONTEXT_ID  = 0xC6;
@@ -60,6 +61,7 @@ export const SOLARIS_TRAVEL_CONTEXT_ID  = 0xC6;
 // lower-left scene icon, so keep that opcode reserved for ComStar access and
 // use a separate server-defined action id for the top-row Travel button.
 export const SOLARIS_TRAVEL_ACTION_TYPE = 0x0B;
+export const ARENA_READY_ACTION_TYPE    = 0x0C;
 export const COMSTAR_ACCESS_ACTION_TYPE = 0x08;
 export const ARENA_SIDE_ACTION_TYPE     = 0x09;
 export const ARENA_STATUS_ACTION_TYPE   = 0x0A;

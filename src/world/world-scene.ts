@@ -50,6 +50,8 @@ import {
   TIER_RANKING_RESULTS_LIST_ID,
   CLASS_RANKING_RESULTS_LIST_ID,
   PERSONNEL_LIST_ID,
+  ARENA_READY_ACTION_TYPE,
+  ARENA_READY_ROOM_MENU_ID,
   ARENA_SIDE_ACTION_TYPE,
   ARENA_STATUS_ACTION_TYPE,
   ARENA_SIDE_MENU_ID,
@@ -57,6 +59,7 @@ import {
   ARENA_READY_ROOM_MAX_PARTICIPANTS,
   ARENA_SIDE_MENU_ITEMS,
   SOLARIS_TRAVEL_ACTION_TYPE,
+  COMSTAR_ACCESS_ACTION_TYPE,
   FALLBACK_MECH_ID,
   SOLARIS_TRAVEL_CONTEXT_ID,
   GLOBAL_COMSTAR_MENU_ITEMS,
@@ -139,6 +142,50 @@ export function mapRoomKey(roomId: number): string {
   return `map_room_${roomId}`;
 }
 
+export function arenaReadyRoomKey(roomId: number, readyRoomId: number): string {
+  return `arena_ready_room_${roomId}_${readyRoomId}`;
+}
+
+export function parseArenaReadyRoomKey(roomKey: string): { roomId: number; readyRoomId: number } | undefined {
+  const match = /^arena_ready_room_(\d+)_(\d+)$/.exec(roomKey);
+  if (!match) {
+    return undefined;
+  }
+  const roomId = Number.parseInt(match[1] ?? '', 10);
+  const readyRoomId = Number.parseInt(match[2] ?? '', 10);
+  if (!Number.isFinite(roomId) || !Number.isFinite(readyRoomId) || readyRoomId < 1) {
+    return undefined;
+  }
+  return { roomId, readyRoomId };
+}
+
+export function getArenaReadyRoomLabel(readyRoomId: number | undefined): string {
+  if (readyRoomId === undefined || readyRoomId < 1) {
+    return 'Ready Room';
+  }
+  return `Ready Room ${readyRoomId}`;
+}
+
+export function getArenaReadyRoomId(session: ClientSession): number | undefined {
+  const parsed = parseArenaReadyRoomKey(session.roomId);
+  if (parsed && parsed.roomId === session.worldMapRoomId) {
+    return parsed.readyRoomId;
+  }
+  return session.worldArenaReadyRoomId;
+}
+
+export function getArenaReadyRoomLabelForSession(session: ClientSession): string | undefined {
+  const roomId = session.worldMapRoomId;
+  if (roomId === undefined || worldMapByRoomId.get(roomId)?.type !== 'arena') {
+    return undefined;
+  }
+  const readyRoomId = getArenaReadyRoomId(session);
+  if (readyRoomId === undefined) {
+    return undefined;
+  }
+  return getArenaReadyRoomLabel(readyRoomId);
+}
+
 // ── Presence accessors ────────────────────────────────────────────────────────
 
 export function getPresenceStatus(session: ClientSession): number {
@@ -155,7 +202,9 @@ export function getComstarId(session: ClientSession): number {
 export function getPresenceLocation(session: ClientSession): string {
   const roomId = session.worldMapRoomId;
   const status = getPresenceStatus(session);
-  const room = roomId === undefined ? 'world' : getSolarisRoomName(roomId);
+  const roomName = roomId === undefined ? 'world' : getSolarisRoomName(roomId);
+  const readyRoomLabel = getArenaReadyRoomLabelForSession(session);
+  const room = readyRoomLabel ? `${roomName} - ${readyRoomLabel}` : roomName;
   if (status <= 5) return `Standing in ${room}`;
   if (status <= 12) return `Booth ${status - 5} in ${room}`;
   return `Status ${status}`;
@@ -170,11 +219,11 @@ export function getArenaSideLabel(side: number | undefined): string {
 
 function getArenaReadyState(session: ClientSession): string {
   if (session.selectedMechId === undefined) {
-    return 'No mech picked';
+    return 'NOT READY - no mech picked';
   }
   const mech = WORLD_MECH_BY_ID.get(session.selectedMechId);
   const chassis = mech ? getMechChassis(mech.typeString) : `Mech ${session.selectedMechId}`;
-  return `Picked: ${chassis}`;
+  return session.worldArenaReady ? `READY - ${chassis}` : `NOT READY - ${chassis}`;
 }
 
 // ── Roster / presence queries ─────────────────────────────────────────────────
@@ -415,25 +464,33 @@ export function buildSceneInitForSession(session: ClientSession) {
   // Top-row Travel therefore uses a separate server-defined action id.
   // actionType 5 → "Fight"  (enter combat; handled by cmd-5 dispatch in server-world.ts).
   // actionType 6 → "Mech"/"Mech Bay" (opens the 3-step mech picker).
-  // The client hard-codes button 0x100 as Help and only dispatches 0x101..0x105,
-  // so arena rows must fit within 6 visible buttons total.
-  const isArena = mapRoom?.type === 'arena';
+  // The client hard-codes button 0x100 as a local-only Help slot and only
+  // dispatches 0x101..0x105, so label slot 0 as Help and use the remaining
+  // forwarded slots for real server-driven actions.
+  const roomType = mapRoom?.type;
+  const isArena = roomType === 'arena';
+  const hasTerminalAccess = roomType === 'bar' || roomType === 'terminal';
+  const readyRoomLabel = isArena ? getArenaReadyRoomLabelForSession(session) : undefined;
   const arenaOptions: Array<{ type: number; label: string }> = [
     { type: 0, label: 'Help' },
     { type: SOLARIS_TRAVEL_ACTION_TYPE, label: 'Travel' },
   ];
   if (isArena) {
-    arenaOptions.push({ type: 6, label: 'Mech' });
+    arenaOptions.push({ type: ARENA_READY_ACTION_TYPE, label: session.worldArenaReady ? 'Unready' : 'Ready' });
     arenaOptions.push({ type: ARENA_SIDE_ACTION_TYPE, label: 'Side' });
-    if (session.duelTermsAvailable) {
-      arenaOptions.push({ type: 7, label: 'Duel Terms' });
-    } else {
-      arenaOptions.push({ type: ARENA_STATUS_ACTION_TYPE, label: 'Status' });
-    }
+    arenaOptions.push({ type: ARENA_STATUS_ACTION_TYPE, label: 'Status' });
     arenaOptions.push({ type: 5, label: 'Fight' });
   } else {
     arenaOptions.push({ type: 6, label: 'Mech Bay' });
+    if (hasTerminalAccess) {
+      arenaOptions.push({ type: COMSTAR_ACCESS_ACTION_TYPE, label: 'Terminal' });
+    }
   }
+
+  const sceneDetailBase = getSolarisSceneHeaderDetail(roomId);
+  const sceneDetail = readyRoomLabel
+    ? `${readyRoomLabel}${sceneDetailBase ? ` - ${sceneDetailBase}` : ''}`
+    : sceneDetailBase;
 
   return buildCmd4SceneInitPacket(
     {
@@ -453,7 +510,7 @@ export function buildSceneInitForSession(session: ClientSession) {
         return arr;
       })(),
       sceneHeader:      getSolarisSceneHeaderTitle(roomId),
-      sceneDetail:      getSolarisSceneHeaderDetail(roomId),
+      sceneDetail,
       arenaOptions,
     },
     nextSeq(session),
@@ -535,17 +592,42 @@ export function sendArenaStatusList(
   capture: CaptureLogger,
 ): void {
   const entries = buildArenaStatusEntries(players, session);
+  const readyRoomLabel = getArenaReadyRoomLabelForSession(session);
+  const titlePrefix = readyRoomLabel ? `${readyRoomLabel} Status` : 'Arena Status';
   connLog.info('[world] sending arena status list (%d entries)', entries.length);
   send(
     session.socket,
     buildCmd48KeyedTripleStringListPacket(
       ARENA_STATUS_LIST_ID,
-      `Arena Status (${entries.length}/${ARENA_READY_ROOM_MAX_PARTICIPANTS})`,
+      `${titlePrefix} (${entries.length}/${ARENA_READY_ROOM_MAX_PARTICIPANTS})`,
       entries,
       nextSeq(session),
     ),
     capture,
     'CMD48_ARENA_STATUS',
+  );
+}
+
+export function sendArenaReadyRoomMenu(
+  session: ClientSession,
+  arenaRoomId: number,
+  roomOptions: Array<{ readyRoomId: number; label: string }>,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  session.pendingArenaReadyRoomArenaId = arenaRoomId;
+  session.pendingArenaReadyRoomChoices = roomOptions.map(option => option.readyRoomId);
+  connLog.info('[world] sending arena ready-room menu: arena=%d options=%d', arenaRoomId, roomOptions.length);
+  send(
+    session.socket,
+    buildMenuDialogPacket(
+      ARENA_READY_ROOM_MENU_ID,
+      `Choose a ready room in ${getSolarisRoomName(arenaRoomId)}:`,
+      roomOptions.map(option => option.label),
+      nextSeq(session),
+    ),
+    capture,
+    'CMD7_ARENA_READY_ROOM_MENU',
   );
 }
 
