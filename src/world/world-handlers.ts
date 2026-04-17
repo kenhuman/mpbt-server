@@ -164,9 +164,9 @@ import {
   JUMP_JET_DEFAULT_APEX_METERS,
   JUMP_JET_ASCENT_STEPS,
   JUMP_JET_TICK_MS,
+  JUMP_JET_REMOTE_MIRROR_MS_PER_APEX_METER,
   JUMP_JET_FUEL_MAX,
   JUMP_JET_START_FUEL_THRESHOLD,
-  JUMP_JET_FUEL_DRAIN_PER_TICK,
   JUMP_JET_FUEL_REGEN_INTERVAL_MS,
   JUMP_JET_FUEL_REGEN_PER_TICK,
   COLLISION_PROBE_HORIZONTAL_DISTANCE,
@@ -216,6 +216,54 @@ function getSelectedMechJumpArc(session: ClientSession): { apexUnits: number; st
       Math.round(apexUnits / JUMP_JET_ASCENT_STEPS),
     ),
   };
+}
+
+function getSelectedMechJumpMirrorDurationMs(session: ClientSession): number {
+  const { apexUnits } = getSelectedMechJumpArc(session);
+  const apexMeters = Math.max(1, Math.round(apexUnits / COMBAT_WORLD_UNITS_PER_METER));
+  return Math.max(JUMP_JET_TICK_MS * 8, apexMeters * JUMP_JET_REMOTE_MIRROR_MS_PER_APEX_METER);
+}
+
+function getLocalCmd65Altitude(session: ClientSession): number {
+  return session.combatJumpActive ? 0 : (session.combatJumpAltitude ?? 0);
+}
+
+function startPeerOnlyJumpMirror(
+  players: PlayerRegistry,
+  session: ClientSession,
+): void {
+  if (session.combatJumpTimer !== undefined) {
+    clearInterval(session.combatJumpTimer);
+    session.combatJumpTimer = undefined;
+  }
+
+  const { apexUnits } = getSelectedMechJumpArc(session);
+  const durationMs = getSelectedMechJumpMirrorDurationMs(session);
+  const startedAt = Date.now();
+  const startedFuel = session.combatJumpFuel ?? JUMP_JET_FUEL_MAX;
+  session.combatJumpAltitude = 0;
+
+  session.combatJumpTimer = setInterval(() => {
+    if (!session.combatJumpActive) {
+      if (session.combatJumpTimer !== undefined) {
+        clearInterval(session.combatJumpTimer);
+        session.combatJumpTimer = undefined;
+      }
+      return;
+    }
+
+    const elapsedMs = Date.now() - startedAt;
+    const progress = Math.min(1, elapsedMs / Math.max(durationMs, 1));
+    const mirroredAltitude =
+      progress >= 1
+        ? COMBAT_WORLD_UNITS_PER_METER
+        : Math.max(COMBAT_WORLD_UNITS_PER_METER, Math.round(apexUnits * 4 * progress * (1 - progress)));
+
+    session.combatJumpAltitude = mirroredAltitude;
+    session.combatJumpFuel = Math.max(0, Math.round(startedFuel * (1 - progress)));
+    mirrorDuelRemotePosition(players, session, 'DUEL_CMD65_JUMP_MIRROR');
+  }, JUMP_JET_TICK_MS);
+  session.combatJumpTimer.unref();
 }
 
 const DEFAULT_BOT_ARMOR_VALUES = Array<number>(10).fill(10);
@@ -4728,14 +4776,14 @@ export function handleCombatMovementFrame(
     send(
       session.socket,
       buildCmd65PositionSyncPacket(
-        {
-          slot:     0,
-          x:        session.combatX,
-          y:        session.combatY,
-          z:        session.combatJumpAltitude ?? 0,
-          facing:   getCombatCmd65Facing(session),
-          throttle,
-          legVel,
+          {
+            slot:     0,
+            x:        session.combatX,
+            y:        session.combatY,
+            z:        getLocalCmd65Altitude(session),
+            facing:   getCombatCmd65Facing(session),
+            throttle,
+            legVel,
           speedMag: clientSpeed,
         },
         nextSeq(session),
@@ -5172,15 +5220,6 @@ export function handleCombatActionFrame(
     }
 
     const fuel = session.combatJumpFuel ?? JUMP_JET_FUEL_MAX;
-    if (fuel <= JUMP_JET_START_FUEL_THRESHOLD) {
-      connLog.info(
-        '[world/combat] cmd-12 jump action=4 ignored (fuel=%d threshold=%d)',
-        fuel,
-        JUMP_JET_START_FUEL_THRESHOLD,
-      );
-      return;
-    }
-
     if (
       session.combatJumpActive
       || session.combatJumpTimer !== undefined
@@ -5191,22 +5230,30 @@ export function handleCombatActionFrame(
     }
 
     const jumpArc = getSelectedMechJumpArc(session);
-    const nominalAltitude = Math.max(COMBAT_WORLD_UNITS_PER_METER, Math.round(jumpArc.apexUnits / 2));
-    const activationFuelDrain = JUMP_JET_FUEL_DRAIN_PER_TICK * (JUMP_JET_ASCENT_STEPS * 2);
+    const mirrorDurationMs = getSelectedMechJumpMirrorDurationMs(session);
     session.combatJumpActive = true;
-    session.combatJumpAltitude = nominalAltitude;
+    session.combatJumpAltitude = 0;
     session.combatThrottle = 0;
     session.combatLegVel = 0;
     session.combatSpeedMag = 0;
-    session.combatJumpFuel = Math.max(0, fuel - activationFuelDrain);
+    session.combatJumpFuel = fuel;
     session.combatLastJumpLandAt = undefined;
     session.combatLastJumpLandAltitude = undefined;
+    startPeerOnlyJumpMirror(players, session);
+
+    if (fuel <= JUMP_JET_START_FUEL_THRESHOLD) {
+      connLog.debug(
+        '[world/combat] cmd-12 jump action=4 accepted with stale server fuel snapshot=%d (client owns jump threshold)',
+        fuel,
+      );
+    }
 
     connLog.info(
-      '[world/combat] cmd-12 jump action=4 altitude=%d fuel=%d apex=%d (client-owned jump, no local Cmd65 echo)',
+      '[world/combat] cmd-12 jump action=4 altitude=%d fuel=%d apex=%d mirrorDurationMs=%d (client-owned local jump, peer-only Cmd65 mirror)',
       session.combatJumpAltitude,
       session.combatJumpFuel,
       jumpArc.apexUnits,
+      mirrorDurationMs,
     );
     mirrorDuelRemotePosition(players, session, 'DUEL_CMD65_JUMP_START');
     maybeLogCollisionProbeCandidate(players, session, connLog, 'DUEL_CMD65_JUMP_START');

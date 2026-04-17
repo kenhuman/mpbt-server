@@ -117,7 +117,7 @@ export interface ClientSession {
   combatWorldRestoreTimer?: ReturnType<typeof setTimeout>;
   /** One-shot timeout that delays Cmd72+ combat bootstrap so DROP can display first. */
   combatBootstrapTimer?: ReturnType<typeof setTimeout>;
-  /** Legacy prototype jump loop handle; cleared during combat reset if present. */
+  /** Peer-only jump mirror loop handle; cleared during combat reset if present. */
   combatJumpTimer?: ReturnType<typeof setInterval>;
   /**
    * True after cmd12/action 4 until cmd12/action 6 or combat reset.
