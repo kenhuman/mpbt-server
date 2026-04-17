@@ -1,6 +1,6 @@
 {
   "name": "mpbt-server",
-  "version": "0.1.48",
+  "version": "0.1.49",
   "description": "Multiplayer BattleTech: Solaris — ARIES server emulator",
   "author": "Ken Human",
   "license": "AGPL-3.0-only",
