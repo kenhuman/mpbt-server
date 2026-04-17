@@ -442,8 +442,8 @@ export function buildCmd71ResetEffectStatePacket(seq = 0): Buffer {
 //     it is a protocol filler byte — safe to send 0.
 //   • statusByte: stored at DAT_004f1fe6 — same struct offset as in Cmd64.
 //   • globalA/B/C (three type2 values at DAT_004f56b4, DAT_004f1d24, DAT_004f5684):
-//     purpose still unlabelled; safe to send 0.
-//   • headingBias type1 → client stores (raw − 0xe1c); send MOTION_NEUTRAL for 0.
+//     shared throttle/jump gravity, grounded drag offset, airborne damping.
+//   • headingBias type1 → client stores (raw − 0xe1c); seeds DAT_004f4210 heat bias.
 //   • extraType2Values: count byte + N type2 values; send [] for prototype.
 //   • remainingActorCount → DAT_0047ef70; if 0 → sets DAT_0047ef60 |= 4.
 //   • unknownType1Raw: send MOTION_NEUTRAL (0xe1c) as raw for prototype.
@@ -493,11 +493,13 @@ export interface Cmd72LocalBootstrap {
   terrainPoints: Cmd72TerrainPoint[];
   /** List of arena interest points; only first 10 are read by client. */
   arenaPoints: Cmd72ArenaPoint[];
-  /** ASSUMPTION: globalA/B/C — type2 each; purpose unknown. */
+  /** Shared throttle/jump gravity scale (DAT_004f56b4), encoded as type2. */
   globalA: number;
+  /** Ground-only drag offset (DAT_004f1d24), encoded as type2. */
   globalB: number;
+  /** Airborne damping scalar (DAT_004f5684), encoded as type2. */
   globalC: number;
-  /** ASSUMPTION: headingBias encoded as type1 with MOTION_NEUTRAL. */
+  /** Heat-bias seed (DAT_004f4210), encoded as type1. */
   headingBias: number;
   /** max 11 bytes; trailing digits parsed into actor display id */
   identity0: string;
@@ -555,12 +557,12 @@ export function buildCmd72LocalBootstrapPacket(opts: Cmd72LocalBootstrap, seq = 
     parts.push(encodeCoordY(pt.y));
   }
 
-  // Three type2 globals (ASSUMPTION: purpose unknown)
+  // Three type2 globals: throttle/jump gravity, grounded drag, airborne damping.
   parts.push(encodeB85_2(opts.globalA));
   parts.push(encodeB85_2(opts.globalB));
   parts.push(encodeB85_2(opts.globalC));
 
-  // headingBias as type1 with MOTION_NEUTRAL offset (ASSUMPTION)
+  // Heat-bias seed as type1 with MOTION_NEUTRAL offset.
   parts.push(encodeB85_1(opts.headingBias + MOTION_NEUTRAL));
 
   // Five identity strings

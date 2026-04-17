@@ -1051,6 +1051,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     session.combatPlayerCriticalStateBytes = undefined;
     session.combatRetaliationCursor = undefined;
     session.combatVerificationMode = undefined;
+    session.combatJumpActive     = undefined;
     session.combatJumpFuel       = undefined;
     session.lastCombatFireActionAt = undefined;
     session.combatRequireAction0 = undefined;

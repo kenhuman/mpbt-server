@@ -117,8 +117,13 @@ export interface ClientSession {
   combatWorldRestoreTimer?: ReturnType<typeof setTimeout>;
   /** One-shot timeout that delays Cmd72+ combat bootstrap so DROP can display first. */
   combatBootstrapTimer?: ReturnType<typeof setTimeout>;
-  /** Repeating setInterval that drives prototype jump-jet ascent/descent updates. */
+  /** Legacy prototype jump loop handle; cleared during combat reset if present. */
   combatJumpTimer?: ReturnType<typeof setInterval>;
+  /**
+   * True after cmd12/action 4 until cmd12/action 6 or combat reset.
+   * Jump ownership is client-side; the server tracks airborne state/fuel only.
+   */
+  combatJumpActive?: boolean;
   /** Repeating setInterval that regenerates jump-jet fuel while grounded. */
   combatJumpFuelRegenTimer?: ReturnType<typeof setInterval>;
   /** Aggregate scripted bot durability for logging and simple win gating. */

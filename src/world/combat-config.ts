@@ -29,7 +29,7 @@ export const COMBAT_WORLD_UNITS_PER_METER = 1_000;
  * Fallback visible jump apex (meters) when a chassis has jump jets but no
  * documented BT-MAN jump range yet.
  */
-export const JUMP_JET_DEFAULT_APEX_METERS = 24;
+export const JUMP_JET_DEFAULT_APEX_METERS = 48;
 
 /** Number of ascent updates before the prototype jump arc peaks. */
 export const JUMP_JET_ASCENT_STEPS = 5;

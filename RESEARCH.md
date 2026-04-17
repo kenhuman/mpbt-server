@@ -2636,6 +2636,17 @@ Additional jump-fuel findings from `FUN_0042cf60 -> FUN_0042c610`:
 - `Combat_JumpJetInputTick_v123` also refuses jump when the local mech data field at `*(actor->mec + 0x38)` is zero. `Combat_InitActorRuntimeFromMec_v123` copies decrypted `.MEC` offset `0x38` into actor runtime offset `0x486`, and local `.MEC` cross-checks matched retail expectations (`JR7-D=5`, `JVN-10F=6`, `BJ-1=4`, while `AS7-D`, `ANH-1A`, `LCT-1E`, and `AWS-8R` all read `0`). Treat `.MEC + 0x38` as the current best jump-capability / jump-jet-count gate.
 - Live Moose/Cougar duel captures from 2026-04-15 showed repeated `cmd12/action 6` frames after later fuel-blocked `action 4` attempts while the actor was already grounded. Treat `action 6` as a jump-state transition that still needs local jump-state correlation, not as stand-alone proof that a real touchdown occurred.
 
+**Current working jump model (2026-04-17):**
+
+- `cmd12/action 4` should be treated as **jump start / airborne-entered**, not as a request for the server to synthesize a full local ascent/descent staircase.
+- `cmd12/action 6` is the best current landing/ground-contact transition signal, but only in correlation with prior airborne state; by itself it is still not proof of a valid retail touchdown.
+- The strongest current throttle-style analogy is **state ownership**, not scale: the client appears to keep local ownership of jump duration/landing timing after `action 4`, just as TAP-mode throttle keeps local ownership of `actor+0x372`.
+- Practical server guidance: keep jump fuel/accounting and remote-peer visibility, but avoid forcing slot-0 local `Cmd65` jump arcs whose timing can overwrite or flatten the client's own jump state.
+- Deeper RE on 2026-04-16 tightened the remaining failure mode: `FUN_0042c830` uses `globalA` (`DAT_004f56b4`) as the same `D` constant in both ground-throttle equilibrium and jump gravity. With the current bootstrap `globalA = 2800`, a `JR7-D`'s local jump thrust (`5 * 400 = 2000` during the short bit-2 phase, then `globalA / 2 = 1400` after the 500 ms transition to flags `0x160`) yields only a brief upward impulse before net downward acceleration. That matches the observed tiny-hop symptom much better than the old apex/`Cmd65` theory.
+- Continued RE ruled out a hidden upper-Z clamp: `FUN_00449220` only floors altitude at `0`, and the `DAT_004f1d30` local-actor overlay confirmed the other jump/fall path still feeds the same `DAT_004f1da6` / `DAT_004f1db2` state. The strongest remaining decoupler in the retail-visible `Cmd72` schema is therefore `globalB` (`DAT_004f1d24`), because `FUN_0042cd20` applies it only while **grounded**, whereas jump-active damping switches to `globalC`.
+- Current server trial (2026-04-17 late pass): `globalA = 1462`, `globalB = 39`, `globalC = 0`. This keeps full-throttle equilibrium near `speed_target` (`0.8 * 98000 / 1462 - 1462 / 100 ≈ 39`) while increasing the simple Jenner jump-height estimate by about **50%** versus the earlier `1600/33/0` bootstrap, pushing the live result toward the manual's `Jump: 150 meters` line.
+- The later `Cmd72` `headingBias = 3` experiment was a false lead. `DAT_004f4210` feeds the heat path, not jump height, so the clean bootstrap should keep that field neutral again.
+
 **Jump jet fire — `Combat_SendCmd12Action_v123('\x04')`:**
 ```
 Wire:  ESC '!'  [0x0C+0x21=0x2D]  [0x04+0x21=0x25]  [CRC]
@@ -3355,7 +3366,7 @@ repeat remaining arena points { Frame_ReadType(3); Frame_ReadType(3); } // consu
 globalA       = Frame_ReadType(2);
 globalB       = Frame_ReadType(2);
 globalC       = Frame_ReadType(2);
-headingBias   = Frame_ReadType(1) - 0x0e1c;
+headingBias   = Frame_ReadType(1) - 0x0e1c;   // better current label: heat-bias seed (DAT_004f4210), not jump height
 identity0     = Frame_ReadString();      // max 11 bytes; trailing digits parsed into DAT_004f1ff6
 identity1     = Frame_ReadString();      // max 31 bytes
 identity2     = Frame_ReadString();      // max 39 bytes
@@ -3410,6 +3421,8 @@ speedMag = Frame_ReadType(1) - 0x0e1c;          // DAT_004f20a2 and DAT_004f1d9e
 Dynamic capture is still needed for signed direction conventions, but the four trailing `type1` fields are no longer generic: the client derives interpolation deltas toward the decoded facing/throttle/leg targets and `FUN_004488e0` applies them into `DAT_004f1d5c`, `DAT_004f1f7c`, and `DAT_004f1f7a`, while `FUN_0042c830` consumes the `DAT_004f20a2`/`DAT_004f1d9e` forward/speed magnitude term. This is no longer an unknown server→client packet family: cmd 65 is the combat position/motion update that complements the client→server cmd 8/9 movement packets in §19.2.
 
 Implementation impact: a minimal combat prototype likely needs the `MMC` welcome/state handoff, then `Cmd72` to seed the local player, `Cmd64` for remote actors/bots, and periodic `Cmd65` actor position updates. `Cmd68`, `Cmd66`/`Cmd67`, and `Cmd70` are the current strongest server-response chain for firing, projectile effects, damage-state updates, and destruction/animation states.
+
+Jump-jet caveat from the 2026-04-17 live pass: this does **not** mean the server should continuously drive the **local** actor's airborne path with synthetic slot-0 `Cmd65` ascent/descent steps. Current evidence points to `Cmd65` being appropriate for remote actor sync and landing/state confirmation, while the local client keeps ownership of jump duration after `cmd12/action 4`.
 
 `Combat_Cmd68_SpawnWeaponEffect_v123` field flow:
 
@@ -3710,9 +3723,8 @@ Step 6: Cmd65 timer (every 1000 ms) — keep bot position fresh
 #### Coordinate Encoding
 
 - `COORD_BIAS = 0x18e4258` is added to all type3 world coordinates in Cmd65/Cmd72 payloads
-- Bot at `x=5000, z=0`: within ~100 m of origin, lands on the center arena building (avoid this)
-- Bot at `x=0, z=300000`: ~300 m out in open arena space, clear of obstacles — confirmed working
-- `z` maps to depth/forward in the arena coordinate system; `y` maps to altitude
+- Earlier `z=300000` bot-spawn notes in this section are stale. The later confirmed bot-spawn path uses `y=BOT_SPAWN_DISTANCE`, while the `Cmd65` handler work still points to the **third** coordinate field as airborne altitude.
+- Treat `x/y` as the arena ground plane and `z` as the current best-confirmed altitude field for `Cmd65`.
 
 ---
 
@@ -4240,31 +4252,34 @@ that use this constant at every physics tick:
   net_impulse  = applied_accel × governor_factor
 ```
 
-**`FUN_0042cd20` — ground drag (always active, proportional to speed):**
+**`FUN_0042cd20` — grounded drag / airborne damping:**
 ```
-  decel = |v| × D / 10000
+  if grounded:
+    decel = |v| × (globalB + D/100) / 100
+  if jump-active:
+    damping = |v| × 0.20 × globalC / 100
 ```
 
-**Equilibrium condition** (net_impulse = decel):
+**Grounded equilibrium condition** (net_impulse = decel):
 ```
-  0.80 × speed_target × 980 / D = |v_eq| × D / 10000
+  0.80 × speed_target × 980 / D = |v_eq| × (globalB + D/100) / 100
   ↓ (at equilibrium |v_eq| = speed_target)
-  0.80 × 980 / D = D / 10000
-  D² = 0.80 × 980 × 10000 = 7,840,000
-  D  = 2800
+  globalB = 0.80 × 98000 / D - D / 100
 ```
 
 **Confirmation table:**
 
-| D value | Forward eq speed | Observed limit |
+| D / globalB | Forward eq speed | Expected impact |
 |---------|-----------------|----------------|
-| 3612 (prior) | `900 × 0.80 × 980 / 3612 × 10000 / 3612 ≈ 552` | ~21 kph ✓ |
-| 2800 (fixed) | `900 × 0.80 × 980 / 2800 × 10000 / 2800 = 900` | ~32 kph ✓ |
+| `3612 / 0` (prior) | `900 × 0.80 × 98000 / (3612 × 36.12) ≈ 552` | ~21 kph ✓ |
+| `2800 / 0` | `900 × 0.80 × 98000 / (2800 × 28) = 900` | ~32 kph ✓ |
+| `1462 / 39` | `900 × 0.80 × 98000 / (1462 × 53.62) ≈ 900` | same top-speed target, ~50% more Jenner jump apex than `1600 / 33` |
 
 The value `D = 3612 = 0x0E1C = MOTION_NEUTRAL` was a copy/paste mistake — the
 field was initialised from the motion-bias constant rather than the physics
-parameter.  Setting `globalA = 2800` in the Cmd72 payload makes equilibrium
-speed exactly equal `speed_target` for any throttle setting.
+parameter. Setting `globalA = 2800` with `globalB = 0` fixed the original top
+speed issue, but deeper jump RE shows the more general rule is that **grounded**
+equilibrium depends on the `globalA/globalB` pair rather than `globalA` alone.
 
 **Function cross-reference:**
 
