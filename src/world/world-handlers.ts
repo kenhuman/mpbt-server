@@ -1870,10 +1870,13 @@ function getCombatDurability(armorValues: readonly number[], internalValues: rea
   return sumValues(armorValues) + sumValues(internalValues);
 }
 
+function normalizeExtraCritCount(extraCritCount: number | undefined): number {
+  if (extraCritCount === undefined || extraCritCount < -20 || extraCritCount === -21) return 0;
+  return extraCritCount;
+}
+
 function getTrackedCriticalStateCount(extraCritCount: number | undefined): number {
-  if (extraCritCount === undefined) return BASE_CRITICAL_STATE_COUNT;
-  if (extraCritCount < -20 || extraCritCount === -21) return BASE_CRITICAL_STATE_COUNT;
-  return Math.max(BASE_CRITICAL_STATE_COUNT, BASE_CRITICAL_STATE_COUNT + extraCritCount);
+  return Math.max(BASE_CRITICAL_STATE_COUNT, BASE_CRITICAL_STATE_COUNT + normalizeExtraCritCount(extraCritCount));
 }
 
 function createCriticalStateBytes(extraCritCount: number | undefined): number[] {
@@ -2237,8 +2240,8 @@ function getWeaponSpecForSlot(session: ClientSession, weaponSlot: number) {
   return getWeaponSpecByTypeId(weaponTypeId) ?? getWeaponSpecByName(getWeaponNameForSlot(session, weaponSlot));
 }
 
-function getAmmoDamageCodeBase(extraCritCount: number, weaponCount: number): number {
-  return 0x28 + weaponCount + Math.max(0, extraCritCount);
+function getAmmoDamageCodeBase(extraCritCount: number | undefined, weaponCount: number): number {
+  return 0x28 + weaponCount + normalizeExtraCritCount(extraCritCount);
 }
 
 function getOrCreateCombatAmmoStateValues(
