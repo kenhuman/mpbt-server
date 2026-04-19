@@ -447,7 +447,12 @@ function handleWorldGameData(
       textCmd === '/fightdmglocal' ||
       textCmd === '/fightdmgbot' ||
       textCmd === '/fightstrictfire' ||
-      textCmd === '/fighthead'
+      textCmd === '/fighthead' ||
+      textCmd === '/fightleg' ||
+      textCmd === '/fightlegseq' ||
+      textCmd === '/fightlegair' ||
+      textCmd === '/fightlegfull' ||
+      textCmd === '/fightlegrecover'
     ) {
       const currentRoomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
       const mapRoom = worldMapByRoomId.get(currentRoomId);
@@ -486,6 +491,61 @@ function handleWorldGameData(
         );
       } else if (textCmd === '/fighthead') {
         session.combatVerificationMode = 'headtest';
+      } else if (textCmd === '/fightleg') {
+        session.combatVerificationMode = 'legtest';
+        send(
+          session.socket,
+          buildCmd3BroadcastPacket(
+            'Leg fall verifier armed: bot retaliation will target the left leg until first collapse.',
+            nextSeq(session),
+          ),
+          capture,
+          'CMD3_FIGHTLEG_ARMED',
+        );
+      } else if (textCmd === '/fightlegseq') {
+        session.combatVerificationMode = 'legseq';
+        send(
+          session.socket,
+          buildCmd3BroadcastPacket(
+            'Leg fall sequence verifier armed: bot retaliation will target the left leg and emit Cmd70 1->8 on first collapse.',
+            nextSeq(session),
+          ),
+          capture,
+          'CMD3_FIGHTLEGSEQ_ARMED',
+        );
+      } else if (textCmd === '/fightlegair') {
+        session.combatVerificationMode = 'legair';
+        send(
+          session.socket,
+          buildCmd3BroadcastPacket(
+            'Leg airborne verifier armed: bot retaliation will target the left leg and emit Cmd70 4->8->6 on first collapse.',
+            nextSeq(session),
+          ),
+          capture,
+          'CMD3_FIGHTLEGAIR_ARMED',
+        );
+      } else if (textCmd === '/fightlegfull') {
+        session.combatVerificationMode = 'legfull';
+        send(
+          session.socket,
+          buildCmd3BroadcastPacket(
+            'Leg full-sequence verifier armed: bot retaliation will target the left leg and emit Cmd70 1->4->8->6 on first collapse.',
+            nextSeq(session),
+          ),
+          capture,
+          'CMD3_FIGHTLEGFULL_ARMED',
+        );
+      } else if (textCmd === '/fightlegrecover') {
+        session.combatVerificationMode = 'legrecover';
+        send(
+          session.socket,
+          buildCmd3BroadcastPacket(
+            'Leg recovery verifier armed: bot retaliation will target the left leg and emit Cmd70 1->8->0 on first collapse.',
+            nextSeq(session),
+          ),
+          capture,
+          'CMD3_FIGHTLEGRECOVER_ARMED',
+        );
       } else {
         session.combatVerificationMode = undefined;
       }
@@ -1036,18 +1096,20 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
       session.combatShotsAccepted !== undefined ||
       session.combatShotsRejected !== undefined ||
       session.combatShotsAction0Correlated !== undefined ||
-      session.combatShotsDirectCmd10 !== undefined
+      session.combatShotsDirectCmd10 !== undefined ||
+      session.combatAction0NoShotCount !== undefined
     ) {
       const durationMs = session.combatStartAt !== undefined
         ? Date.now() - session.combatStartAt
         : undefined;
       connLog.info(
-        '[world/combat] session summary: requireAction0=%s accepted=%d rejected=%d ungatedAccepted=%d action0Correlated=%d duration=%s',
+        '[world/combat] session summary: requireAction0=%s accepted=%d rejected=%d ungatedAccepted=%d action0Correlated=%d action0NoShot=%d duration=%s',
         session.combatRequireAction0 === true ? 'true' : 'false',
         session.combatShotsAccepted ?? 0,
         session.combatShotsRejected ?? 0,
         session.combatShotsDirectCmd10 ?? 0,
         session.combatShotsAction0Correlated ?? 0,
+        session.combatAction0NoShotCount ?? 0,
         durationMs !== undefined ? `${(durationMs / 1000).toFixed(1)}s` : 'n/a',
       );
     }
@@ -1069,6 +1131,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     session.combatShotsRejected = undefined;
     session.combatShotsAction0Correlated = undefined;
     session.combatShotsDirectCmd10 = undefined;
+    session.combatAction0NoShotCount = undefined;
     session.combatStartAt = undefined;
     capture.close();
   });

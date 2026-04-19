@@ -159,6 +159,12 @@ const SHARED_SECTION_BY_ATTACH = new Map<number, CombatAttachmentHitSection>([
 ]);
 
 const SECTION_BY_MODEL_AND_ATTACH = new Map<number, Map<number, CombatAttachmentHitSection>>([
+  [13, new Map<number, CombatAttachmentHitSection>([
+    [52, LEFT_LEG],
+    [54, LEFT_LEG],
+    [38, RIGHT_LEG],
+    [40, RIGHT_LEG],
+  ])],
   [43, new Map<number, CombatAttachmentHitSection>([
     [43, LEFT_ARM],
     [44, LEFT_ARM],

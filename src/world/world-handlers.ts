@@ -82,6 +82,11 @@ import { CaptureLogger } from '../util/capture.js';
 import { buildMechExamineText, MECH_STATS } from '../data/mech-stats.js';
 import { mechInternalStateBytes } from '../data/mechs.js';
 import {
+  getWeaponNameByTypeId,
+  getWeaponSpecByName,
+  getWeaponSpecByTypeId,
+} from '../data/weapons.js';
+import {
   type CombatAttachmentImpactContext,
   type CombatAttachmentHitSection,
   getCombatModelIdForMechId,
@@ -280,6 +285,15 @@ const SENSOR_CRITICAL_CODE = 0x11;
 const LIFE_SUPPORT_CRITICAL_CODE = 0x12;
 const CRITICAL_STATE_DAMAGED = 1;
 const CRITICAL_STATE_DESTROYED = 2;
+const LEG_ACTUATOR_CRITICAL_CODES_BY_INTERNAL_INDEX: Readonly<Record<number, readonly number[]>> = {
+  5: [0x08, 0x09, 0x0a, 0x0b],
+  6: [0x0c, 0x0d, 0x0e, 0x0f],
+};
+const LEG_SECTION_LABEL_BY_INTERNAL_INDEX: Readonly<Record<number, string>> = {
+  5: 'left-leg',
+  6: 'right-leg',
+};
+const WEAPON_STATE_READY = 0;
 const WEAPON_STATE_UNAVAILABLE = 1;
 const PLAYER_RESULT_DELAY_MS = 750;
 const BOT_RESULT_DELAY_MS = 1500;
@@ -292,6 +306,144 @@ const HEAD_RETALIATION_SECTION: CombatAttachmentHitSection = {
   internalIndex: 7,
   label: 'head',
 };
+const LEFT_LEG_RETALIATION_SECTION: CombatAttachmentHitSection = {
+  armorIndex: 2,
+  internalIndex: 5,
+  label: 'left-leg',
+};
+const LEG_LOSS_COLLAPSE_ONLY_TRANSITION = [
+  { subcommand: 8, delayMs: 0, labelSuffix: 'COLLAPSE' },
+] as const;
+const LEG_LOSS_FALL_THEN_COLLAPSE_TRANSITION = [
+  { subcommand: 1, delayMs: 0, labelSuffix: 'FALL' },
+  { subcommand: 8, delayMs: 300, labelSuffix: 'COLLAPSE' },
+] as const;
+const LEG_LOSS_AIRBORNE_COLLAPSE_LAND_TRANSITION = [
+  { subcommand: 4, delayMs: 0, labelSuffix: 'AIRBORNE' },
+  { subcommand: 8, delayMs: JUMP_JET_TICK_MS * 2, labelSuffix: 'COLLAPSE' },
+  { subcommand: 6, delayMs: JUMP_JET_TICK_MS * 8, labelSuffix: 'LAND' },
+] as const;
+const LEG_LOSS_FALL_AIRBORNE_COLLAPSE_LAND_TRANSITION = [
+  { subcommand: 1, delayMs: 0, labelSuffix: 'FALL' },
+  { subcommand: 4, delayMs: JUMP_JET_TICK_MS, labelSuffix: 'AIRBORNE' },
+  { subcommand: 8, delayMs: JUMP_JET_TICK_MS * 3, labelSuffix: 'COLLAPSE' },
+  { subcommand: 6, delayMs: JUMP_JET_TICK_MS * 9, labelSuffix: 'LAND' },
+] as const;
+const LEG_LOSS_FALL_COLLAPSE_RECOVER_TRANSITION = [
+  { subcommand: 1, delayMs: 0, labelSuffix: 'FALL' },
+  { subcommand: 8, delayMs: 300, labelSuffix: 'COLLAPSE' },
+  // Recovery probe: slot-0 Cmd70/0 is the strongest current local stand-up ack candidate.
+  { subcommand: 0, delayMs: JUMP_JET_TICK_MS * 16, labelSuffix: 'RECOVER' },
+] as const;
+const FORCED_COMBAT_VERIFICATION_ACCOUNT =
+  process.env['MPBT_FORCE_VERIFICATION_ACCOUNT']?.trim().toLowerCase() ?? '';
+const FORCED_COMBAT_VERIFICATION_MODE_RAW =
+  process.env['MPBT_FORCE_VERIFICATION_MODE']?.trim().toLowerCase() ?? '';
+const FORCED_COMBAT_VERIFICATION_MODES = new Set([
+  'autowin',
+  'autolose',
+  'dmglocal',
+  'dmgbot',
+  'strictfire',
+  'headtest',
+  'legtest',
+  'legseq',
+  'legair',
+  'legfull',
+  'legrecover',
+]);
+
+type ForcedRetaliationVerification = {
+  name: string;
+  hitSection: CombatAttachmentHitSection;
+  stopAfterDestroyedLegInternalIndex?: number;
+  queueLossOnActorDestroyed?: boolean;
+};
+type CombatLegLossTransitionMode = 'collapse-only' | 'fall-then-collapse' | 'airborne-collapse-land' | 'fall-airborne-collapse-land' | 'fall-collapse-recover';
+
+function maybeApplyForcedCombatVerificationMode(
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+): void {
+  if (
+    session.combatVerificationMode !== undefined
+    || FORCED_COMBAT_VERIFICATION_ACCOUNT.length === 0
+    || !FORCED_COMBAT_VERIFICATION_MODES.has(FORCED_COMBAT_VERIFICATION_MODE_RAW)
+    || session.username.trim().toLowerCase() !== FORCED_COMBAT_VERIFICATION_ACCOUNT
+  ) {
+    return;
+  }
+
+  session.combatVerificationMode = FORCED_COMBAT_VERIFICATION_MODE_RAW as ClientSession['combatVerificationMode'];
+  connLog.info(
+    '[world/combat] forced verification override: username=%s mode=%s',
+    session.username,
+    session.combatVerificationMode,
+  );
+
+  if (session.combatVerificationMode === 'strictfire') {
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket(
+        'Strict fire gate armed: ungated SPACEBAR fire will be rejected until recent action0.',
+        nextSeq(session),
+      ),
+      capture,
+      'CMD3_STRICTFIRE_ARMED',
+    );
+  } else if (session.combatVerificationMode === 'legtest') {
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket(
+        'Leg fall verifier armed: bot retaliation will target the left leg until first collapse.',
+        nextSeq(session),
+      ),
+      capture,
+      'CMD3_FIGHTLEG_ARMED',
+    );
+  } else if (session.combatVerificationMode === 'legseq') {
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket(
+        'Leg fall sequence verifier armed: bot retaliation will target the left leg and emit Cmd70 1->8 on first collapse.',
+        nextSeq(session),
+      ),
+      capture,
+      'CMD3_FIGHTLEGSEQ_ARMED',
+    );
+  } else if (session.combatVerificationMode === 'legair') {
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket(
+        'Leg airborne verifier armed: bot retaliation will target the left leg and emit Cmd70 4->8->6 on first collapse.',
+        nextSeq(session),
+      ),
+      capture,
+      'CMD3_FIGHTLEGAIR_ARMED',
+    );
+  } else if (session.combatVerificationMode === 'legfull') {
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket(
+        'Leg full-sequence verifier armed: bot retaliation will target the left leg and emit Cmd70 1->4->8->6 on first collapse.',
+        nextSeq(session),
+      ),
+      capture,
+      'CMD3_FIGHTLEGFULL_ARMED',
+    );
+  } else if (session.combatVerificationMode === 'legrecover') {
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket(
+        'Leg recovery verifier armed: bot retaliation will target the left leg and emit Cmd70 1->8->0 on first collapse.',
+        nextSeq(session),
+      ),
+      capture,
+      'CMD3_FIGHTLEGRECOVER_ARMED',
+    );
+  }
+}
 
 function notifyUnreadComstarMessages(
   session: ClientSession,
@@ -742,6 +894,28 @@ function getArenaReadyToggleError(session: ClientSession): string | undefined {
     return 'pick a side first';
   }
   return undefined;
+}
+
+function shouldSendArenaReadyReminder(session: ClientSession): boolean {
+  return isArenaRoom(session)
+    && session.worldArenaReady !== true
+    && session.worldArenaSide !== undefined
+    && session.selectedMechId !== undefined;
+}
+
+function sendArenaReadyReminder(
+  session: ClientSession,
+  capture: CaptureLogger,
+): void {
+  if (!shouldSendArenaReadyReminder(session)) {
+    return;
+  }
+  send(
+    session.socket,
+    buildCmd3BroadcastPacket('Reminder: use /ready when ready to DROP.', nextSeq(session)),
+    capture,
+    'CMD3_ARENA_READY_REMINDER',
+  );
 }
 
 function hasPendingArenaDuelState(session: ClientSession): boolean {
@@ -1685,6 +1859,8 @@ const LOCAL_RETALIATION_SECTIONS: readonly CombatAttachmentHitSection[] = [
 ] as const;
 
 type DamageCodeUpdate = { damageCode: number; damageValue: number };
+type DestroyedLegSection = { internalIndex: number; label: string };
+type PostDamageStateUpdates = { updates: DamageCodeUpdate[]; newlyDestroyedLegs: DestroyedLegSection[] };
 
 function sumValues(values: readonly number[]): number {
   return values.reduce((sum, value) => sum + value, 0);
@@ -1694,10 +1870,13 @@ function getCombatDurability(armorValues: readonly number[], internalValues: rea
   return sumValues(armorValues) + sumValues(internalValues);
 }
 
+function normalizeExtraCritCount(extraCritCount: number | undefined): number {
+  if (extraCritCount === undefined || extraCritCount < -20 || extraCritCount === -21) return 0;
+  return extraCritCount;
+}
+
 function getTrackedCriticalStateCount(extraCritCount: number | undefined): number {
-  if (extraCritCount === undefined) return BASE_CRITICAL_STATE_COUNT;
-  if (extraCritCount < -20 || extraCritCount === -21) return BASE_CRITICAL_STATE_COUNT;
-  return Math.max(BASE_CRITICAL_STATE_COUNT, BASE_CRITICAL_STATE_COUNT + extraCritCount);
+  return Math.max(BASE_CRITICAL_STATE_COUNT, BASE_CRITICAL_STATE_COUNT + normalizeExtraCritCount(extraCritCount));
 }
 
 function createCriticalStateBytes(extraCritCount: number | undefined): number[] {
@@ -1725,6 +1904,267 @@ function applyHeadCriticalStateUpdates(
   }
   return updates;
 }
+
+function getNewlyDestroyedLegSections(
+  previousInternalValues: readonly number[],
+  nextInternalValues: readonly number[],
+): DestroyedLegSection[] {
+  const updates: DestroyedLegSection[] = [];
+  for (const internalIndex of [5, 6]) {
+    const previousValue = previousInternalValues[internalIndex] ?? 0;
+    const nextValue = nextInternalValues[internalIndex] ?? 0;
+    if (previousValue > 0 && nextValue <= 0) {
+      updates.push({
+        internalIndex,
+        label: LEG_SECTION_LABEL_BY_INTERNAL_INDEX[internalIndex] ?? `internal-${internalIndex}`,
+      });
+    }
+  }
+  return updates;
+}
+
+function applyLegActuatorCriticalStateUpdates(
+  criticalStateBytes: number[],
+  newlyDestroyedLegs: readonly DestroyedLegSection[],
+): DamageCodeUpdate[] {
+  const updates: DamageCodeUpdate[] = [];
+  for (const leg of newlyDestroyedLegs) {
+    const criticalCodes = LEG_ACTUATOR_CRITICAL_CODES_BY_INTERNAL_INDEX[leg.internalIndex] ?? [];
+    for (const damageCode of criticalCodes) {
+      // Conservative retail mirror: when the whole leg IS slot drops to zero, only
+      // raise each actuator crit to the first non-zero state once.
+      if ((criticalStateBytes[damageCode] ?? 0) >= CRITICAL_STATE_DAMAGED) continue;
+      criticalStateBytes[damageCode] = CRITICAL_STATE_DAMAGED;
+      updates.push({ damageCode, damageValue: CRITICAL_STATE_DAMAGED });
+    }
+  }
+  return updates;
+}
+
+function collectPostDamageStateUpdates(
+  mechId: number | undefined,
+  criticalStateBytes: number[],
+  previousInternalValues: readonly number[],
+  nextInternalValues: readonly number[],
+  headInternalDamaged: boolean,
+): PostDamageStateUpdates {
+  const newlyDestroyedLegs = getNewlyDestroyedLegSections(previousInternalValues, nextInternalValues);
+  const updates = [
+    ...(headInternalDamaged ? applyHeadCriticalStateUpdates(criticalStateBytes, nextInternalValues[7] ?? 0) : []),
+    ...applyLegActuatorCriticalStateUpdates(criticalStateBytes, newlyDestroyedLegs),
+    ...getWeaponSectionLossUpdates(mechId, previousInternalValues, nextInternalValues),
+  ];
+  return { updates, newlyDestroyedLegs };
+}
+
+function sendCombatLegLossCollapse(
+  session: ClientSession,
+  slot: number,
+  connLog: Logger,
+  reason: string,
+  label: string,
+  capture?: CaptureLogger,
+  transitionMode: CombatLegLossTransitionMode = 'collapse-only',
+): void {
+  if (session.socket.destroyed || !session.socket.writable || session.phase !== 'combat') return;
+  if (session.combatResultCode !== undefined) return;
+
+  const transitionSteps =
+    transitionMode === 'fall-then-collapse'
+      ? LEG_LOSS_FALL_THEN_COLLAPSE_TRANSITION
+      : transitionMode === 'airborne-collapse-land'
+        ? LEG_LOSS_AIRBORNE_COLLAPSE_LAND_TRANSITION
+        : transitionMode === 'fall-airborne-collapse-land'
+          ? LEG_LOSS_FALL_AIRBORNE_COLLAPSE_LAND_TRANSITION
+          : transitionMode === 'fall-collapse-recover'
+            ? LEG_LOSS_FALL_COLLAPSE_RECOVER_TRANSITION
+          : LEG_LOSS_COLLAPSE_ONLY_TRANSITION;
+
+  connLog.info(
+    '[world/combat] leg-loss transition slot=%d mode=%s sequence=%s (%s)',
+    slot,
+    transitionMode,
+    transitionSteps.map(step => step.subcommand).join('->'),
+    reason,
+  );
+
+  const sendStep = (subcommand: number, stepLabel: string): void => {
+    if (session.socket.destroyed || !session.socket.writable || session.phase !== 'combat') return;
+    if (session.combatResultCode !== undefined) return;
+    const packet = buildCmd70ActorTransitionPacket(slot, subcommand, nextSeq(session));
+    if (capture) {
+      send(session.socket, packet, capture, stepLabel);
+      return;
+    }
+    sendToWorldSession(session, packet, stepLabel);
+  };
+
+  for (const step of transitionSteps) {
+    const stepLabel =
+      transitionSteps.length === 1
+        ? label
+        : `${label}_${step.labelSuffix}`;
+    if (step.delayMs <= 0) {
+      sendStep(step.subcommand, stepLabel);
+      continue;
+    }
+
+    const delayedStep = setTimeout(() => {
+      if (session.combatLegLossTransitionTimers) {
+        const timerIndex = session.combatLegLossTransitionTimers.indexOf(delayedStep);
+        if (timerIndex >= 0) {
+          session.combatLegLossTransitionTimers.splice(timerIndex, 1);
+        }
+        if (session.combatLegLossTransitionTimers.length === 0) {
+          session.combatLegLossTransitionTimers = undefined;
+        }
+      }
+      sendStep(step.subcommand, stepLabel);
+    }, step.delayMs);
+    if (!session.combatLegLossTransitionTimers) {
+      session.combatLegLossTransitionTimers = [];
+    }
+    session.combatLegLossTransitionTimers.push(delayedStep);
+    delayedStep.unref();
+  }
+}
+
+function startForcedRetaliationVerification(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+  mechId: number | undefined,
+  extraCritCount: number | undefined,
+  mode: ForcedRetaliationVerification,
+): void {
+  session.botFireTimer = setInterval(() => {
+    if (session.socket.destroyed || !session.socket.writable) return;
+
+    const playerArmorValues = [...(session.combatPlayerArmorValues ?? DEFAULT_BOT_ARMOR_VALUES)];
+    const playerInternalValues = [...(session.combatPlayerInternalValues ?? DEFAULT_BOT_INTERNAL_VALUES)];
+    const playerCriticalStateBytes = [...(session.combatPlayerCriticalStateBytes ?? createCriticalStateBytes(extraCritCount))];
+    const playerHeadArmor = session.combatPlayerHeadArmor ?? HEAD_ARMOR_VALUE;
+
+    if (isActorDestroyed(playerInternalValues)) {
+      clearInterval(session.botFireTimer);
+      session.botFireTimer = undefined;
+      if (mode.queueLossOnActorDestroyed === false) {
+        connLog.info('[world/combat] scripted verification: %s stopped because actor is already destroyed', mode.name);
+        return;
+      }
+      connLog.info('[world/combat] player IS depleted during %s — bot stopped firing', mode.name);
+      queueCombatResultTransition(
+        players,
+        session,
+        connLog,
+        capture,
+        COMBAT_RESULT_LOSS,
+        `${mode.name}-already-destroyed`,
+        PLAYER_RESULT_DELAY_MS,
+      );
+      return;
+    }
+
+    const previousInternalValues = [...playerInternalValues];
+    const damageResult = applyDamageToSection(
+      playerArmorValues,
+      playerInternalValues,
+      mode.hitSection,
+      BOT_RETALIATION_DAMAGE,
+      playerHeadArmor,
+    );
+    session.combatPlayerArmorValues = playerArmorValues;
+    session.combatPlayerInternalValues = playerInternalValues;
+    const postDamageUpdates = collectPostDamageStateUpdates(
+      mechId,
+      playerCriticalStateBytes,
+      previousInternalValues,
+      playerInternalValues,
+      mode.hitSection.internalIndex === 7 && damageResult.updates.some(update => update.damageCode === 0x27),
+    );
+    session.combatPlayerCriticalStateBytes = playerCriticalStateBytes;
+    session.combatPlayerHeadArmor = damageResult.headArmor;
+    session.playerHealth = getCombatDurability(playerArmorValues, playerInternalValues);
+    session.playerHealth += damageResult.headArmor;
+    const allUpdates = [...damageResult.updates, ...postDamageUpdates.updates];
+    const armorRemaining = mode.hitSection.armorIndex >= 0
+      ? `${playerArmorValues[mode.hitSection.armorIndex] ?? 0}`
+      : `${damageResult.headArmor}`;
+    connLog.debug(
+      '[world/combat] scripted verification %s: damage=%d hit=%s playerHealth=%d armor=%s internal=%d updates=%s',
+      mode.name,
+      BOT_RETALIATION_DAMAGE,
+      mode.hitSection.label,
+      session.playerHealth,
+      armorRemaining,
+      playerInternalValues[mode.hitSection.internalIndex] ?? 0,
+      allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join(',') || 'none',
+    );
+    for (const update of allUpdates) {
+      send(
+        session.socket,
+        buildCmd67LocalDamagePacket(update.damageCode, update.damageValue, nextSeq(session)),
+        capture,
+        `CMD67_VERIFY_${mode.name.toUpperCase()}_${update.damageCode.toString(16)}`,
+      );
+    }
+    if (postDamageUpdates.newlyDestroyedLegs.length > 0 && !isActorDestroyed(playerInternalValues)) {
+      sendCombatLegLossCollapse(
+        session,
+        0,
+        connLog,
+        `${postDamageUpdates.newlyDestroyedLegs.map(leg => leg.label).join('+')} destroyed`,
+        'CMD70_LOCAL_LEG_COLLAPSE',
+        capture,
+        session.combatLegLossTransitionMode ?? 'collapse-only',
+      );
+    }
+
+    if (
+      mode.stopAfterDestroyedLegInternalIndex !== undefined
+      && postDamageUpdates.newlyDestroyedLegs.some(leg => leg.internalIndex === mode.stopAfterDestroyedLegInternalIndex)
+    ) {
+      clearInterval(session.botFireTimer);
+      session.botFireTimer = undefined;
+      connLog.info(
+        '[world/combat] scripted verification: %s complete (%s destroyed without match end)',
+        mode.name,
+        mode.hitSection.label,
+      );
+      return;
+    }
+
+    if (isActorDestroyed(playerInternalValues)) {
+      clearInterval(session.botFireTimer);
+      session.botFireTimer = undefined;
+      if (mode.queueLossOnActorDestroyed === false) {
+        connLog.info('[world/combat] scripted verification: %s reached actor destruction but is non-terminal', mode.name);
+        return;
+      }
+      const fatalReason = (playerInternalValues[7] ?? 0) <= 0
+        ? 'head destroyed'
+        : 'center torso destroyed';
+      connLog.info(
+        '[world/combat] player IS depleted by hit=%s during %s (%s, server-side section tracking) — bot stopped firing',
+        mode.hitSection.label,
+        mode.name,
+        fatalReason,
+      );
+      queueCombatResultTransition(
+        players,
+        session,
+        connLog,
+        capture,
+        COMBAT_RESULT_LOSS,
+        fatalReason,
+        PLAYER_RESULT_DELAY_MS,
+      );
+    }
+  }, BOT_FIRE_INTERVAL_MS);
+  session.botFireTimer.unref();
+}
+
 function resolveBotHitSection(
   mechId: number | undefined,
   attach: number,
@@ -1767,26 +2207,51 @@ function isActorDestroyed(internalValues: readonly number[]): boolean {
   return centerTorsoGone || headGone;
 }
 
-function getWeaponDamageByName(weaponName: string | undefined): number | undefined {
-  switch (weaponName) {
-    case 'Machine Gun': return 2;
-    case 'Small Laser': return 3;
-    case 'SRM-2': return 4;
-    case 'Autocannon/2': return 2;
-    case 'Medium Laser': return 5;
-    case 'LRM-5': return 5;
-    case 'Autocannon/5': return 5;
-    case 'SRM-4': return 8;
-    case 'Large Laser': return 8;
-    case 'Autocannon/10': return 10;
-    case 'Particle Projector Cannon': return 10;
-    case 'LRM-10': return 10;
-    case 'SRM-6': return 12;
-    case 'LRM-15': return 15;
-    case 'Autocannon/20': return 20;
-    case 'LRM-20': return 20;
-    default: return undefined;
+function getWeaponNameForSlot(
+  session: ClientSession,
+  weaponSlot: number,
+): string | undefined {
+  const recoveredName = getWeaponNameByTypeId(getWeaponTypeIdForSlot(session, weaponSlot));
+  if (recoveredName !== undefined) {
+    return recoveredName;
   }
+  const sourceMechId = session.selectedMechId ?? FALLBACK_MECH_ID;
+  const sourceMechType = WORLD_MECH_BY_ID.get(sourceMechId)?.typeString?.toUpperCase();
+  const documentedName = sourceMechType !== undefined
+    ? MECH_STATS.get(sourceMechType)?.armament[weaponSlot]
+    : undefined;
+  return documentedName;
+}
+
+function getMechEntryForSession(session: ClientSession) {
+  const sourceMechId = session.selectedMechId ?? FALLBACK_MECH_ID;
+  return WORLD_MECH_BY_ID.get(sourceMechId);
+}
+
+function getWeaponTypeIdForSlot(
+  session: ClientSession,
+  weaponSlot: number,
+): number | undefined {
+  return getMechEntryForSession(session)?.weaponTypeIds[weaponSlot];
+}
+
+function getWeaponSpecForSlot(session: ClientSession, weaponSlot: number) {
+  const weaponTypeId = getWeaponTypeIdForSlot(session, weaponSlot);
+  return getWeaponSpecByTypeId(weaponTypeId) ?? getWeaponSpecByName(getWeaponNameForSlot(session, weaponSlot));
+}
+
+function getAmmoDamageCodeBase(extraCritCount: number | undefined, weaponCount: number): number {
+  return 0x28 + weaponCount + normalizeExtraCritCount(extraCritCount);
+}
+
+function getOrCreateCombatAmmoStateValues(
+  session: ClientSession,
+  ammoBinCapacities: readonly number[],
+): number[] {
+  if (!session.combatAmmoStateValues) {
+    session.combatAmmoStateValues = [...ammoBinCapacities];
+  }
+  return session.combatAmmoStateValues;
 }
 
 const INTERNAL_SECTION_LABELS = [
@@ -1863,15 +2328,219 @@ function getWeaponSectionLossUpdates(
 }
 
 function getShotDamage(session: ClientSession, weaponSlot: number): { damage: number; weaponName?: string } {
-  const sourceMechId = session.selectedMechId ?? FALLBACK_MECH_ID;
-  const sourceMechType = WORLD_MECH_BY_ID.get(sourceMechId)?.typeString?.toUpperCase();
-  const weaponName = sourceMechType !== undefined
-    ? MECH_STATS.get(sourceMechType)?.armament[weaponSlot]
-    : undefined;
+  const weaponName = getWeaponNameForSlot(session, weaponSlot);
+  const weaponSpec = getWeaponSpecForSlot(session, weaponSlot);
   return {
-    damage: getWeaponDamageByName(weaponName) ?? BOT_FALLBACK_WEAPON_DAMAGE,
+    damage: weaponSpec?.damage ?? BOT_FALLBACK_WEAPON_DAMAGE,
     weaponName,
   };
+}
+
+function getShotMaxRangeGate(
+  session: ClientSession,
+  weaponSlot: number,
+  targetX: number | undefined,
+  targetY: number | undefined,
+): { allowed: boolean; distanceMeters?: number; maxRangeMeters?: number; weaponName?: string } {
+  const weaponName = getWeaponNameForSlot(session, weaponSlot);
+  const maxRangeMeters = getWeaponSpecForSlot(session, weaponSlot)?.maxRangeMeters;
+  if (
+    maxRangeMeters === undefined
+    || targetX === undefined
+    || targetY === undefined
+  ) {
+    return { allowed: true, maxRangeMeters, weaponName };
+  }
+
+  const sourceX = session.combatX ?? 0;
+  const sourceY = session.combatY ?? 0;
+  const distanceMeters = Math.hypot(sourceX - targetX, sourceY - targetY) / COMBAT_WORLD_UNITS_PER_METER;
+  return {
+    allowed: distanceMeters <= maxRangeMeters,
+    distanceMeters,
+    maxRangeMeters,
+    weaponName,
+  };
+}
+
+function getWeaponCooldownGate(
+  session: ClientSession,
+  weaponSlot: number,
+  now: number,
+): { allowed: boolean; remainingMs?: number; cooldownMs?: number; weaponName?: string } {
+  const weaponName = getWeaponNameForSlot(session, weaponSlot);
+  const cooldownMs = getWeaponSpecForSlot(session, weaponSlot)?.cooldownMs;
+  if (cooldownMs === undefined || cooldownMs <= 0) {
+    return { allowed: true, cooldownMs, weaponName };
+  }
+
+  const readyAt = session.combatWeaponReadyAtBySlot?.[weaponSlot];
+  if (readyAt !== undefined && readyAt > now) {
+    return {
+      allowed: false,
+      remainingMs: readyAt - now,
+      cooldownMs,
+      weaponName,
+    };
+  }
+
+  return {
+    allowed: true,
+    cooldownMs,
+    weaponName,
+  };
+}
+
+function sendLocalWeaponStateUpdate(
+  session: ClientSession,
+  weaponSlot: number,
+  weaponState: number,
+  label: string,
+): void {
+  sendToWorldSession(
+    session,
+    buildCmd67LocalDamagePacket(0x28 + weaponSlot, weaponState, nextSeq(session)),
+    label,
+  );
+}
+
+function sendLocalAmmoStateUpdate(
+  session: ClientSession,
+  damageCode: number,
+  ammoValue: number,
+): void {
+  sendToWorldSession(
+    session,
+    buildCmd67LocalDamagePacket(damageCode, ammoValue, nextSeq(session)),
+    'CMD67_LOCAL_AMMO_UPDATE',
+  );
+}
+
+function consumeWeaponAmmo(
+  session: ClientSession,
+  weaponSlot: number,
+): { allowed: boolean; remainingAmmo?: number; ammoBinIndex?: number; damageCode?: number; weaponName?: string } {
+  const mechEntry = getMechEntryForSession(session);
+  const weaponName = getWeaponNameForSlot(session, weaponSlot);
+  const weaponTypeId = getWeaponTypeIdForSlot(session, weaponSlot);
+  if (!mechEntry || weaponTypeId === undefined) {
+    return { allowed: true, weaponName };
+  }
+
+  const matchingAmmoBinIndexes: number[] = [];
+  for (let ammoBinIndex = 0; ammoBinIndex < mechEntry.ammoBinTypeIds.length; ammoBinIndex += 1) {
+    if (mechEntry.ammoBinTypeIds[ammoBinIndex] === weaponTypeId) {
+      matchingAmmoBinIndexes.push(ammoBinIndex);
+    }
+  }
+  if (matchingAmmoBinIndexes.length === 0) {
+    return { allowed: true, weaponName };
+  }
+
+  const ammoStateValues = getOrCreateCombatAmmoStateValues(session, mechEntry.ammoBinCapacities);
+  const ammoBinIndex = matchingAmmoBinIndexes.find(index => (ammoStateValues[index] ?? 0) > 0);
+  if (ammoBinIndex === undefined) {
+    return { allowed: false, weaponName };
+  }
+
+  const remainingAmmo = Math.max(0, (ammoStateValues[ammoBinIndex] ?? 0) - 1);
+  ammoStateValues[ammoBinIndex] = remainingAmmo;
+  return {
+    allowed: true,
+    remainingAmmo,
+    ammoBinIndex,
+    damageCode: getAmmoDamageCodeBase(mechEntry.extraCritCount, mechEntry.weaponTypeIds.length) + ammoBinIndex,
+    weaponName,
+  };
+}
+
+function markWeaponSlotFired(
+  session: ClientSession,
+  weaponSlot: number,
+  cooldownMs: number | undefined,
+  now: number,
+): void {
+  if (cooldownMs === undefined || cooldownMs <= 0) {
+    return;
+  }
+
+  if (!session.combatWeaponReadyAtBySlot) {
+    session.combatWeaponReadyAtBySlot = [];
+  }
+  if (!session.combatWeaponReadyTimerBySlot) {
+    session.combatWeaponReadyTimerBySlot = [];
+  }
+
+  const readyAt = now + cooldownMs;
+  session.combatWeaponReadyAtBySlot[weaponSlot] = readyAt;
+
+  const existingTimer = session.combatWeaponReadyTimerBySlot[weaponSlot];
+  if (existingTimer !== undefined) {
+    clearTimeout(existingTimer);
+  }
+
+  sendLocalWeaponStateUpdate(session, weaponSlot, WEAPON_STATE_UNAVAILABLE, 'CMD67_LOCAL_WEAPON_COOLDOWN');
+
+  const readyTimer = setTimeout(() => {
+    if (session.combatWeaponReadyTimerBySlot) {
+      session.combatWeaponReadyTimerBySlot[weaponSlot] = undefined;
+    }
+    if ((session.combatWeaponReadyAtBySlot?.[weaponSlot] ?? 0) !== readyAt) {
+      return;
+    }
+
+    const readyAtBySlot = session.combatWeaponReadyAtBySlot;
+    if (!readyAtBySlot) {
+      return;
+    }
+    readyAtBySlot[weaponSlot] = 0;
+    if (
+      session.socket.destroyed
+      || !session.socket.writable
+      || session.phase !== 'combat'
+      || !session.combatInitialized
+    ) {
+      return;
+    }
+
+    const mountGate = getWeaponMountGate(session, weaponSlot);
+    if (!mountGate.allowed) {
+      return;
+    }
+    sendLocalWeaponStateUpdate(session, weaponSlot, WEAPON_STATE_READY, 'CMD67_LOCAL_WEAPON_READY');
+  }, cooldownMs);
+  readyTimer.unref();
+  session.combatWeaponReadyTimerBySlot[weaponSlot] = readyTimer;
+}
+
+function clearPendingCombatAction0Followup(session: ClientSession): void {
+  if (session.combatAction0FollowupTimer !== undefined) {
+    clearTimeout(session.combatAction0FollowupTimer);
+    session.combatAction0FollowupTimer = undefined;
+  }
+}
+
+function noteCombatAction0Observed(
+  session: ClientSession,
+  connLog: Logger,
+): void {
+  clearPendingCombatAction0Followup(session);
+  const observedAt = Date.now();
+  session.lastCombatFireActionAt = observedAt;
+  const followupTimer = setTimeout(() => {
+    if (session.lastCombatFireActionAt !== observedAt) {
+      return;
+    }
+    session.combatAction0NoShotCount = (session.combatAction0NoShotCount ?? 0) + 1;
+    session.lastCombatFireActionAt = undefined;
+    session.combatAction0FollowupTimer = undefined;
+    connLog.info(
+      '[world/combat] cmd12 action=0 had no cmd10 follow-up within %dms',
+      FIRE_ACTION_WINDOW_MS,
+    );
+  }, FIRE_ACTION_WINDOW_MS + 25);
+  session.combatAction0FollowupTimer = followupTimer;
+  followupTimer.unref();
 }
 
 function applyDamageToSection(
@@ -2120,6 +2789,23 @@ export function stopCombatTimers(session: ClientSession): void {
     clearInterval(session.combatJumpFuelRegenTimer);
     session.combatJumpFuelRegenTimer = undefined;
   }
+  if (session.combatLegLossTransitionTimers) {
+    for (const timer of session.combatLegLossTransitionTimers) {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+    }
+    session.combatLegLossTransitionTimers = undefined;
+  }
+  if (session.combatWeaponReadyTimerBySlot) {
+    for (const timer of session.combatWeaponReadyTimerBySlot) {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+    }
+    session.combatWeaponReadyTimerBySlot = undefined;
+  }
+  clearPendingCombatAction0Followup(session);
   session.combatResultCode = undefined;
 }
 
@@ -2145,11 +2831,18 @@ export function resetCombatState(session: ClientSession): void {
   session.combatLastJumpLandAltitude = undefined;
   session.combatEjectArmed = undefined;
   session.lastCombatFireActionAt = undefined;
+  session.combatAction0FollowupTimer = undefined;
   session.combatRequireAction0 = undefined;
   session.combatShotsAccepted = undefined;
   session.combatShotsRejected = undefined;
   session.combatShotsAction0Correlated = undefined;
   session.combatShotsDirectCmd10 = undefined;
+  session.combatAction0NoShotCount = undefined;
+  session.combatLegLossTransitionMode = undefined;
+  session.combatLegLossTransitionTimers = undefined;
+  session.combatWeaponReadyAtBySlot = undefined;
+  session.combatWeaponReadyTimerBySlot = undefined;
+  session.combatAmmoStateValues = undefined;
 }
 
 function getActiveDuelPeer(
@@ -2718,6 +3411,35 @@ function sendArenaParticipantDeathTransition(
   deathTimer.unref();
 }
 
+function sendArenaParticipantLegLossCollapse(
+  players: PlayerRegistry,
+  combatSession: CombatSession,
+  collapsed: ClientSession,
+  connLog: Logger,
+  reason: string,
+): void {
+  if (combatSession.mode !== 'arena') {
+    return;
+  }
+  for (const viewer of getCombatReadyParticipants(players, combatSession)) {
+    const slot = viewer.id === collapsed.id
+      ? 0
+      : getCombatRemoteSlotForViewer(combatSession, viewer, collapsed);
+    if (slot === undefined) {
+      continue;
+    }
+    sendCombatLegLossCollapse(
+      viewer,
+      slot,
+      connLog,
+      reason,
+      viewer.id === collapsed.id ? 'CMD70_ARENA_LOCAL_LEG_COLLAPSE' : 'CMD70_ARENA_REMOTE_LEG_COLLAPSE',
+      undefined,
+      collapsed.combatLegLossTransitionMode ?? 'collapse-only',
+    );
+  }
+}
+
 function queueArenaParticipantResultTransition(
   players: PlayerRegistry,
   combatSessionId: string,
@@ -3196,11 +3918,13 @@ function initializeSharedCombatParticipant(
     session.combatPlayerInternalValues,
   ) + HEAD_ARMOR_VALUE;
   session.combatVerificationMode = undefined;
+  session.combatLegLossTransitionMode = 'collapse-only';
   session.combatRequireAction0 = false;
   session.combatShotsAccepted = 0;
   session.combatShotsRejected = 0;
   session.combatShotsAction0Correlated = 0;
   session.combatShotsDirectCmd10 = 0;
+  session.combatAction0NoShotCount = 0;
   session.duelTermsAvailable = false;
   session.phase = 'combat';
 }
@@ -3268,7 +3992,9 @@ function startArenaCombatSession(
       const localExtraCritCount = localMechEntry?.extraCritCount ?? 0;
       const localCritBytes = Math.max(0, localExtraCritCount + 21);
       const localCriticalStateBytes = createCriticalStateBytes(localExtraCritCount);
+      const localAmmoStateValues = [...(localMechEntry?.ammoBinCapacities ?? [])];
       const localCallsign = getDisplayName(participant);
+      participant.combatAmmoStateValues = [...localAmmoStateValues];
 
       sendToWorldSession(
         participant,
@@ -3299,14 +4025,14 @@ function startArenaCombatSession(
             mech: {
               mechId:              localMechId,
               critStateExtraCount: localExtraCritCount,
-              criticalStateBytes:  localCriticalStateBytes.slice(0, localCritBytes),
-              extraStateBytes:     [],
-              armorLikeStateBytes: Array<number>(11).fill(0),
-              internalStateBytes:  mechInternalStateBytes(localMechEntry?.tonnage ?? 0),
-              ammoStateValues:     [],
-              actorDisplayName:    localCallsign.substring(0, 31),
-            },
-          },
+               criticalStateBytes:  localCriticalStateBytes.slice(0, localCritBytes),
+               extraStateBytes:     [],
+               armorLikeStateBytes: Array<number>(11).fill(0),
+               internalStateBytes:  mechInternalStateBytes(localMechEntry?.tonnage ?? 0),
+               ammoStateValues:     localAmmoStateValues,
+               actorDisplayName:    localCallsign.substring(0, 31),
+             },
+           },
           nextSeq(participant),
         ),
         'CMD72_ARENA_BOOTSTRAP',
@@ -3516,6 +4242,7 @@ export function tryStartStagedDuelCombat(
     participant.local.combatShotsRejected = 0;
     participant.local.combatShotsAction0Correlated = 0;
     participant.local.combatShotsDirectCmd10 = 0;
+    participant.local.combatAction0NoShotCount = 0;
     participant.local.duelTermsAvailable = false;
     participant.local.phase = 'combat';
   }
@@ -3549,10 +4276,12 @@ export function tryStartStagedDuelCombat(
       const localExtraCritCount = localMechEntry?.extraCritCount ?? 0;
       const localCritBytes = Math.max(0, localExtraCritCount + 21);
       const localCriticalStateBytes = createCriticalStateBytes(localExtraCritCount);
+      const localAmmoStateValues = [...(localMechEntry?.ammoBinCapacities ?? [])];
       const peerMechId = participant.peer.selectedMechId ?? FALLBACK_MECH_ID;
       const peerMechEntry = WORLD_MECH_BY_ID.get(peerMechId);
       const localCallsign = getDisplayName(participant.local);
       const peerCallsign = getDisplayName(participant.peer);
+      participant.local.combatAmmoStateValues = [...localAmmoStateValues];
 
       sendToWorldSession(
         participant.local,
@@ -3583,14 +4312,14 @@ export function tryStartStagedDuelCombat(
             mech: {
               mechId:                localMechId,
               critStateExtraCount:   localExtraCritCount,
-              criticalStateBytes:    localCriticalStateBytes.slice(0, localCritBytes),
-              extraStateBytes:       [],
-              armorLikeStateBytes:   Array<number>(11).fill(0),
-              internalStateBytes:    mechInternalStateBytes(localMechEntry?.tonnage ?? 0),
-              ammoStateValues:       [],
-              actorDisplayName:      localCallsign.substring(0, 31),
-            },
-          },
+               criticalStateBytes:    localCriticalStateBytes.slice(0, localCritBytes),
+               extraStateBytes:       [],
+               armorLikeStateBytes:   Array<number>(11).fill(0),
+               internalStateBytes:    mechInternalStateBytes(localMechEntry?.tonnage ?? 0),
+               ammoStateValues:       localAmmoStateValues,
+               actorDisplayName:      localCallsign.substring(0, 31),
+             },
+           },
           nextSeq(participant.local),
         ),
         'CMD72_DUEL_BOOTSTRAP',
@@ -4621,6 +5350,7 @@ export function sendCombatBootstrapSequence(
   connLog: Logger,
   capture: CaptureLogger,
 ): void {
+  maybeApplyForcedCombatVerificationMode(session, connLog, capture);
   session.pendingComstarTargetPrompt = false;
   session.pendingHandleChangePrompt = false;
   savePendingIncomingComstarPrompt(session, connLog, 'entering combat');
@@ -4640,6 +5370,7 @@ export function sendCombatBootstrapSequence(
   // Store per-mech speedMag caps so Cmd8/9 handlers can apply them.
   session.combatMaxSpeedMag  = mechEntry?.maxSpeedMag  ?? 0;
   session.combatWalkSpeedMag = mechEntry?.walkSpeedMag ?? 0;
+  session.combatAmmoStateValues = [...(mechEntry?.ammoBinCapacities ?? [])];
   if (session.combatResultTimer !== undefined) {
     clearTimeout(session.combatResultTimer);
     session.combatResultTimer = undefined;
@@ -4715,7 +5446,7 @@ export function sendCombatBootstrapSequence(
           // Indices 4 and 7 are also required non-zero by the IS gate (FUN_0042bb00).
           // Order: [arm, arm, side, side, CT, leg, leg, head] (§23.8, IS lookup RE).
           internalStateBytes:   mechInternalStateBytes(mechEntry?.tonnage ?? 0),
-          ammoStateValues:      [],
+          ammoStateValues:      [...(mechEntry?.ammoBinCapacities ?? [])],
           actorDisplayName:     callsign.substring(0, 31),
         },
       },
@@ -4811,104 +5542,50 @@ export function sendCombatBootstrapSequence(
     const verificationMode = session.combatVerificationMode;
     if (verificationMode === 'headtest') {
       // Keep scripted retaliation only for the explicit headtest verifier.
-      session.botFireTimer = setInterval(() => {
-        if (session.socket.destroyed || !session.socket.writable) return;
-
-        const playerArmorValues = [...(session.combatPlayerArmorValues ?? DEFAULT_BOT_ARMOR_VALUES)];
-        const playerInternalValues = [...(session.combatPlayerInternalValues ?? DEFAULT_BOT_INTERNAL_VALUES)];
-        const playerCriticalStateBytes = [...(session.combatPlayerCriticalStateBytes ?? createCriticalStateBytes(mechEntry?.extraCritCount))];
-        const playerHeadArmor = session.combatPlayerHeadArmor ?? HEAD_ARMOR_VALUE;
-        if (isActorDestroyed(playerInternalValues)) {
-          clearInterval(session.botFireTimer);
-          session.botFireTimer = undefined;
-          connLog.info('[world/combat] player IS depleted (server-side estimate) — bot stopped firing');
-          queueCombatResultTransition(
-            players,
-            session,
-            connLog,
-            capture,
-            COMBAT_RESULT_LOSS,
-            'player already structurally destroyed',
-            PLAYER_RESULT_DELAY_MS,
-          );
-          return;
-        }
-
-        const hitSection = HEAD_RETALIATION_SECTION;
-        const previousInternalValues = [...playerInternalValues];
-        const damageResult = applyDamageToSection(
-          playerArmorValues,
-          playerInternalValues,
-          hitSection,
-          BOT_RETALIATION_DAMAGE,
-          playerHeadArmor,
-        );
-        session.combatPlayerArmorValues = playerArmorValues;
-        session.combatPlayerInternalValues = playerInternalValues;
-        const headCriticalUpdates =
-          hitSection.internalIndex === 7 && damageResult.updates.some(update => update.damageCode === 0x27)
-            ? applyHeadCriticalStateUpdates(playerCriticalStateBytes, playerInternalValues[7] ?? 0)
-            : [];
-        const weaponSectionUpdates = getWeaponSectionLossUpdates(
-          session.selectedMechId,
-          previousInternalValues,
-          playerInternalValues,
-        );
-        session.combatPlayerCriticalStateBytes = playerCriticalStateBytes;
-        session.combatPlayerHeadArmor = damageResult.headArmor;
-        session.playerHealth = getCombatDurability(playerArmorValues, playerInternalValues);
-        session.playerHealth += damageResult.headArmor;
-        const allUpdates = [...damageResult.updates, ...headCriticalUpdates, ...weaponSectionUpdates];
-        const armorRemaining = hitSection.armorIndex >= 0
-          ? `${playerArmorValues[hitSection.armorIndex] ?? 0}`
-          : `${damageResult.headArmor}`;
-        connLog.debug(
-          '[world/combat] bot fires Cmd67: damage=%d hit=%s playerHealth=%d armor=%s internal=%d updates=%s',
-          BOT_RETALIATION_DAMAGE,
-          hitSection.label,
-          session.playerHealth,
-          armorRemaining,
-          playerInternalValues[hitSection.internalIndex] ?? 0,
-          allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join(',') || 'none',
-        );
-        for (const update of allUpdates) {
-          send(
-            session.socket,
-            buildCmd67LocalDamagePacket(update.damageCode, update.damageValue, nextSeq(session)),
-            capture,
-            `CMD67_BOT_RETALIATION_${update.damageCode.toString(16)}`,
-          );
-        }
-        if (isActorDestroyed(playerInternalValues)) {
-          clearInterval(session.botFireTimer);
-          session.botFireTimer = undefined;
-          const fatalReason = (playerInternalValues[7] ?? 0) <= 0
-            ? 'head destroyed'
-            : 'center torso destroyed';
-          connLog.info(
-            '[world/combat] player IS depleted by hit=%s (%s, server-side section tracking) — bot stopped firing',
-            hitSection.label,
-            fatalReason,
-          );
-          queueCombatResultTransition(
-            players,
-            session,
-            connLog,
-            capture,
-            COMBAT_RESULT_LOSS,
-            fatalReason,
-            PLAYER_RESULT_DELAY_MS,
-          );
-        }
-      }, BOT_FIRE_INTERVAL_MS);
-      session.botFireTimer.unref();
+      startForcedRetaliationVerification(
+        players,
+        session,
+        connLog,
+        capture,
+        mechId,
+        mechEntry?.extraCritCount,
+        {
+          name: 'headtest',
+          hitSection: HEAD_RETALIATION_SECTION,
+        },
+      );
+    } else if (verificationMode === 'legtest' || verificationMode === 'legseq' || verificationMode === 'legair' || verificationMode === 'legfull' || verificationMode === 'legrecover') {
+      startForcedRetaliationVerification(
+        players,
+        session,
+        connLog,
+        capture,
+        mechId,
+        mechEntry?.extraCritCount,
+        {
+          name: verificationMode,
+          hitSection: LEFT_LEG_RETALIATION_SECTION,
+          stopAfterDestroyedLegInternalIndex: LEFT_LEG_RETALIATION_SECTION.internalIndex,
+          queueLossOnActorDestroyed: false,
+        },
+      );
     }
     session.combatVerificationMode = undefined;
+    session.combatLegLossTransitionMode = verificationMode === 'legseq'
+      ? 'fall-then-collapse'
+      : verificationMode === 'legair'
+        ? 'airborne-collapse-land'
+        : verificationMode === 'legfull'
+          ? 'fall-airborne-collapse-land'
+          : verificationMode === 'legrecover'
+            ? 'fall-collapse-recover'
+        : 'collapse-only';
     session.combatRequireAction0 = verificationMode === 'strictfire';
     session.combatShotsAccepted = 0;
     session.combatShotsRejected = 0;
     session.combatShotsAction0Correlated = 0;
     session.combatShotsDirectCmd10 = 0;
+    session.combatAction0NoShotCount = 0;
     if (verificationMode === 'autowin') {
       setTimeout(() => {
         if (session.socket.destroyed || !session.socket.writable) return;
@@ -4997,6 +5674,31 @@ export function sendCombatBootstrapSequence(
       setTimeout(() => {
         if (session.socket.destroyed || !session.socket.writable) return;
         connLog.info('[world/combat] scripted verification: head-only retaliation mode (bot Cmd67 hits forced to head until head destruction)');
+      }, VERIFY_DELAY_MS).unref();
+    } else if (verificationMode === 'legtest') {
+      setTimeout(() => {
+        if (session.socket.destroyed || !session.socket.writable) return;
+        connLog.info('[world/combat] scripted verification: left-leg retaliation mode (bot Cmd67 hits forced to left leg until first non-death collapse)');
+      }, VERIFY_DELAY_MS).unref();
+    } else if (verificationMode === 'legseq') {
+      setTimeout(() => {
+        if (session.socket.destroyed || !session.socket.writable) return;
+        connLog.info('[world/combat] scripted verification: left-leg fall-sequence mode (bot Cmd67 hits forced to left leg until first non-death Cmd70 1->8 probe)');
+      }, VERIFY_DELAY_MS).unref();
+    } else if (verificationMode === 'legair') {
+      setTimeout(() => {
+        if (session.socket.destroyed || !session.socket.writable) return;
+        connLog.info('[world/combat] scripted verification: left-leg airborne sequence mode (bot Cmd67 hits forced to left leg until first non-death Cmd70 4->8->6 probe)');
+      }, VERIFY_DELAY_MS).unref();
+    } else if (verificationMode === 'legfull') {
+      setTimeout(() => {
+        if (session.socket.destroyed || !session.socket.writable) return;
+        connLog.info('[world/combat] scripted verification: left-leg full-sequence mode (bot Cmd67 hits forced to left leg until first non-death Cmd70 1->4->8->6 probe)');
+      }, VERIFY_DELAY_MS).unref();
+    } else if (verificationMode === 'legrecover') {
+      setTimeout(() => {
+        if (session.socket.destroyed || !session.socket.writable) return;
+        connLog.info('[world/combat] scripted verification: left-leg recovery mode (bot Cmd67 hits forced to left leg until first non-death Cmd70 1->8->0 probe)');
       }, VERIFY_DELAY_MS).unref();
     }
 
@@ -5795,6 +6497,7 @@ export function handleArenaSideSelection(
     `Arena side set: ${getArenaSideLabel(selection)}.${readyCleared ? ' Ready cleared.' : ''}${duelCleared ? ' Duel state cleared.' : ''}`,
   );
   sendArenaStatusList(players, session, connLog, capture);
+  sendArenaReadyReminder(session, capture);
   connLog.info(
     '[world] arena side selected: callsign="%s" side=%d room=%d',
     getDisplayName(session),
@@ -5948,19 +6651,49 @@ export function handleCombatWeaponFireFrame(
     return;
   }
 
-  const fireableShots = shots.filter(shot => {
-    const gate = getWeaponMountGate(session, shot.weaponSlot);
-    if (gate.allowed) return true;
-    connLog.info(
-      '[world/combat] cmd10 shot REJECTED: weapon slot=%d unavailable (%s)',
-      shot.weaponSlot,
-      gate.reason ?? 'mount unavailable',
-    );
-    return false;
-  });
-  const rejectedHardpointShots = shots.length - fireableShots.length;
+  const fireableShots = [];
+  for (const shot of shots) {
+    const mountGate = getWeaponMountGate(session, shot.weaponSlot);
+    if (!mountGate.allowed) {
+      connLog.info(
+        '[world/combat] cmd10 shot REJECTED: weapon slot=%d unavailable (%s)',
+        shot.weaponSlot,
+        mountGate.reason ?? 'mount unavailable',
+      );
+      continue;
+    }
+
+    const cooldownGate = getWeaponCooldownGate(session, shot.weaponSlot, now);
+    if (!cooldownGate.allowed) {
+      connLog.info(
+        '[world/combat] cmd10 shot REJECTED: weapon slot=%d cooling down (%s remaining=%dms/%dms)',
+        shot.weaponSlot,
+        cooldownGate.weaponName ?? 'unknown',
+        cooldownGate.remainingMs ?? 0,
+        cooldownGate.cooldownMs ?? 0,
+      );
+      continue;
+    }
+
+    const ammoGate = consumeWeaponAmmo(session, shot.weaponSlot);
+    if (!ammoGate.allowed) {
+      connLog.info(
+        '[world/combat] cmd10 shot REJECTED: weapon slot=%d out of ammo (%s)',
+        shot.weaponSlot,
+        ammoGate.weaponName ?? 'unknown',
+      );
+      continue;
+    }
+
+    fireableShots.push(shot);
+    if (ammoGate.damageCode !== undefined && ammoGate.remainingAmmo !== undefined) {
+      sendLocalAmmoStateUpdate(session, ammoGate.damageCode, ammoGate.remainingAmmo);
+    }
+    markWeaponSlotFired(session, shot.weaponSlot, cooldownGate.cooldownMs, now);
+  }
+  const rejectedWeaponStateShots = shots.length - fireableShots.length;
   session.combatShotsAccepted = (session.combatShotsAccepted ?? 0) + fireableShots.length;
-  session.combatShotsRejected = (session.combatShotsRejected ?? 0) + rejectedHardpointShots;
+  session.combatShotsRejected = (session.combatShotsRejected ?? 0) + rejectedWeaponStateShots;
   if (hasRecentFireAction) {
     session.combatShotsAction0Correlated = (session.combatShotsAction0Correlated ?? 0) + fireableShots.length;
     connLog.debug(
@@ -5969,6 +6702,7 @@ export function handleCombatWeaponFireFrame(
       actionAgeMs,
       fireableShots.length,
     );
+    clearPendingCombatAction0Followup(session);
     session.lastCombatFireActionAt = undefined;
   } else {
     session.combatShotsDirectCmd10 = (session.combatShotsDirectCmd10 ?? 0) + fireableShots.length;
@@ -6006,43 +6740,12 @@ export function handleCombatWeaponFireFrame(
 
     for (const shot of fireableShots) {
       const { damage: shotDamage, weaponName } = getShotDamage(session, shot.weaponSlot);
-      const impactContext = buildTargetImpactContext(
-        shot.impactXRaw - COORD_BIAS,
-        shot.impactYRaw - COORD_BIAS,
-        shot.impactZ,
-        duelPeer.combatX ?? 0,
-        duelPeer.combatY ?? 0,
-        duelPeer.combatJumpAltitude ?? 0,
-        getCombatCmd65Facing(duelPeer),
+      const rangeGate = getShotMaxRangeGate(
+        session,
+        shot.weaponSlot,
+        duelPeer.combatX,
+        duelPeer.combatY,
       );
-      const hitSection = resolveEffectiveHitSection(
-        duelPeerMechId,
-        shot.targetAttach,
-        shot.impactZ,
-        duelPeerArmorValues,
-        duelPeerInternalValues,
-        impactContext,
-      );
-      const previousInternalValues = [...duelPeerInternalValues];
-      const damageResult = applyDamageToSection(
-        duelPeerArmorValues,
-        duelPeerInternalValues,
-        hitSection,
-        shotDamage,
-        duelPeerHeadArmor,
-      );
-      const criticalUpdates =
-        hitSection.internalIndex === 7 && damageResult.updates.some(update => update.damageCode === 0x27)
-          ? applyHeadCriticalStateUpdates(duelPeerCriticalStateBytes, duelPeerInternalValues[7] ?? 0)
-          : [];
-      const weaponSectionUpdates = getWeaponSectionLossUpdates(
-        duelPeerMechId,
-        previousInternalValues,
-        duelPeerInternalValues,
-      );
-      duelPeerHeadArmor = damageResult.headArmor;
-      const allUpdates = [...damageResult.updates, ...criticalUpdates, ...weaponSectionUpdates];
-
       send(
         session.socket,
         buildCmd68ProjectileSpawnPacket(
@@ -6080,6 +6783,46 @@ export function handleCombatWeaponFireFrame(
         ),
         'CMD68_DUEL_REMOTE_PROJECTILE',
       );
+      if (!rangeGate.allowed) {
+        shotSummaries.push(
+          `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:out-of-range:${Math.round(rangeGate.distanceMeters ?? -1)}/${rangeGate.maxRangeMeters ?? 'n/a'}m`,
+        );
+        continue;
+      }
+      const impactContext = buildTargetImpactContext(
+        shot.impactXRaw - COORD_BIAS,
+        shot.impactYRaw - COORD_BIAS,
+        shot.impactZ,
+        duelPeer.combatX ?? 0,
+        duelPeer.combatY ?? 0,
+        duelPeer.combatJumpAltitude ?? 0,
+        getCombatCmd65Facing(duelPeer),
+      );
+      const hitSection = resolveEffectiveHitSection(
+        duelPeerMechId,
+        shot.targetAttach,
+        shot.impactZ,
+        duelPeerArmorValues,
+        duelPeerInternalValues,
+        impactContext,
+      );
+      const previousInternalValues = [...duelPeerInternalValues];
+      const damageResult = applyDamageToSection(
+        duelPeerArmorValues,
+        duelPeerInternalValues,
+        hitSection,
+        shotDamage,
+        duelPeerHeadArmor,
+      );
+      const postDamageUpdates = collectPostDamageStateUpdates(
+        duelPeerMechId,
+        duelPeerCriticalStateBytes,
+        previousInternalValues,
+        duelPeerInternalValues,
+        hitSection.internalIndex === 7 && damageResult.updates.some(update => update.damageCode === 0x27),
+      );
+      duelPeerHeadArmor = damageResult.headArmor;
+      const allUpdates = [...damageResult.updates, ...postDamageUpdates.updates];
       for (const update of allUpdates) {
         send(
           session.socket,
@@ -6093,10 +6836,16 @@ export function handleCombatWeaponFireFrame(
           'CMD67_DUEL_LOCAL_DAMAGE',
         );
       }
+      if (postDamageUpdates.newlyDestroyedLegs.length > 0 && !isActorDestroyed(duelPeerInternalValues)) {
+        const collapseReason = `${postDamageUpdates.newlyDestroyedLegs.map(leg => leg.label).join('+')} destroyed`;
+        const transitionMode = duelPeer.combatLegLossTransitionMode ?? 'collapse-only';
+        sendCombatLegLossCollapse(session, 1, connLog, collapseReason, 'CMD70_DUEL_REMOTE_LEG_COLLAPSE', capture, transitionMode);
+        sendCombatLegLossCollapse(duelPeer, 0, connLog, collapseReason, 'CMD70_DUEL_LOCAL_LEG_COLLAPSE', undefined, transitionMode);
+      }
 
       totalDamageUpdates += allUpdates.length;
       shotSummaries.push(
-        `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${hitSection.label}:peerHealth=${duelPeer.playerHealth ?? 'n/a'}:headArmor=${duelPeerHeadArmor}:updates=${allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join('/') || 'none'}`,
+        `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${hitSection.label}:mech=${duelPeerMechId}:model=${getCombatModelIdForMechId(duelPeerMechId) ?? 'n/a'}:attach=${shot.targetAttach}:peerHealth=${duelPeer.playerHealth ?? 'n/a'}:headArmor=${duelPeerHeadArmor}:updates=${allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join('/') || 'none'}`,
       );
     }
 
@@ -6199,6 +6948,18 @@ export function handleCombatWeaponFireFrame(
         );
         continue;
       }
+      const rangeGate = getShotMaxRangeGate(
+        session,
+        shot.weaponSlot,
+        target.combatX,
+        target.combatY,
+      );
+      if (!rangeGate.allowed) {
+        shotSummaries.push(
+          `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${getDisplayName(target)}:out-of-range:${Math.round(rangeGate.distanceMeters ?? -1)}/${rangeGate.maxRangeMeters ?? 'n/a'}m`,
+        );
+        continue;
+      }
 
       const targetMechId = target.selectedMechId ?? FALLBACK_MECH_ID;
       const targetMechEntry = WORLD_MECH_BY_ID.get(targetMechId);
@@ -6231,17 +6992,15 @@ export function handleCombatWeaponFireFrame(
         shotDamage,
         targetHeadArmor,
       );
-      const criticalUpdates =
-        hitSection.internalIndex === 7 && damageResult.updates.some(update => update.damageCode === 0x27)
-          ? applyHeadCriticalStateUpdates(targetCriticalStateBytes, targetInternalValues[7] ?? 0)
-          : [];
-      const weaponSectionUpdates = getWeaponSectionLossUpdates(
+      const postDamageUpdates = collectPostDamageStateUpdates(
         targetMechId,
+        targetCriticalStateBytes,
         previousInternalValues,
         targetInternalValues,
+        hitSection.internalIndex === 7 && damageResult.updates.some(update => update.damageCode === 0x27),
       );
       targetHeadArmor = damageResult.headArmor;
-      const allUpdates = [...damageResult.updates, ...criticalUpdates, ...weaponSectionUpdates];
+      const allUpdates = [...damageResult.updates, ...postDamageUpdates.updates];
 
       for (const viewer of viewers) {
         if (viewer.id === target.id) {
@@ -6273,6 +7032,15 @@ export function handleCombatWeaponFireFrame(
       target.combatPlayerCriticalStateBytes = targetCriticalStateBytes;
       target.combatPlayerHeadArmor = targetHeadArmor;
       target.playerHealth = getCombatDurability(targetArmorValues, targetInternalValues) + targetHeadArmor;
+      if (postDamageUpdates.newlyDestroyedLegs.length > 0 && !isActorDestroyed(targetInternalValues)) {
+        sendArenaParticipantLegLossCollapse(
+          players,
+          combatSession,
+          target,
+          connLog,
+          `${getDisplayName(target)} ${postDamageUpdates.newlyDestroyedLegs.map(leg => leg.label).join('+')} destroyed`,
+        );
+      }
       shotSummaries.push(
         `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${getDisplayName(target)}:${hitSection.label}:health=${target.playerHealth}:updates=${allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join('/') || 'none'}`,
       );
@@ -6330,6 +7098,32 @@ export function handleCombatWeaponFireFrame(
 
   for (const shot of fireableShots) {
     const { damage: shotDamage, weaponName } = getShotDamage(session, shot.weaponSlot);
+    const rangeGate = getShotMaxRangeGate(session, shot.weaponSlot, 0, BOT_SPAWN_DISTANCE);
+    send(
+      session.socket,
+      buildCmd68ProjectileSpawnPacket(
+        {
+          sourceSlot:   0,
+          weaponSlot:   shot.weaponSlot,
+          targetRaw:    shot.targetSlot < 0 ? 0 : shot.targetSlot + 1,
+          targetAttach: shot.targetAttach < 0 ? 0 : shot.targetAttach + 1,
+          angleSeedA:   shot.angleSeedA,
+          angleSeedB:   shot.angleSeedB,
+          impactX:      shot.impactXRaw - COORD_BIAS,
+          impactY:      shot.impactYRaw - COORD_BIAS,
+          impactZ:      shot.impactZ,
+        },
+        nextSeq(session),
+      ),
+      capture,
+      'CMD68_PROJECTILE',
+    );
+    if (!rangeGate.allowed) {
+      shotSummaries.push(
+        `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:out-of-range:${Math.round(rangeGate.distanceMeters ?? -1)}/${rangeGate.maxRangeMeters ?? 'n/a'}m`,
+      );
+      continue;
+    }
     const impactContext = buildTargetImpactContext(
       shot.impactXRaw - COORD_BIAS,
       shot.impactYRaw - COORD_BIAS,
@@ -6355,43 +7149,32 @@ export function handleCombatWeaponFireFrame(
       shotDamage,
       botHeadArmor,
     );
-    const criticalUpdates =
-      hitSection.internalIndex === 7 && damageResult.updates.some(update => update.damageCode === 0x27)
-        ? applyHeadCriticalStateUpdates(botCriticalStateBytes, botInternalValues[7] ?? 0)
-        : [];
-    const weaponSectionUpdates = getWeaponSectionLossUpdates(
+    const postDamageUpdates = collectPostDamageStateUpdates(
       botMechId,
+      botCriticalStateBytes,
       previousInternalValues,
       botInternalValues,
+      hitSection.internalIndex === 7 && damageResult.updates.some(update => update.damageCode === 0x27),
     );
     botHeadArmor = damageResult.headArmor;
-    const allUpdates = [...damageResult.updates, ...criticalUpdates, ...weaponSectionUpdates];
-
-    send(
-      session.socket,
-      buildCmd68ProjectileSpawnPacket(
-        {
-          sourceSlot:   0,
-          weaponSlot:   shot.weaponSlot,
-          targetRaw:    shot.targetSlot < 0 ? 0 : shot.targetSlot + 1,
-          targetAttach: shot.targetAttach < 0 ? 0 : shot.targetAttach + 1,
-          angleSeedA:   shot.angleSeedA,
-          angleSeedB:   shot.angleSeedB,
-          impactX:      shot.impactXRaw - COORD_BIAS,
-          impactY:      shot.impactYRaw - COORD_BIAS,
-          impactZ:      shot.impactZ,
-        },
-        nextSeq(session),
-      ),
-      capture,
-      'CMD68_PROJECTILE',
-    );
+    const allUpdates = [...damageResult.updates, ...postDamageUpdates.updates];
     for (const update of allUpdates) {
       send(
         session.socket,
         buildCmd66ActorDamagePacket(1, update.damageCode, update.damageValue, nextSeq(session)),
         capture,
         'CMD66_BOT_DAMAGE',
+      );
+    }
+    if (postDamageUpdates.newlyDestroyedLegs.length > 0 && !isActorDestroyed(botInternalValues)) {
+      sendCombatLegLossCollapse(
+        session,
+        1,
+        connLog,
+        `${postDamageUpdates.newlyDestroyedLegs.map(leg => leg.label).join('+')} destroyed`,
+        'CMD70_BOT_LEG_COLLAPSE',
+        capture,
+        session.combatLegLossTransitionMode ?? 'collapse-only',
       );
     }
 
@@ -6468,8 +7251,8 @@ export function handleCombatActionFrame(
   clearCombatEjectArm(session, connLog, `action ${action.action}`);
 
   if (action.action === 0) {
-    session.lastCombatFireActionAt = Date.now();
-    connLog.debug('[world/combat] cmd-12 action=0 (selected-weapon fire trigger)');
+    noteCombatAction0Observed(session, connLog);
+    connLog.debug('[world/combat] cmd-12 action=0 (selected-weapon or stand-up trigger)');
     // Keep the local effects state fresh before a possible selected-weapon cmd10.
     send(session.socket, buildCmd71ResetEffectStatePacket(nextSeq(session)), capture, 'CMD71_FIRE_GATE');
     return;
@@ -6729,6 +7512,7 @@ export function handleMechPickerCmd7(
         `Mech selected: ${chosen.typeString}.${readyCleared ? ' Ready cleared.' : ''}${duelCleared ? ' Duel state cleared.' : ''}`,
       );
       sendArenaStatusList(players, session, connLog, capture);
+      sendArenaReadyReminder(session, capture);
     } else {
       send(
         session.socket,
@@ -6736,6 +7520,9 @@ export function handleMechPickerCmd7(
         capture,
         'CMD3_MECH_SELECTED',
       );
+      if (arenaRoom) {
+        sendArenaReadyReminder(session, capture);
+      }
       send(session.socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
     }
     return true;

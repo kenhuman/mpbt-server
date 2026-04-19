@@ -391,17 +391,23 @@ export function buildCmd69ImpactAtCoordPacket(p: Cmd69ImpactAtCoord, seq = 0): B
 //
 // Wire layout:
 //   slot        byte  — actor slot
-//   subcommand  byte  — selects animation helper:
-//                         0 → FUN_0043b400 (stand)
-//                         1 → FUN_0043b470 (fall)
-//                         2 → FUN_0043b4a0 (jump-start)
-//                         3 → FUN_0043b4e0 (unknown)
-//                         4 → FUN_0043b500 (destruction-style A)
-//                         5 → FUN_0043b520 (destruction-style B)
-//                         6 → FUN_0043b540 (destruction-style C)
+//   subcommand  byte  — handled by the client as:
+//                         0 → stand/resume dispatch; defaults to FUN_0043b440, but
+//                              routes to the destruction-tail helpers when the current
+//                              anim state is already 7/8/9/10
+//                         1 → FUN_0043b470 fall animation (clears actor +0x35e)
+//                         4 → remote-only airborne/jump-state helper via FUN_0043b3e0;
+//                              paired with local cmd12/action 4
+//                         6 → landing resolution; after the remote position path updates
+//                              descent state, this either calls FUN_0043b400 to stand or
+//                              consumes the deferred-collapse bit and re-enters the same
+//                              collapse path as subcommand 8
+//                         8 → immediate collapse when grounded, or deferred collapse when
+//                              the actor is still airborne; grounded path drives
+//                              FUN_0043b4a0, sets actor +0x35e, and zeros motion state
 //
 // Ghidra assumptions:
-//   • Exact semantics of subcommand values 3–6 still need dynamic capture.
+//   • Exact retail trigger for the deferred-collapse/support gate still needs capture.
 
 /** Build a Cmd70 actor animation/status transition packet. CONFIRMED §19.6.1. */
 export function buildCmd70ActorTransitionPacket(

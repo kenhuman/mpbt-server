@@ -960,6 +960,9 @@ export function sendMechClassPicker(
       jumpJetCount:   0,
       armorLikeMaxValues: Array<number>(10).fill(0),
       weaponMountInternalIndices: [],
+      weaponTypeIds: [],
+      ammoBinCapacities: [],
+      ammoBinTypeIds: [],
     };
   });
   connLog.info('[world] sending mech class picker');
@@ -1005,6 +1008,9 @@ export function sendMechChassisPicker(
       jumpJetCount: 0,
       armorLikeMaxValues: Array<number>(10).fill(0),
       weaponMountInternalIndices: [],
+      weaponTypeIds: [],
+      ammoBinCapacities: [],
+      ammoBinTypeIds: [],
     };
   });
 
@@ -1048,6 +1054,9 @@ export function sendMechVariantPicker(
     jumpJetCount: mech.jumpJetCount,
     armorLikeMaxValues: mech.armorLikeMaxValues,
     weaponMountInternalIndices: mech.weaponMountInternalIndices,
+    weaponTypeIds: mech.weaponTypeIds,
+    ammoBinCapacities: mech.ammoBinCapacities,
+    ammoBinTypeIds: mech.ammoBinTypeIds,
   }));
 
   connLog.info('[world] sending mech variant picker: chassis="%s" entries=%d', chassis, entries.length);

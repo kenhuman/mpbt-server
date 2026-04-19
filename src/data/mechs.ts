@@ -76,6 +76,19 @@ function decryptMec(buf: Buffer, nameLower: string): void {
   }
 }
 
+function requireMecReadRange(
+  buf: Buffer,
+  mecPath: string,
+  offset: number,
+  byteLength: number,
+  label: string,
+): void {
+  const requiredLength = offset + byteLength;
+  if (buf.length < requiredLength) {
+    throw new Error(`${mecPath}: too short for ${label} (${buf.length} < ${requiredLength})`);
+  }
+}
+
 /**
  * Decrypt a .MEC file and return combat bootstrap/runtime fields in one pass.
  *
@@ -102,6 +115,9 @@ function readMecFields(
   tonnage: number;
   armorLikeMaxValues: number[];
   weaponMountInternalIndices: number[];
+  weaponTypeIds: number[];
+  ammoBinCapacities: number[];
+  ammoBinTypeIds: number[];
 } {
   const raw = fs.readFileSync(mecPath);
   if (raw.length < 0x3e) {
@@ -110,13 +126,27 @@ function readMecFields(
   const buf = Buffer.from(raw); // mutable copy
   decryptMec(buf, nameLower);
   const weaponCount = buf.readUInt16LE(0x3a);
+  const weaponTypeOffset = 0x3e;
   const weaponMountOffset = 0x8e;
-  const weaponMountBytes = weaponCount * 2;
-  if (buf.length < weaponMountOffset + weaponMountBytes) {
+  const entryBytes = weaponCount * 2;
+  requireMecReadRange(buf, mecPath, weaponTypeOffset, entryBytes, 'weapon type ids');
+  requireMecReadRange(buf, mecPath, weaponMountOffset, entryBytes, 'weapon mount refs');
+
+  const ammoBinCountOffset = 0x1ec;
+  const ammoBinCapacityOffset = 0x1ee;
+  const ammoBinTypeOffset = 0x202;
+  const maxCmd72AmmoBinCount = 0xff;
+  requireMecReadRange(buf, mecPath, ammoBinCountOffset, 2, 'ammo bin count');
+  const ammoBinCount = buf.readUInt16LE(ammoBinCountOffset);
+  if (ammoBinCount > maxCmd72AmmoBinCount) {
     throw new Error(
-      `${mecPath}: too short for weapon mount refs (${buf.length} < ${weaponMountOffset + weaponMountBytes})`,
+      `${mecPath}: ammo bin count ${ammoBinCount} exceeds Cmd72 limit ${maxCmd72AmmoBinCount}`,
     );
   }
+  const ammoBinBytes = ammoBinCount * 2;
+  requireMecReadRange(buf, mecPath, ammoBinCapacityOffset, ammoBinBytes, 'ammo bin capacities');
+  requireMecReadRange(buf, mecPath, ammoBinTypeOffset, ammoBinBytes, 'ammo bin type ids');
+
   return {
     mecSpeed:       buf.readUInt16LE(0x16),
     tonnage:        buf.readUInt16LE(0x18),
@@ -134,9 +164,21 @@ function readMecFields(
       buf.readUInt16LE(0x2a), // LT rear
       buf.readUInt16LE(0x2c), // RT rear
     ],
+    weaponTypeIds: Array.from(
+      { length: weaponCount },
+      (_, slot) => buf.readUInt16LE(weaponTypeOffset + slot * 2),
+    ),
     weaponMountInternalIndices: Array.from(
       { length: weaponCount },
       (_, slot) => buf.readUInt16LE(weaponMountOffset + slot * 2),
+    ),
+    ammoBinCapacities: Array.from(
+      { length: ammoBinCount },
+      (_, index) => buf.readUInt16LE(ammoBinCapacityOffset + index * 2),
+    ),
+    ammoBinTypeIds: Array.from(
+      { length: ammoBinCount },
+      (_, index) => buf.readUInt16LE(ammoBinTypeOffset + index * 2),
     ),
   };
 }
@@ -273,7 +315,17 @@ export function loadMechs(): MechEntry[] {
         );
       }
       const mecPath = path.join(mechDir, filename);
-      const { mecSpeed, jumpJetCount, extraCritCount, tonnage, armorLikeMaxValues, weaponMountInternalIndices } =
+      const {
+        mecSpeed,
+        jumpJetCount,
+        extraCritCount,
+        tonnage,
+        armorLikeMaxValues,
+        weaponMountInternalIndices,
+        weaponTypeIds,
+        ammoBinCapacities,
+        ammoBinTypeIds,
+      } =
         readMecFields(mecPath, typeString.toLowerCase());
       return {
         id,
@@ -289,6 +341,9 @@ export function loadMechs(): MechEntry[] {
         jumpJetCount,
         armorLikeMaxValues,
         weaponMountInternalIndices,
+        weaponTypeIds,
+        ammoBinCapacities,
+        ammoBinTypeIds,
       };
     });
 
