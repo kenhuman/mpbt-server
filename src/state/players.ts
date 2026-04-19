@@ -250,7 +250,7 @@ export interface ClientSession {
   duelTermsAvailable?: boolean;
 
   /** Optional scripted combat verification mode consumed on the next /fight bootstrap. */
-  combatVerificationMode?: 'autowin' | 'autolose' | 'dmglocal' | 'dmgbot' | 'strictfire' | 'headtest';
+  combatVerificationMode?: 'autowin' | 'autolose' | 'dmglocal' | 'dmgbot' | 'strictfire' | 'headtest' | 'legtest' | 'legseq' | 'legair' | 'legfull' | 'legrecover';
 
   /**
    * Pending mech slot chosen in the mech-select dialog, held until the
@@ -288,8 +288,10 @@ export interface ClientSession {
   combatLastJumpLandAltitude?: number;
   /** True after the first-stage eject control is armed; a second eject request confirms ejection. */
   combatEjectArmed?: boolean;
-  /** Timestamp (ms) of the last cmd12/action 0 fire trigger frame from client. */
+  /** Timestamp (ms) of the last cmd12/action 0 frame from client. */
   lastCombatFireActionAt?: number;
+  /** One-shot timer that logs when a cmd12/action0 frame has no nearby cmd10 follow-up. */
+  combatAction0FollowupTimer?: ReturnType<typeof setTimeout>;
   /** Whether the current combat session requires recent cmd12/action0 before cmd10 fire. */
   combatRequireAction0?: boolean;
   /** Count of cmd10 weapon-fire frames accepted in the current combat session. */
@@ -300,6 +302,18 @@ export interface ClientSession {
   combatShotsAction0Correlated?: number;
   /** Count of direct cmd10 shots that arrived without a recent cmd12/action0. */
   combatShotsDirectCmd10?: number;
+  /** Count of cmd12/action0 frames that had no cmd10 follow-up inside the normal fire window. */
+  combatAction0NoShotCount?: number;
+  /** Active non-death leg-loss Cmd70 transition mode for the current combat session. */
+  combatLegLossTransitionMode?: 'collapse-only' | 'fall-then-collapse' | 'airborne-collapse-land' | 'fall-airborne-collapse-land' | 'fall-collapse-recover';
+  /** Delayed Cmd70 timers queued for non-death leg-loss transition probes. */
+  combatLegLossTransitionTimers?: Array<ReturnType<typeof setTimeout> | undefined>;
+  /** Per-weapon-slot wall-clock time (Date.now ms) when the slot becomes fireable again. */
+  combatWeaponReadyAtBySlot?: number[];
+  /** Per-weapon-slot one-shot timer that restores local HUD weapon-ready state after cooldown. */
+  combatWeaponReadyTimerBySlot?: Array<ReturnType<typeof setTimeout> | undefined>;
+  /** Current local ammo-bin state for the active mech, indexed by .MEC ammo-bin order. */
+  combatAmmoStateValues?: number[];
   /**
    * Mech ID override for the scripted bot opponent.  Set via `/botmech <id>`;
    * used instead of the player's own mech when bootstrapping combat.

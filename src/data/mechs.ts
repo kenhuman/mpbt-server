@@ -102,6 +102,9 @@ function readMecFields(
   tonnage: number;
   armorLikeMaxValues: number[];
   weaponMountInternalIndices: number[];
+  weaponTypeIds: number[];
+  ammoBinCapacities: number[];
+  ammoBinTypeIds: number[];
 } {
   const raw = fs.readFileSync(mecPath);
   if (raw.length < 0x3e) {
@@ -134,9 +137,21 @@ function readMecFields(
       buf.readUInt16LE(0x2a), // LT rear
       buf.readUInt16LE(0x2c), // RT rear
     ],
+    weaponTypeIds: Array.from(
+      { length: weaponCount },
+      (_, slot) => buf.readUInt16LE(0x3e + slot * 2),
+    ),
     weaponMountInternalIndices: Array.from(
       { length: weaponCount },
       (_, slot) => buf.readUInt16LE(weaponMountOffset + slot * 2),
+    ),
+    ammoBinCapacities: Array.from(
+      { length: buf.readUInt16LE(0x1ec) },
+      (_, index) => buf.readUInt16LE(0x1ee + index * 2),
+    ),
+    ammoBinTypeIds: Array.from(
+      { length: buf.readUInt16LE(0x1ec) },
+      (_, index) => buf.readUInt16LE(0x202 + index * 2),
     ),
   };
 }
@@ -273,7 +288,17 @@ export function loadMechs(): MechEntry[] {
         );
       }
       const mecPath = path.join(mechDir, filename);
-      const { mecSpeed, jumpJetCount, extraCritCount, tonnage, armorLikeMaxValues, weaponMountInternalIndices } =
+      const {
+        mecSpeed,
+        jumpJetCount,
+        extraCritCount,
+        tonnage,
+        armorLikeMaxValues,
+        weaponMountInternalIndices,
+        weaponTypeIds,
+        ammoBinCapacities,
+        ammoBinTypeIds,
+      } =
         readMecFields(mecPath, typeString.toLowerCase());
       return {
         id,
@@ -289,6 +314,9 @@ export function loadMechs(): MechEntry[] {
         jumpJetCount,
         armorLikeMaxValues,
         weaponMountInternalIndices,
+        weaponTypeIds,
+        ammoBinCapacities,
+        ammoBinTypeIds,
       };
     });
 

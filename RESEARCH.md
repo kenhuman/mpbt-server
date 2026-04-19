@@ -2043,15 +2043,54 @@ All fields are little-endian.  Offsets are from the start of the decrypted buffe
 
 | ID | Weapon | Evidence |
 |----|--------|---------|
-| `3`  | Medium Laser | Present in Atlas ×4, Blackjack ×3, Spider ×1; most ubiquitous energy weapon in 3025 |
-| `6`  | AC/2 (Autocannon/2) | Appears in BJ-1 weapon list and matched ammo bin type |
-| `8`  | Unconfirmed | Present in ANH-1A ×4 after the v1.23 offset correction; no longer from AS7-D/BJ-1 shifted reads |
-| `9`  | Unconfirmed missile | AS7-D weapon slot and matching ammo-bin type |
-| `12` | Unconfirmed missile | AS7-D weapon slot and matching ammo-bin type; likely the old shifted read hid this slot |
-| `16` | AC/20 (Autocannon/20) | AS7-D weapon index 1; 2 ammo bins of 5 rounds each = 10 total ✓ |
+| `0`  | Flamer | Local v1.23 roster fit is strongest on flamer-heavy variants (`FS9-H`, `FLE-4`, `WSP-1D`, `VTR-9A/9D`, `WHM-6L`, etc.); BT-MAN fixes `Dly = 3s` and `Max = 90m`, and `MPBTWIN.EXE.c` helper `FUN_0043b3f0` pins flamer damage to `3` via its 17-entry damage-potential table. `C:\MPBT\tools-local\weapon-range-smoke.mjs` now live-proves both the `100m` range gate (`stub-flamer:WSP-1D:none`) and a close-range hit (`stub-flamer-close:WSP-1D:cmd66:25/3`). |
+| `1`  | Machine Gun | Documented multiset fit across BLR-1D, CPLT-K2, LCT-1V, PXH-1, and similar MG-equipped variants. `C:\MPBT\tools-local\weapon-damage-smoke.mjs` now live-proves current server resolution `Machine Gun:2`. |
+| `2`  | Small Laser | Unique all-small-laser fits on CGR-1A1 and WSP-1W; also matches the non-missile energy filler on CPLT-C4 / HBK-4G. `weapon-damage-smoke.mjs` live-proves `Small Laser:3`. |
+| `3`  | Medium Laser | Present in Atlas x4, Blackjack x4, Spider x2/x4; most ubiquitous energy weapon in 3025. `weapon-damage-smoke.mjs` live-proves `Medium Laser:5`. |
+| `4`  | Large Laser | Resolved by AWS-8R/AWS-8T/AWS-8V once ids `2` and `15` are fixed. `weapon-damage-smoke.mjs` live-proves current server resolution `Large Laser:8`. |
+| `5`  | PPC (Particle Projector Cannon) | Resolved by AWS-8V / CPLT-K2 / OTL-4F multiset fits. `weapon-damage-smoke.mjs` live-proves `Particle Projector Cannon:10`. |
+| `6`  | AC/2 (Autocannon/2) | Appears in BJ-1 weapon list and matched ammo bin type. `weapon-damage-smoke.mjs` live-proves `Autocannon/2:2`. |
+| `7`  | AC/5 (Autocannon/5) | Resolved by DRG-1N / JM6-S / RFL-3N / SHD-2H multiset fits. `weapon-damage-smoke.mjs` live-proves `Autocannon/5:5`. |
+| `8`  | AC/10 (Autocannon/10) | Resolved by CN9-A / HBK-4H / ON1-K / RFL-3C multiset fits. `weapon-damage-smoke.mjs` live-proves `Autocannon/10:10`. |
+| `9`  | AC/20 (Autocannon/20) | Resolved by AS7-D / BNC-3Q / HBK-4G / Victor variant multisets. `weapon-damage-smoke.mjs` live-proves `Autocannon/20:20`. |
+| `10` | SRM-2 | Resolved by LCT-1S / DV-6M / SHD-2H / WSP-1A fits. `weapon-damage-smoke.mjs` live-proves current server resolution `SRM-2:4`, but retail-side missile interpretation is still blocked on stronger evidence than `FUN_0043b3f0` alone. |
+| `11` | SRM-4 | Resolved by JR7-D, COM-2D, and Catapult/Orion/Victor fits. `weapon-damage-smoke.mjs` live-proves current server resolution `SRM-4:8`, with the same retail-side caveat as the other missile families. |
+| `12` | SRM-6 | Resolved by AS7-D plus JVN-10N / HBK-4SP / WHM-6K fits. `weapon-damage-smoke.mjs` live-proves current server resolution `SRM-6:12`, with the same retail-side caveat as the other missile families. |
+| `13` | LRM-5 | Resolved by GHR-5H / GRF-1S / LCT-1M / SHD-2H fits. `weapon-damage-smoke.mjs` live-proves current server resolution `LRM-5:5`, with the same retail-side caveat as the other missile families. |
+| `14` | LRM-10 | Resolved by CN9-A / CP10-Q / DV-6M / WTH-1 fits. `weapon-damage-smoke.mjs` live-proves current server resolution `LRM-10:10`, with the same retail-side caveat as the other missile families. |
+| `15` | LRM-15 | Resolved by AWS-8R / CPLT-C1 / CRD-3D / ZEU-6S fits. `weapon-damage-smoke.mjs` live-proves current server resolution `LRM-15:15`, with the same retail-side caveat as the other missile families. |
+| `16` | LRM-20 | AS7-D weapon index 1; CPLT-C4 x2 and matching ammo bins confirm the family. `weapon-damage-smoke.mjs` live-proves current server resolution `LRM-20:20`, with the same retail-side caveat as the other missile families. |
 
-IDs `1`, `2`, `4`, `5`, `7`, `8`, `10`, `11`, `12`, `13`, `14`, and `15` appear in local v1.23 mechdata and remain unresolved without
-cross-referencing the weapon global table at `DAT_00477b58` (stride `0x5C`, 0-indexed).
+Current coverage: family name/range/cooldown and direct damage are now pinned across all `774 / 774` weapon slots. The flamer / type-id-`0` gap is closed; the remaining caution is interpretive, not missing data — `FUN_0043b3f0` appears to use average cluster damage for missile families, so that helper alone should not be used to remap missile damage without stronger retail confirmation.
+
+Additional client weapon-table follow-up from `MPBTWIN.EXE.c`:
+- `FUN_004382e0` reads the per-weapon string ids from `DAT_00477b08` / `DAT_00477b0c`, which is enough to justify surfacing recovered `.MEC` weapon names in server-side `Cmd20` examine text even for BT-MAN stub variants.
+- `C:\MPBT\tools-local\weapon-damage-smoke.mjs` now runs one labeled live combat case for every non-Flamer weapon family and reads the matching `cmd10 weapon fire accepted` line back out of `C:\Users\moose\mpbt-server.out.log`. Current live pass on the rebuilt server:
+  - `PASS weapon-damage-smoke mg:Machine Gun:2 small-laser:Small Laser:3 medium-laser:Medium Laser:5 large-laser:Large Laser:8 ppc:Particle Projector Cannon:10 ac2:Autocannon/2:2 ac5:Autocannon/5:5 ac10:Autocannon/10:10 ac20:Autocannon/20:20 srm2:SRM-2:4 srm4:SRM-4:8 srm6:SRM-6:12 lrm5:LRM-5:5 lrm10:LRM-10:10 lrm15:LRM-15:15 lrm20:LRM-20:20`
+- That smoke also exposed a coupled server bug: `getWeaponNameForSlot(...)` had still preferred BT-MAN `armament[slot]` text even when `.MEC` `weaponTypeIds` were present, while `getWeaponSpecForSlot(...)` already preferred `.MEC`. Variants with mismatched slot orderings (for example `AWS-8R`) could therefore log nonsense pairs like `LRM-15:8`. Combat slot-name lookup now prefers recovered `.MEC` type ids first, so name/range/cooldown/damage resolution stays aligned.
+- Deeper pass on `FUN_0043b3f0` / missile interpretation:
+  - Ghidra ref-manager scan on the current `Mpbtwin.exe` found **no code or data references** to `FUN_0043b3a0` (`0043b3a0`) or `FUN_0043b3f0` (`0043b3f0`) in this binary.
+  - The adjacent `FUN_0043b4a0` **is** referenced, but only from fall/destruction / `Cmd70` animation-state paths (`FUN_00448d80`, `Combat_Cmd70_ActorAnimState_v123`), not from weapon-damage application. That makes the `0043b3f0` table look more like leftover or currently-unused helper code than an active damage resolver.
+  - The active nearby numeric field is `DAT_00477b54`, not `FUN_0043b3f0` itself:
+    - `FUN_004106b0` sums `DAT_00477b54` across mounted/available weapons
+    - `FUN_00410790` folds that into a normalized current-strength / effectiveness value for an actor
+    - `FUN_00410870` compares those strength values between two actors
+    - `FUN_00410a20` then combines that comparison with range checks (`FUN_00410960`, which uses `DAT_00477b40` max range) to choose one of several coarse response/action codes
+  - Interpretation: the same missile values that resemble average cluster damage are actively suitable as **combat-power / target-evaluation weights**, even if they are not direct per-shot missile damage. That is a better fit for the `2,6,8,3,6,9,12` missile rows than for literal salvo totals.
+  - Practical conclusion:
+    - flamer `3` remains a safe promotion because the non-missile rows line up with direct per-shot damage and there is no flamer-specific ambiguity
+    - missile rows in `FUN_0043b3f0` are now even weaker as retail direct-damage proof than before: the helper appears unreferenced, and the matching active field is being used in a strength/threat-style path where average-cluster weighting makes sense
+- `C:\MPBT\tools-local\mech-examine-smoke.mjs` now live-proves the world mech-picker **variant-step** `Cmd20` path on the rebuilt server:
+  - `WSP-1D` examine text includes recovered `Flamer` / `Small Laser`
+  - `ANH-1A` examine text includes recovered `Autocannon/10`
+- `FUN_0043b3f0` embeds the following damage-potential values by weapon type id:
+  - `0:3`, `1:2`, `2:3`, `3:5`, `4:8`, `5:10`, `6:2`, `7:5`, `8:10`, `9:20`, `10:2`, `11:6`, `12:8`, `13:3`, `14:6`, `15:9`, `16:12`
+  - non-missile rows match direct per-shot damage
+  - missile rows match classic average cluster damage rather than full salvo totals
+  - that makes flamer `3` safe to promote without forcing a broader missile reinterpretation
+- `FUN_0043b3a0` / the HUD helper at `00436449` confirm `DAT_00477b40` is the weapon max-range field in meters, and `DAT_00477b24` is a minimum-range threshold used by the local combat HUD to mark targets inside minimum range.
+- Current negative result: this pass did **not** find a corresponding client fire-block path on the minimum-range field. The known xrefs only drive range-band / HUD feedback, so server-side min-range rejection would still be speculative.
+
 Prior notes treated `0x3C+` as the weapon-id array. v1.23 `FUN_00433910` reads weapon ids from `0x3E + slot*2`, and `Combat_ClassifyDamageCode_v123` reads `0x3C` separately as a signed count/bound for damage-state codes. Local decode examples:
 AS7-D `field_0x3c=8`, weapons `[9,16,3,3,3,3,12]`; BJ-1 `field_0x3c=8`, weapons `[6,6,3,3,3,3]`; SDR-5V `field_0x3c=9`, weapons `[3,3]`.
 
@@ -2650,6 +2689,76 @@ Confirmed call sites:
 | `4` | `Combat_JumpJetInputTick_v123` (`0x00422c50`) | Jump jet fire request. Requires jump input bit, remaining jump fuel/energy (`DAT_004f21a2 > 0x32`), no active jump flags, and not in a blocked animation state. |
 | `6` | `FUN_00448d80` | Jump/landing transition request. Sent when an airborne actor reaches ground contact and the local jump-state flags are cleared. |
 
+- Fresh 2026-04-18 caller audit: `Combat_SendCmd12Action_v123` still has only three live callers in the current `Mpbtwin.exe` (`action 0`, jump `action 4`, landing `action 6`), but the `action 0` interpretation is now narrower and more useful than the earlier "selected-fire" guess.
+- Fresh 2026-04-18 input audit: `FUN_00434350` routes `WM_KEY*` through `FUN_0043d500 -> FUN_0040b700`, which resolves combat actions from four key tables (`DAT_004ef380`, `DAT_004eef70`, `DAT_004ef180`, `DAT_004eed70` for default / shift / ctrl / alt).
+- Dumping those tables for `VK_HOME (0x24)` and `VK_F1..VK_F12 (0x70..0x7b)` returned `0` in all four tables on the current `Mpbtwin.exe`, and the special-key helper `FUN_0043d040` only tracks Shift/Ctrl/Alt state.
+- Fresh 2026-04-18 fallback keymap confirmation: the compiled fallback action table at `DAT_00478c50` still has entry `0x15 = 0x58` (scan code `0x58`, i.e. F12 on the normal PC set), so `action 0x15` remains the strongest direct F12 candidate even though the late-built `VK_*` tables themselves are zero for `VK_F12`.
+- Fresh 2026-04-18 recovery-gate correction: `Combat_InputActionDispatch_v123` case `0x15` still sends `Combat_SendCmd12Action_v123(0)` only when the local actor is in the down/recovery state (`DAT_004f208e != 0`, i.e. actor offset `+0x35e`), `DAT_004f1ee2 < 2`, and at least one of `DAT_004f1f42` / `DAT_004f1f44` is non-zero. But those globals are **not legs** once the initializer is traced through fully; they are the local copies of class-2 slots `2/3`, which the retail damage-state initializer still seeds as left/right torso. So this gate no longer proves the user-facing "both legs gone => no stand" rule.
+- Fresh 2026-04-18 stand-helper follow-up: `FUN_0043b440` (generic stand/resume) clears actor offset `+0x35e`, while inbound `Cmd70` subcommands `6/8` set that same flag before driving the grounded/collapse helper path. That makes `DAT_004f208e` the strongest current candidate for the local "down / waiting to recover" flag.
+- Fresh 2026-04-18 stand/fall-helper audit: `FUN_0043b470` (fall animation helper) is only called from inbound `Combat_Cmd70_ActorAnimState_v123` subcommand `1`, while `FUN_0043b440` / `FUN_0043b400` (stand/landing-to-stand helpers) are reached from inbound `Cmd70` and the local landing-state path `FUN_00448d80`.
+- Fresh 2026-04-18 negative result: client-local damage/contact paths still do **not** call `FUN_0043b470`; `Cmd66`/`Cmd67` damage-state updates by themselves are therefore not enough to make a mech fall after leg loss.
+- Fresh 2026-04-18 class-2 order reconciliation: `Combat_InitDamageStateFromMec_v123` writes the 8 internal-state entries at `damageState + 0xe8` by calling `Combat_GetInternalStructureForSection_v123(tonnage, sectionId)` for section ids `0..7` **in direct order**. That means the client's class-2 damage-state block and the retail helper use the same order: `[LA, RA, LT, RT, CT, LL, RL, Head]`.
+- Fresh 2026-04-18 `+0xec/+0xee` resolution: because the class-2 block starts at `+0xe8`, the `Combat_ApplyDamageCodeValue_v123` zero check at `+0xec/+0xee` is checking entries `2/3` — **left/right torso**, not legs. So the earlier "local leg-loss trigger" interpretation was wrong. What that path actually means still needs follow-up, but it is no longer evidence for leg-destruction fall.
+- Fresh 2026-04-18 leg-slot correction: the true leg entries in the class-2 block are `+0xf2/+0xf4`, i.e. actor `+0x218/+0x21a` (`DAT_004f1f48 / DAT_004f1f4a` for the local actor). The earlier `+0x216/+0x218` note was off by two bytes.
+- Fresh 2026-04-18 `FUN_0040df80` correction: `FUN_0040df80` zeroes actor `+0x216`, which is the **center torso** class-2 slot (`+0xf0`), not a leg slot. It also forces actor state `+0x35a = 3`, zeros movement state, and matches the same hard-stop cleanup used by `Combat_UpdateCriticalDamageState_v123` when critical paths escalate into state `3`. That makes `FUN_0040df80` a destruction/cripple-style helper, not evidence for a recoverable leg-loss fall path.
+- Fresh 2026-04-18 posture-state clarification:
+  - actor state `+0x35a = 2` is written by `FUN_0042d0a0` from the heat accumulator path (`+0x37a`) and clears back to `0` when heat drops, so it is the shutdown / overheating posture
+  - actor state `+0x35a = 3` is written by `Combat_UpdateCriticalDamageState_v123` and `FUN_0040df80`, and movement/input helpers treat it as a hard-blocking non-normal posture
+  - this strengthens the read that state `3` is destruction/cripple, not a normal fallen-but-recoverable state
+- Fresh 2026-04-18 real leg-slot status: `FUN_0040e000` still maps section ids `5/6` to dedicated local effect ids (`0x21/0x20`), but no direct fixed-address writer/reader has been recovered yet for actor `+0x218/+0x21a`. That suggests retail leg-loss handling is either fully index-driven or hidden behind a different packet/critical path than the torso-slot `Combat_ApplyDamageCodeValue_v123` check.
+- Fresh 2026-04-18 index-driven leg-slot follow-up: the lack of direct xrefs to `DAT_004f1f48 / DAT_004f1f4a` now has a concrete explanation. Retail repeatedly reaches the internal-state block through tables/mappers instead of named LL/RL globals:
+  - `FUN_0042e2f0` gates each weapon mount by reading the `.MEC` section-to-internal map at `mech + 0x8e + mount*2`, then testing `actor + 0x20e + mappedSlot*2`
+  - `FUN_0042f2e0` maps display-section ids `8/9` to internal slots `5/6`, and downstream HUD helpers consume `damageState + 0xe8 + mappedSlot*2`
+  - result: the true leg slots are definitely part of generic table-driven access, not a pair of easy fixed-global references
+- Fresh 2026-04-18 leg-trigger follow-up: decompiling the exact local class-2 apply path removes another false lead. `Combat_ApplyDamageCodeValue_v123` does still react when local `+0xec/+0xee` reaches zero, but the side effects are `DAT_004f2094 = 1`, `FUN_0042d150(localActor, 0)`, and `FUN_004262d0(0)` — and `FUN_0042d150` recalculates runtime movement/rate fields from the mech's base speed while explicitly keying off torso internals `actor + 0x212/+0x214`, not the true leg slots. So that torso-zero path now reads as movement-limit/rate recalculation, not a proven leg-collapse helper.
+- Fresh 2026-04-18 strongest leg-specific client path so far: `Combat_UpdateCriticalDamageState_v123` routes crit types `8..0xf` (the `MPBT.MSG` leg-actuator band from left-leg hip through right-leg foot) through the same `FUN_0042d150` movement-limit helper. That means the clearest recovered retail leg-side handling is still actuator/crit-driven degradation, while visible airborne/deferred-collapse/landing state remains on the separate `Cmd70 4/8/6` path.
+- Fresh 2026-04-18 `Cmd73` priority check: the recovered `Combat_Cmd73_UpdateActorRateFields_v123` handler only writes the two actor-rate fields at `DAT_004f202a/+0x202e` (actor offsets `+0x2fa/+0x2fe`) and no direct read xrefs to those fields have been recovered yet in the current `Mpbtwin.exe` database or flat decomp. That does **not** prove `Cmd73` is irrelevant, but it weakens it as the first fall/recovery blocker compared with the already-confirmed crit-update and `Cmd70` gaps.
+- Fresh 2026-04-18 server data-model follow-up: `mpbt-server` does **not** currently parse the `.MEC` critical-type table at `0xde`; it only loads `extraCritCount`, armor-like maxima, weapon mount IS refs, weapon ids, and ammo data. But because the installed retail `.MEC` roster's base crit table is now known to be the direct identity map `0..20`, that missing field is no longer a hard blocker for synthesizing the stable leg-actuator codes `8..15`.
+- Fresh 2026-04-18 server experiment landed: `mpbt-server` now synthesizes the leg-actuator crit band conservatively when a leg's class-2 internal slot first drops to zero. The server raises the four actuator codes for that leg (`8..11` or `12..15`) to state `1` exactly once, matching the retail critical handler's monotonic `oldState < newState` gate without guessing any multi-hit escalation. In the same post-damage pass, the server now also emits a non-death `Cmd70/8` collapse for that actor (local or remote slots as appropriate in bot, duel, and arena combat), while still leaving `Cmd73` and stand-up/recovery handling untouched.
+- Fresh 2026-04-19 live GUI validation: packet proof is now paired with a real retail-client windowed run. A small env-gated local probe hook (`MPBT_FORCE_VERIFICATION_ACCOUNT` + `MPBT_FORCE_VERIFICATION_MODE=legtest`) was added so the ordinary **Fight** button could arm the existing forced left-leg verifier for account `gui_leg_0419b` without relying on synthetic text entry, which the retail client did not accept reliably. On the rebuilt server, the Fight-button path logged the forced `legtest` override, then delivered the expected left-leg damage sequence through `0x25 = 0` plus actuator crits `0x08..0x0b = 1` and the non-death `Cmd70/8` collapse at `01:23:58`. But the captured client window stayed in the normal upright cockpit view before, during, and after that decisive packet, including a fresh post-collapse screenshot taken after the `Cmd70/8` event. No inbound `cmd12/action 0x15` or other obvious recovery-side request appeared in the same window. Practical read: the current minimum subset is wire-correct but still **not sufficient to produce visible retail fall**.
+- Fresh 2026-04-19 `Cmd70` sequence follow-up: the next live probe added an opt-in `legseq` verifier that keeps the same left-leg destruction path but emits non-death `Cmd70 1 -> 8` instead of bare `8`, using a fresh per-launch `.pcgi` file for every retail-client launch (matching the launcher's contract; the client deletes/consumes the sandbox `play.pcgi` on use). Wire-side, the probe worked exactly as intended: the Fight button armed the forced `legseq` override, the client entered combat normally, left-leg internal reached `0`, actuator crits `0x08..0x0b = 1` landed, and the server logged `leg-loss transition slot=0 mode=fall-then-collapse sequence=1->8`. But the live `+12s` and `+22s` combat screenshots still showed an upright, stable cockpit view with no visible fall. Practical read: adding subcommand `1` before non-death `8` is **still visually insufficient**, so the next best `Cmd70` target has narrowed further toward the airborne / landing-resolution side (`4` / `6`) rather than the simple fall-helper path alone.
+- Fresh 2026-04-19 `Cmd70 4->8->6` follow-up: the next opt-in verifier (`legair`) now drives the strongest currently recovered non-death airborne sequence for left-leg loss: `Cmd70/4` (airborne), `Cmd70/8` (deferred collapse while airborne), and `Cmd70/6` (landing resolution). Packet-side, the probe is live and exact: `fight-leg-airborne-sequence-smoke.mjs` passes with `cmd70=0/4,0/8,0/6`, and a real launcher-based GUI run using a fresh per-launch `.pcgi` plus a real Fight-button click logged `forced verification override: username=gui_leg_0419b mode=legair` followed by `leg-loss transition slot=0 mode=airborne-collapse-land sequence=4->8->6`. The timing matters: the new screenshots show the world ready room before click, an upright cockpit at `+12s`, and another upright cockpit at `+22s`; the final left-leg-zero event and `4->8->6` transition fired at `08:33:57.924Z`, and the `+22s` screenshot was taken at `08:34:00`, i.e. about two seconds **after** the transition had already landed. Practical read: even the recovered airborne / deferred-collapse / landing sequence is still **not producing an obvious sustained visible fall** on the retail client.
+- Fresh 2026-04-19 `Cmd70 1->4->8->6` follow-up: the remaining plausible pure-`Cmd70` mix is now also wired as an opt-in verifier (`legfull`). This path adds the earlier fall-animation helper back in front of the airborne/deferred-collapse/landing chain and emits `Cmd70/1`, then delayed `Cmd70/4`, delayed `Cmd70/8`, and delayed `Cmd70/6`. Packet-side, the probe is exact: `fight-leg-full-sequence-smoke.mjs` passes with `cmd70=0/1,0/4,0/8,0/6`, while the older `fight-leg-smoke.mjs`, `fight-leg-sequence-smoke.mjs`, and `fight-leg-airborne-sequence-smoke.mjs` still pass unchanged. Live GUI validation is now in too: a launcher-driven run using account `Moose` reached Ishiyama Ready Room 1, clicked the normal Fight button, logged `forced verification override: username=Moose mode=legfull`, and then emitted `leg-loss transition slot=0 mode=fall-airborne-collapse-land sequence=1->4->8->6` at `09:58:17.637Z`. The saved screenshots (`mpbt-before-fight.png`, `2026-04-19 05_58_27-Multiplayer BattleTech.png`, `...05_58_39...`, `...05_58_51...`) line up as pre-fight plus roughly `+10s`, `+22s`, and `+34s` after the actual transition, and all three post-transition frames still show an ordinary upright cockpit/combat view. Practical read: even the strongest remaining `Cmd70`-only blend is **visually insufficient** on the retail client.
+- Fresh 2026-04-18 Cmd70 refinement: `Combat_Cmd70_ActorAnimState_v123` is now better understood as a multi-state down/recovery dispatcher, not a flat helper enum:
+  - subcommand `1` calls `FUN_0043b470`, which only plays the fall animation and clears actor `+0x35e`
+  - subcommand `8` explicitly marks the actor down (`+0x35e = 1`), zeroes motion state, and drives `FUN_0043b4a0`
+  - subcommand `6` is remote-only recovery/ground logic: if the actor is not already down, it either re-enters the same collapse path used by subcommand `8` when the pending flag bit is set, or else calls `FUN_0043b400` for a plain stand/resume
+  - result: non-death fall / stand sync likely needs more than one Cmd70 state transition, not just a single magic packet value
+- Fresh 2026-04-18 non-death Cmd70 sequence follow-up:
+  - local jump start (`cmd12/action 4`) sets `DAT_004f21a6 |= 3` and immediately calls `FUN_0043b3e0`, i.e. the same `anim=4` helper that remote `Cmd70/4` uses after setting the remote actor's `0x80` airborne bit
+  - local landing resolution in `FUN_00448d80` sends `Combat_SendCmd12Action_v123(6)` when the local airborne bit reaches ground contact
+  - that same landing path then branches exactly like remote `Cmd70/6`: if the deferred-collapse bit (`actor + 0xdc`, bit `8`) is clear it calls `FUN_0043b400` to stand, and if bit `8` is set it flips the actor into the same down/collapse helper path as `Cmd70/8`
+  - `Cmd70/8` itself is now clearly dual-purpose: when the actor is already airborne (`flags & 1` or `flags & 0x80`) it **does not collapse immediately** and instead only sets the deferred-collapse bit; once the actor is grounded, the same collapse path runs
+  - practical read: retail remote fall/recovery is not a single `Cmd70` event. It is a sequence where airborne state (`4`), deferred/immediate collapse (`8`), and ground resolution (`6`) can all matter depending on when the fall happens
+- Fresh 2026-04-18 local/remote symmetry point: `FUN_00449c60` is the bridge between position sync and fall state. During airborne descent it sets the same deferred-collapse bit that `Cmd70/6` and local landing logic consume, which explains why retail can postpone the visible collapse until touchdown instead of falling instantly the moment the triggering condition occurs.
+- Fresh 2026-04-18 support-gate naming follow-up: decrypting the installed `C:\MPBT\mechdata\*.MEC` set with the repo's existing XOR decoder showed that the critical-type table at `.MEC + 0xde` is effectively the identity map `0..20` across the retail roster (with only `0xffff` gaps where a chassis omits a slot), so the previously unnamed `damageState + 0x86` / `+0x8e` checks in `FUN_0042bb00(actor + 0x126)` are literally crit types `16` and `20`, not mech-specific remaps. Reading `MPBT.MSG` ids `0x1e9` and `0x1ed` then names those crits directly as **Cockpit** and **Fusion Engine**. That means the retail landing/support gate is now concretely: `cockpitHits < 1`, `fusionEngineHits < 3`, `CT internal != 0`, and `head internal != 0`. This closes the naming blocker, but it also makes the gate look like a general "still-functional/upright-capable" guard rather than a direct raw-leg-loss rule.
+- Fresh 2026-04-18 `mpbt-server` audit: the current server only emits Cmd70 from destruction flows (`8` collapse, then delayed `4` wreck), and `handleCombatActionPacket` still lets `cmd12/action 0x15` fall through the generic "no response" branch. So the live server is still missing both a non-death fall-state broadcast and the likely stand-request acknowledgement path.
+- Fresh 2026-04-19 recovery-side correction from Ghidra MCP: the client does **not** appear to send wire `cmd12/action 0x15` for F12 stand-up. `Combat_InputActionDispatch_v123` case `0x15` is the local input action code, and when the local actor is already down (`DAT_004f208e != 0`) it calls `Combat_SendCmd12Action_v123(0)`, i.e. the same wire `cmd12/action 0` byte normally used for selected-weapon fire. That makes the real server-side problem narrower and trickier: a post-fall stand request likely arrives as **`cmd12/action0 without a following cmd10 shot`**, not as a distinct `0x15` wire opcode.
+- Fresh 2026-04-19 recovery-ack correction from Ghidra MCP: `Combat_Cmd70_ActorAnimState_v123` cases `4` and `6` are effectively **remote-only** (`if (iVar8 != 0)`), so they do nothing for the local actor at slot `0`. That means the extra airborne/landing pieces in the earlier `legair` / `legfull` experiments were only meaningful for remote actors, not for the player’s own local mech. By contrast, inbound `Cmd70/0` runs for local actors too and its default helper `FUN_0043b440` explicitly clears the local down flag at actor `+0x35e`. Practical read: if the server needs to acknowledge a local stand-up request after non-death fall, the strongest current candidate is **slot-0 `Cmd70/0`**, not slot-0 `Cmd70/6`.
+- Fresh 2026-04-19 live F12 follow-up: after a `legfull` GUI run, pressing F12 once produced **no** `cmd12/action0` or `cmd10` traffic on the server. The session only continued to emit idle `cmd8` coasting frames before disconnect. Practical read: either the client never entered the local down/recover-gated state that would let F12 send wire `action0`, or one of the remaining local gates still blocked the stand request before any server round-trip happened.
+- Fresh 2026-04-19 server-side recovery probe: verifier-only `/fightlegrecover` now emits local `Cmd70 1->8->0`, and `C:\MPBT\tools-local\fight-leg-recovery-sequence-smoke.mjs` passes with `cmd70=0/1,0/8,0/0` while the prior `fight-leg-full-sequence-smoke.mjs` still passes unchanged. `handleCombatActionFrame(...)` now also treats inbound `cmd12/action0` as an ambiguous fire-or-recovery trigger and starts a short follow-up timer; if no `cmd10` arrives inside the normal fire window, the server logs and counts an `action0NoShot` event. Practical read: the next GUI run can directly test both "does slot-0 `Cmd70/0` change local posture?" and "does the retail client ever emit `cmd12/action0` without a shot after fall?".
+- Fresh 2026-04-18 contradiction check: re-reading `Combat_GetInternalStructureForSection_v123` together with its backing table at `DAT_0047af7c` confirms the retail section-id order is still `[arm, arm, side, side, CT, leg, leg, head]`, i.e. section ids `2/3` return the side-torso column and `5/6` return the leg column. That matches the current server mapping and directly weakens the earlier "server is sending leg loss under the wrong class-2 codes" hypothesis.
+- Practical takeaway for retail fall recovery: the earlier blanket "F12 -> cmd12 is weak" read was too pessimistic, but the later "just remap class-2 legs to `0x22/0x23`" theory is now **not justified**. The best current model is:
+  - local stand-up request is still very likely the **context-sensitive** fallback-`F12` / `action 0x15 -> cmd12(0)` path,
+  - server-side, that means a recovery request is more likely to appear as **`cmd12/action0` with no shot follow-up** than as a unique wire `0x15`,
+  - but its currently recovered torso-slot gate does **not** yet explain the user-observed leg-based stand lockout,
+  - the `Combat_ApplyDamageCodeValue_v123` `+0xec/+0xee` check is now resolved as a torso-slot check, not a leg-slot check,
+  - `FUN_0040df80` is now ruled out as a leg helper because it targets CT and drives hard state `3`,
+  - the true leg slots are reached through generic section/internal maps, which explains why direct fixed-global xrefs have been sparse,
+  - the named `FUN_0042bb00` gate still is **not** leg-specific, so the next best evidence target is the dedicated handling around the real leg slots `+0xf2/+0xf4` (`+0x218/+0x21a` on the actor),
+  - real GUI evidence now says the current four strongest non-death server-side `Cmd70` hypotheses all still leave the retail client visibly upright:
+    - minimum subset: **leg internal zero + actuator crits + non-death `Cmd70/8`**
+    - simple extension: **non-death `Cmd70 1->8`**
+    - airborne extension: **non-death `Cmd70 4->8->6`**
+    - mixed extension: **non-death `Cmd70 1->4->8->6`**
+  - that shifts the likely blocker away from "just add the right `Cmd70` trio" and toward either:
+    - longer / different timing around the same states, or
+    - additional recovery-side/local-state work such as `cmd12/action 0x15`, `Cmd73`, or another still-missing local posture/input transition,
+  - `mpbt-server` currently sends Cmd70 only for destruction and still treats all `cmd12/action0` frames as fire triggers,
+  - slot-0 `Cmd70/6` is not a viable local stand-up ack candidate because the client ignores that subcommand for the local actor,
+  - no live follow-up has yet shown `cmd12/action 0x15` firing from the minimal subset alone, which makes it look more like a later recovery-side piece than the first missing visible-fall trigger,
+  - and `mpbt-server` should **not** be patched to remap leg damage codes until that contradiction is resolved with stronger evidence.
+
 Additional jump-fuel findings from `FUN_0042cf60 -> FUN_0042c610`:
 
 - `DAT_004f21a2` is capped at `0x78` (`120`) rather than `100`.
@@ -2708,6 +2817,7 @@ cmd 13
   - airborne/jump path: `DAT_004f1daa / DAT_004f1dae / DAT_004f1db2`
 - **Important:** this is strong evidence that retail has a real mech-contact report / feedback path, but the exact server-side semantics of the **payload-bearing combat `cmd13` variant** are still unresolved.
 - Server follow-up on 2026-04-15: `mpbt-server` now decodes inbound combat `cmd13` as `[actorId][type2 A][type2 B][type2 C]` and logs the parsed tuple alongside current local/peer movement and recent landing state. A synthetic live probe (`actorId=1`, responses `123/456/789`) hit the new logger successfully, so future real duel captures can be checked for authentic contact-report traffic without guessing at damage semantics.
+- Repo artifact follow-up on 2026-04-18: preserved captures/logs currently show only earlier **synthetic** `cmd13` probe traffic (for example `captures\\1776280192271_e5efd00a-e1ed-407e-b4d1-f88b33af4b5a.txt`, `captures\\1776280192573_7268de66-8722-49f7-b37e-6325b1b3ae43.txt`, and the older `logs\\server.log` entries where combat `cmd13` was still unhandled). No obviously authentic live duel collision/contact `cmd13` capture is preserved yet.
 
 
 **Weapon/TIC local-selection paths — `Combat_InputActionDispatch_v123`:**
@@ -2819,6 +2929,68 @@ Practical implication:
   - extract attachment ids plus their world-space attachment coordinates via the `FUN_0043b320`-style table layout
   - classify them into torso/arm/leg/head groups per chassis
   - then map those groups to `Cmd66` class-1 / class-2 section codes
+
+**2026-04-18 deeper hit-selection pass:**
+
+- `FUN_00438e90` is the main per-frame combat target refresh:
+  - resets `DAT_004f56a4`, `DAT_004f56a6`, `DAT_004f5698`, and `DAT_004f4218`
+  - sorts visible scene objects by distance
+  - runs attachment hit-tests through `FUN_00438ad0` and `FUN_0043f210`
+  - leaves the chosen actor slot in `DAT_004f56a6` / `DAT_004f5698` and the chosen attachment id in `DAT_004f4218`
+- `FUN_00431df0` is the model-attachment candidate walker:
+  - iterates the active attachment records from `model + 0x20`
+  - skips masked-off attachments via `model + 0x54`
+  - transforms each attachment anchor from the per-attachment table at `model + 0x2c`
+  - sorts candidates by transformed distance before calling `FUN_0044ac10`
+  - passes per-attachment metadata from the table at `model + 0x30` (same attach-id search, stride `10`, dword at `+6`)
+- `FUN_0044ac10` is the actual per-attachment polygon hit-test:
+  - `FUN_0044a890` computes a 3-bit orientation bucket from the transformed aim vector
+  - that bucket indexes one of the attachment record's polygon-group lists (`record + 0x30` family)
+  - `FUN_0044ab50` / `FUN_0044aab0` run the screen/polygon overlap tests for that bucket
+  - on success, `FUN_0044ac10` writes the winning attachment id to `DAT_004f56a4` and the current polygon record id to `DAT_0047eb30`
+- The chosen attachment survives all the way to the wire:
+  - selected-weapon fire in `Combat_InputActionDispatch_v123` reads `DAT_004f4218`
+  - TIC-group fire in `Combat_FireSelectedTicGroup_v123` also reads `DAT_004f4218`
+  - both fire paths pass that id into `Combat_CalcProjectilePath_v123` and `FUN_00449480`
+  - so the outbound `targetAttach` byte is the client-selected attachment id, not a later server-side remap
+- Real asset dump from `C:\\MPBT\\3dobj.bin`, **model 13** (Jenner / JR7-D group), attach-id order:
+  - `[37, 52, 54, 55, 38, 40, 41, 31, 1, 33, 18, 19, 32, 4, 5, 36, 35, 34]`
+- The torso reference attachments in the real asset match the model-13 root split refs now used in `src/data/mech-attachments.ts`:
+  - `18 -> [0, 0, 0]`
+  - `19 -> [21, -24, -8]`
+  - `4  -> [0, 24, -1]`
+  - `5  -> [21, 24, -8]`
+- The remaining model-13 mirrored low-body clusters are:
+  - left cluster:
+    - `52 -> center [9, -23, -96], span [90, 42, 252]`
+    - `54 -> center [20, 0, -128], span [78, 50, 278]`
+    - `55 -> center [-18, -11, -21], span [196, 94, 40]`
+  - right cluster:
+    - `38 -> center [13, 20, -101], span [90, 42, 252]`
+    - `40 -> center [23, 0, -135], span [74, 50, 270]`
+    - `41 -> center [-18, 0, -14], span [196, 94, 40]`
+  - center / lower trunk cluster:
+    - `34 -> center [-29, 0, -9.5], span [146, 86, 185]`
+    - `35 -> center [0, 0.5, 0], span [88, 41, 166]`
+    - `36 -> center [0, 0, 0], span [88, 40, 166]`
+- Practical server impact:
+  - the current shared server mapping (`38/40/41 -> right-arm`, `52/54/55 -> left-arm`, `34/35 -> right-leg`, `31 -> ct-front`) is not trustworthy for model 13
+  - the live Jenner capture where a leg-aimed volley carried `targetAttach = 40` is at least consistent with a **low lower-body** attachment, not an obviously arm-only attachment
+  - model-13 accuracy work should therefore start with an explicit per-model attachment table, not more shared-id guesses
+  - server follow-up on 2026-04-18 landed the next explicit model-13 override slice in `src/data/mech-attachments.ts`:
+    - `38 -> right-leg`
+    - `40 -> right-leg`
+    - `52 -> left-leg`
+    - `54 -> left-leg`
+    - `41/55` remain on their older arm-side mappings until more live shot correlation is gathered for those shallower mirrored cluster members
+  - `C:\MPBT\tools-local\jr7-attachment-probe-smoke.mjs` now drives an explicit `JR7-D` vs `JR7-D` duel probe with forced `targetAttach` shots and live-proves the current rebuilt-server mapping:
+    - `38 -> right-leg`
+    - `40 -> right-leg`
+    - `41 -> right-arm`
+    - `52 -> left-leg`
+    - `54 -> left-leg`
+    - `55 -> left-arm`
+  - this probe is useful for validating the server resolver path and future remap changes, but it does **not** replace fresh retail-client capture for deciding whether real leg-aims ever select `41/55`
 
 **Channel / mode command — `FUN_0043d920()`:**
 ```
@@ -3324,6 +3496,15 @@ FUN_00449220             // per-actor movement tick
 - accumulates the result into the local movement delta fields
 - behaves like a short bump / rebound / slide response rather than a damage routine
 
+2026-04-18 follow-up on the same branch:
+
+- `FUN_00448d80` calls `FUN_00448b50` **before** the rest of its terrain / landing resolution, and when that contact helper returns non-zero the function skips the ordinary ground-contact branch for that tick.
+- `FUN_00448b50` only emits the packet when `param_1 == 0`, i.e. the local actor path; remote actors do not independently send this report.
+- `FUN_0040ea60` chooses between two response-vector banks based on the local airborne flag:
+  - grounded: `DAT_004f1d9e / DAT_004f1da2 / DAT_004f1da6`
+  - airborne/jump: `DAT_004f1daa / DAT_004f1dae / DAT_004f1db2`
+- that makes the combat `cmd13` payload look more like a compact **contact response / rebound vector report** than an inline damage event.
+
 Follow-up airborne-state check:
 
 - `FUN_00449c60` (called from `FUN_00448d80` and `Combat_Cmd70_ActorAnimState_v123` subcommand `6`) only:
@@ -3331,7 +3512,11 @@ Follow-up airborne-state check:
   - integrates a vertical response term into `*(param_1 + 0x82)`,
   - sets bit `0x08` in `*(param_1 + 0xdc)`,
   - and returns.
-- `Combat_Cmd70_ActorAnimState_v123` subcommands `4`, `6`, and `8` manipulate airborne / fall / landing animation state and call sound/animation helpers such as `FUN_0043b3e0`, `FUN_0043b400`, `FUN_0043b4a0`, and `FUN_00419100`.
+- `Combat_Cmd70_ActorAnimState_v123` subcommands now read more concretely:
+  - `0` → generic stand / resume helper family (`FUN_0043b440`, with state-specific wrappers)
+  - `1` → explicit fall animation helper (`FUN_0043b470`)
+  - `4`, `6`, `8` → airborne / collapse / landing-style transitions that call helpers such as `FUN_0043b3e0`, `FUN_0043b400`, `FUN_0043b4a0`, and `FUN_00419100`
+- Current implementation impact: the client still appears to rely on server `Cmd70` for non-death falls. Our server already tracks LL/RL internal depletion via `Cmd66`/`Cmd67` state, but live play keeps leg-destroyed mechs upright because current server code only emits `Cmd70` on death/collapse and `isActorDestroyed(...)` only treats center-torso or head loss as fatal.
 - This branch still does **not** enter `Combat_ApplyDamageCodeValue_v123`; so even the jump/landing-specific animation path currently looks like state sync + impulse + audio, not client-local DFA/collision damage.
 
 **Most important negative result:** this ordinary collision/contact branch still does **not** call the real damage applicators:
@@ -3511,11 +3696,22 @@ The shared helper first checks whether the current projectile/effect id in `DAT_
 |-------|--------------------|--------------|
 | `0` | `0x00..0x14`, plus `0x28 + weaponCount .. 0x27 + weaponCount + crit_state_extra_count` | Critical/system/mech state update through `Combat_UpdateCriticalDamageState_v123` (`0x0042bd90`). The early range indexes the `.MEC` critical-slot table at `0xde + index*2`; the post-weapon range is bounded by the signed field at `.MEC` offset `0x3c`. |
 | `1` | `0x15..0x1f` | `.MEC` offset-backed section state under the actor struct near offset `0x28`. Indexes map to `.MEC` offsets `0x1a..0x2e`; the first ten match the documented armor fields, while index 10 uses the v1.23 speed parameter at `0x2e`, so it should not be called head armor. The client keeps the lower value when a new value is smaller. |
-| `2` | `0x20..0x27` | Internal-structure state under the actor struct near offset `0xe8`; indexes 0/1 use the arm internal table value, 2/3 legs, 4 center torso, 5/6 side torso, and 7 hardcoded `9`. It can trigger local critical/death flags and visual hit feedback. |
+| `2` | `0x20..0x27` | Internal-structure state under the actor struct near offset `0xe8`; indexes are written in direct section-id order `[LA, RA, LT, RT, CT, LL, RL, Head]`. It can trigger local critical/death flags and visual hit feedback, but the recovered explicit post-apply zero check is `+0xec/+0xee` = **LT/RT torso slots**, not the real leg slots at `+0xf2/+0xf4`. |
 | `3` | `0x28..0x28 + weaponCount - 1` | Weapon damage/state update through `Combat_UpdateWeaponDamageState_v123` (`0x0042bd10`) and local weapon/TIC HUD refresh. v1.23 weapon ids start at `.MEC` offset `0x3e`, not `0x3c`. |
 | `4` | `0x28 + weaponCount + crit_state_extra_count .. total-1` | Ammo-bin update through `Combat_UpdateAmmoBinState_v123` (`0x0042c020`); local refresh also updates weapons using the same ammo type. The total upper bound is `weaponCount + crit_state_extra_count + 0x28 + ammo_bin_count`. |
 
 The exact labels for the early code ranges still need correlation against `.MEC` fields and live hit capture, but cmd 66/67 are now the first strong server→client damage-result packet path. `Cmd68` makes clients see the shot/effect, `Cmd66`/`Cmd67` carry the damage code/value pairs, and `Cmd70` covers actor animation/status transitions such as stand/fall/jump/destruction-style state changes without itself carrying damage numbers.
+
+2026-04-18 fall-specific follow-up on class `2` and the true leg path:
+
+- `Combat_ApplyDamageCodeValue_v123` writes class-2 values to `actor + 0xe8 + index*2`.
+- After a **local** update, it explicitly checks `*(short *)(actor + 0xec) == 0 || *(short *)(actor + 0xee) == 0`.
+- Those offsets are now reconciled as **LT/RT torso slots**, not legs.
+- The resulting side effects are `DAT_004f2094 = 1`, `FUN_0042d150(localActor, 0)`, and `FUN_004262d0(0)`.
+- `FUN_0042d150` recalculates runtime rate/movement fields from the mech's base speed and explicitly keys one branch off torso internals `actor + 0x212/+0x214`, so this path currently reads as movement-limit/rate recomputation rather than a proven fall helper.
+- The strongest recovered **leg-specific** client path is instead critical types `8..0xf` in `Combat_UpdateCriticalDamageState_v123`; those are the leg-actuator crits, and they all funnel into the same `FUN_0042d150` movement-limit helper.
+- Retail visible fall/recovery state still sits on the separate `Cmd70` sequence: `4` airborne, `8` immediate/deferred collapse, `6` landing resolution.
+- Server implication: `mpbt-server` now mirrors the minimum retail-fall experiment by sending class-2 internal updates, head criticals, conservative leg-actuator critical updates on first leg destruction, and a non-death `Cmd70/8` collapse transition. It still does **not** emit `Cmd73` rate-field packets or handle stand-up / `cmd12 action 0x15`, so recovery fidelity remains the next open slice.
 
 ---
 

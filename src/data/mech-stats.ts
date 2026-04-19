@@ -22,6 +22,7 @@
  */
 
 import type { MechEntry } from '../protocol/game.js';
+import { getWeaponNameByTypeId } from './weapons.js';
 
 export type WeightClass   = 'light' | 'medium' | 'heavy' | 'assault';
 export type ArmorClass    = 'light' | 'medium' | 'heavy' | 'assault';
@@ -576,11 +577,21 @@ const ENTRIES: MechStats[] = [
 export const MECH_STATS: ReadonlyMap<string, MechStats> =
   new Map(ENTRIES.map(e => [e.designation, e]));
 
-type RuntimeMechSummary = Pick<MechEntry, 'tonnage' | 'maxSpeedMag' | 'jumpJetCount'>;
+type RuntimeMechSummary = Pick<MechEntry, 'tonnage' | 'maxSpeedMag' | 'jumpJetCount' | 'weaponTypeIds'>;
 
 function runtimeMaxSpeedKph(mech: RuntimeMechSummary | undefined): number | null {
   if (!mech || mech.maxSpeedMag <= 0) return null;
   return Math.round(mech.maxSpeedMag * 16.2 / 450);
+}
+
+function runtimeArmamentText(mech: RuntimeMechSummary | undefined): string {
+  if (!mech || !Array.isArray(mech.weaponTypeIds) || mech.weaponTypeIds.length === 0) {
+    return '';
+  }
+  const names = mech.weaponTypeIds
+    .map(typeId => getWeaponNameByTypeId(typeId))
+    .filter((name): name is string => typeof name === 'string' && name.length > 0);
+  return names.join(' ');
 }
 
 /**
@@ -615,9 +626,9 @@ export function buildMechExamineText(typeString: string, runtimeMech?: RuntimeMe
     specParts.push(`Jump Jets:${runtimeMech?.jumpJetCount}`);
   }
   const specs = specParts.join('  ');
-  const arms  = Array.isArray(stats?.armament) && stats.armament.length > 0
+  const arms = Array.isArray(stats?.armament) && stats.armament.length > 0
     ? sanitize(stats.armament.join(' '))
-    : '';
+    : sanitize(runtimeArmamentText(runtimeMech));
 
   const lines = [title];
   if (specs) lines.push(specs);

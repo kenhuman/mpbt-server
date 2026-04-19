@@ -363,6 +363,12 @@ export interface MechEntry {
    * [LA, RA, LT, RT, CT, LL, RL, Head].
    */
   weaponMountInternalIndices: number[];
+  /** Per-weapon type IDs from decrypted .MEC offsets 0x3e.., one uint16 per weapon slot. */
+  weaponTypeIds: number[];
+  /** Initial ammo-bin quantities from the mech's .MEC ammo table. */
+  ammoBinCapacities: number[];
+  /** Ammo-bin weapon type IDs from the mech's .MEC ammo table. */
+  ammoBinTypeIds: number[];
 }
 
 /**
