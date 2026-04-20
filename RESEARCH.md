@@ -3757,6 +3757,46 @@ Confirmed call sites:
         - after detaching and letting the client run for about 25 seconds, the client process was gone and the server logged `read ECONNRESET` at `20:50:00.937Z`; no late quiet snapshot was possible
         - practical read: suppressing the local landing `Cmd65` echo alone does **not** immediately resolve the bridge/promotion lag. It may even make this verifier less stable, but the disconnect needs a repeat before treating it as meaningful.
         - next narrowed question: measure or alter the client-side controller update cadence around `FUN_00432010 -> FUN_00432400`, or test a server-side cadence/timer condition that changes tick deltas, rather than focusing on local landing `Cmd65` echo suppression alone.
+      - Fresh 2026-04-20 timed cadence series under normal `legdefer`:
+        - capture file: `captures\2026-04-20-c4330864-controller-cadence-series.json`
+        - setup: restarted with `MPBT_FORCE_VERIFICATION_MODE=legdefer`, restaged Moose as `WSP-1D` in Ishiyama ready room 1, launched real GUI, clicked Fight, and held HOME via `keybd_event`
+        - server log correlation for GUI session `c4330864`:
+          - `20:57:15.493Z` inbound `cmd12/action4`
+          - `20:57:18.311Z` verifier leg-loss packet: `updates=0x17=0,0x25=0,0x8=2,0x9=2,0xa=2,0xb=2,0x29=1,0x2a=1`
+          - `20:57:18.313Z` guarded local `Cmd70/8` while jump/action4 active (`altitude=24254`, `fuel=18`)
+          - `20:57:36.363Z` inbound `cmd12/action6` landing
+        - snapshot 1 after landing:
+          - local actor `+0xdc = 0x0011`, `+0x35e = 1`, `+0x476 = 0`
+          - controller `lastTick=0x01c115a4`, progress `0x28/0xa0`, current state `0x16`, queued state `8`, callback `0x0043B3D0`
+        - snapshot 2 after a controlled 10-second run interval:
+          - local actor still `+0xdc = 0x0011`, `+0x35e = 1`, `+0x476 = 0`
+          - controller `lastTick=0x01c12969`, progress `0x00/0xa0`, current state `8`, queued `null`, callback still `0x0043B3D0`
+          - read: the bridge promoted during the interval, and state 8 restarted at frame/progress zero
+        - snapshot 3 after another controlled 10-second run interval:
+          - local actor `+0xdc = 0x0001`, `+0x35e = 1`, `+0x476 = 0`
+          - controller `lastTick=0x01c139e8`, progress `0xa0/0xa0`, current state `8`, queued `null`, callback pointer cleared
+          - read: state 8 completed and `Combat_AnimCallback_ClearActorRecoveryBlock_v123` (`0x0043B3D0`) cleared `+0xdc bit 0x10`
+        - practical read: the GUI fall chain is slow but finite. The local down/recovery block eventually clears without an additional server packet, but it takes on the order of tens of seconds in this windowed/runtime setup rather than the ~2.5s implied by ideal `0x12c0` tick math. The next server-side question is therefore not "does the callback ever fire?", but whether retail expected this slower visible fall duration, and whether recovery UX should wait for the client to emit F12/action0 after callback clear or receive a server-side recovery ack path after that point.
+      - Fresh 2026-04-20 F12 recovery after callback-clear:
+        - capture file: `captures\2026-04-20-c4330864-recovery-action0-series.json`
+        - after snapshot 3 in the cadence series showed state 8 complete, callback cleared, and local actor `+0xdc = 0x0001`, `+0x35e = 1`, F12 was held using both `VK_F12` and scan-code `0x58`
+        - server log:
+          - repeated inbound `cmd12/action0` began at `21:14:07.371Z`
+          - no `cmd10` fire follow-up arrived in the fire-correlation window
+          - at `21:14:10.899Z` the server logged `cmd12 action=0 had no cmd10 follow-up within 1000ms`
+          - at `21:14:10.900Z` the server sent local `Cmd70/0` recovery ack
+        - immediate post-ack Ghidra snapshot:
+          - local actor `+0xdc = 0x0001`, `+0x35e = 1`, `+0x476 = 0`
+          - controller current state `0x16`, queued state `0x0c`, progress `0x9f/0xa0`, callback `0x0043B440`
+          - read: the ack was accepted, but it installed a slow stand-up transition chain; the down latch does not clear immediately on packet receipt
+        - post-ack +12s snapshot:
+          - local actor still `+0xdc = 0x0001`, `+0x35e = 1`, `+0x476 = 0`
+          - controller promoted to current state `0x0c`, queued `null`, progress `0`, callback still `0x0043B440`
+        - post-ack +37s snapshot:
+          - local actor `+0xdc = 0x0001`, `+0x35e = 0`, `+0x476 = 0`
+          - controller callback cleared
+          - read: local `Cmd70/0` is the correct recovery ack, but the retail client clears the down latch only after another slow animation-controller chain completes
+        - practical read: the server-side recovery path is now proven end-to-end for this verifier: fall state -> callback clear -> F12 emits `cmd12/action0` -> no-shot action0 classification -> local `Cmd70/0` ack -> client eventually clears `+0x35e`. The unresolved fidelity question is duration/cadence, not missing recovery semantics.
   - that shifts the likely blocker away from "just add the right `Cmd70` trio" and toward either:
     - longer / different timing around the same states, or
     - additional recovery-side/local-state work such as `cmd12/action 0x15`, `Cmd73`, or another still-missing local posture/input transition,
