@@ -3797,6 +3797,15 @@ Confirmed call sites:
           - controller callback cleared
           - read: local `Cmd70/0` is the correct recovery ack, but the retail client clears the down latch only after another slow animation-controller chain completes
         - practical read: the server-side recovery path is now proven end-to-end for this verifier: fall state -> callback clear -> F12 emits `cmd12/action0` -> no-shot action0 classification -> local `Cmd70/0` ack -> client eventually clears `+0x35e`. The unresolved fidelity question is duration/cadence, not missing recovery semantics.
+      - Fresh 2026-04-20 timing/duration correction target:
+        - user confirmation from official late-1990s play with this same retail client: both visible fall and recovery each took only a few seconds, not the tens-of-seconds chains seen in the current windowed verifier environment
+        - that changes the working assumption: do **not** treat the slow chain as an inherent retail-client duration and do **not** patch `MPBTWIN.EXE` as the product fix; the server likely still misses a cadence/rate/timing input that the official server supplied or preserved
+        - Ghidra read of `FUN_00432400` still explains the symptom: the animation controller stores `lastTick`, computes `delta = controllerRate * (now - oldLastTick) / 6000`, truncates fractional progress, and then advances `currentProgress`; with controller rate `0x12c0`, `duration=0xa0`, and small tick deltas, progress can advance far more slowly than the ideal math suggests
+        - current candidate server-side levers, in order:
+          - live-measure the actual call cadence into `FUN_00432010 -> FUN_00432400` for the local controller during fall and stand-up; prove whether the slow chain is zero-delta starvation, sparse calls, or a state/rate field difference
+          - re-audit and opt-in test `Cmd73` around fall/recovery because it is the only currently decoded actor "rate/bias" packet, even though earlier static xrefs did not prove direct reads from actor `+0x2fa/+0x2fe`
+          - re-check `Cmd72` combat-bootstrap timing constants only after the controller cadence measurement, because those constants are more strongly tied to movement/physics than animation state so far
+        - implementation guardrail: do not "correct" duration by skipping animations with extra `Cmd70` packets or by binary-patching the client; the faithful server-side fix should identify the official packet/timing condition that makes the unmodified client advance the same fall/stand chains at retail speed
   - that shifts the likely blocker away from "just add the right `Cmd70` trio" and toward either:
     - longer / different timing around the same states, or
     - additional recovery-side/local-state work such as `cmd12/action 0x15`, `Cmd73`, or another still-missing local posture/input transition,
