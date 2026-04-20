@@ -3699,7 +3699,64 @@ Confirmed call sites:
           - `19:11:13.849Z` guarded local fall probe: `leg-loss deferred-collapse probe: sending local Cmd70/8 while jump/action4 is active altitude=12390 fuel=8`
           - `19:11:13.855Z` inbound `cmd12/action6` landing completed the pending local deferred collapse
         - practical read: the server-side guard and state-2 damage sequence are correct when a client/protocol participant proves action-4 first; the remaining unresolved piece is specifically getting the retail GUI client to generate that real `cmd12/action4` before the verifier damage tick, then taking a Ghidra controller snapshot in that GUI run
-      - next narrowed question: obtain a reliable real-client jump start before the verifier damage tick, either by manual HOME input during the Fight-button countdown or a protocol-assisted GUI harness that proves `cmd12/action4` in `server.log`, then re-run the controller snapshot only after the log confirms local jump ownership is active
+      - real GUI action-4 blocker resolved in the next pass:
+        - Moose was staged into Ishiyama ready room 1 with jump-capable `WSP-1D`
+        - `MPBTWIN_windowed.exe` was launched through a fresh `play.pcgi`, the normal **Fight** button was clicked, and Windows `keybd_event` with the extended HOME scan code was held through combat entry
+        - server log correlation for the still-connected GUI session `ea8392d0`:
+          - `20:41:59.140Z` inbound `cmd12/action4`: `cmd-12 jump action=4 altitude=0 fuel=120 apex=48000 mirrorDurationMs=3216`
+          - `20:42:01.977Z` verifier leg-loss packet: `updates=0x17=0,0x25=0,0x8=2,0x9=2,0xa=2,0xb=2,0x29=1,0x2a=1`
+          - `20:42:01.979Z` guarded local fall probe: `leg-loss deferred-collapse probe: sending local Cmd70/8 while jump/action4 is active altitude=24713 fuel=18`
+        - Ghidra debugger snapshot file: `captures\2026-04-20-ea8392d0-gui-action4-controller-snapshot.json`
+        - live memory snapshot:
+          - local actor `+0xdc = 0x0011`
+          - local actor `+0x35e = 0x0001`
+          - local actor `+0x476 = 0x0000`
+          - local animation-controller pointer at `0x004F1F52` = `0x03A18648`
+          - controller `+0x00 lastTick = 0x01BFBCD5`
+          - controller `+0x04 previousProgress = 0x2e`
+          - controller `+0x08 currentProgress = 0x2e`
+          - controller `+0x0c playbackRate = 0x12c0`
+          - controller `+0x10 flags = 0x07`
+          - controller `+0x18 currentStatePtr = 0x009E8B00`
+          - controller `+0x1c queuedStatePtr = 0x009E5276`
+          - controller `+0x24 callbackPtr = 0x0043B3D0`
+          - controller `+0x28 callbackArg = 0x004F1D30`
+          - current state deref: id `0x16`, duration `0x00a0`
+          - queued state deref: id `0x08`, duration `0x00a0`
+        - practical read: the real GUI run now proves the same root condition as the earlier protocol-assisted snapshots. The delayed visible fall is not blocked before local down/recoverable state; the client is downed and recovery-blocked, but the animation controller is still in the synthetic `current=0x16, queued=8` bridge when snapped.
+        - late follow-up snapshot file: `captures\2026-04-20-ea8392d0-gui-action4-controller-late.json`
+          - local actor remained `+0xdc = 0x0011`, `+0x35e = 0x0001`, `+0x476 = 0x0000`
+          - controller stayed at `0x03A18648` with playback rate `0x12c0`, flags `0x07`, callback `0x0043B3D0`, callback arg `0x004F1D30`
+          - controller had promoted to `currentStatePtr = 0x009E5276`, `queuedStatePtr = 0`
+          - current state deref: id `0x08`, duration `0x00a0`
+          - progress was still only `0x05/0x00a0`
+        - practical read: the delayed visible-fall path has two phases. The early delayed window is the `0x16 -> 8` bridge, and the later delayed window is state `8` itself advancing extremely slowly. This keeps the strongest blocker on animation-controller cadence/progress starvation rather than missing downed-state gates.
+        - next narrowed question: what normally lets state `8` advance at retail speed after deferred-collapse touchdown? The strongest remaining server-side lever is not another `Cmd70` variant, but whatever server timing/echo/input condition causes the local controller update cadence to call the state-8 progress path with large enough tick deltas.
+      - Fresh 2026-04-20 `legdeferquiet` GUI comparison:
+        - restarted with `MPBT_FORCE_VERIFICATION_MODE=legdeferquiet`, restaged Moose with `WSP-1D`, and repeated the same real GUI Fight+HOME `keybd_event` path
+        - server log correlation for GUI session `18f53e9b`:
+          - `20:48:48.813Z` inbound `cmd12/action4`
+          - `20:48:51.648Z` verifier leg-loss packet: `updates=0x17=0,0x25=0,0x8=2,0x9=2,0xa=2,0xb=2,0x29=1,0x2a=1`
+          - `20:48:51.650Z` guarded local `Cmd70/8` while jump/action4 active (`altitude=24212`, `fuel=18`)
+          - `20:49:09.681Z` inbound `cmd12/action6` completed pending local deferred collapse with `quietCmd65=yes`
+          - `20:49:09.682Z` server suppressed the local `Cmd65` landing echo as intended
+        - Ghidra snapshot file: `captures\2026-04-20-18f53e9b-legdeferquiet-controller-snapshot.json`
+        - quiet snapshot after suppressed landing:
+          - local actor `+0xdc = 0x0011`
+          - local actor `+0x35e = 0x0001`
+          - local actor `+0x476 = 0x0000`
+          - local animation-controller pointer at `0x004F1F52` = `0x03A78648`
+          - controller `+0x04/+0x08 progress = 0x29/0x29`
+          - controller `+0x0c playbackRate = 0x12c0`
+          - controller `+0x10 flags = 0x07`
+          - controller `+0x18 currentStatePtr = 0x054B8B00`
+          - controller `+0x1c queuedStatePtr = 0x054B5276`
+          - controller `+0x24 callbackPtr = 0x0043B3D0`
+          - current state deref: id `0x16`, duration `0x00a0`
+          - queued state deref: id `0x08`, duration `0x00a0`
+        - after detaching and letting the client run for about 25 seconds, the client process was gone and the server logged `read ECONNRESET` at `20:50:00.937Z`; no late quiet snapshot was possible
+        - practical read: suppressing the local landing `Cmd65` echo alone does **not** immediately resolve the bridge/promotion lag. It may even make this verifier less stable, but the disconnect needs a repeat before treating it as meaningful.
+        - next narrowed question: measure or alter the client-side controller update cadence around `FUN_00432010 -> FUN_00432400`, or test a server-side cadence/timer condition that changes tick deltas, rather than focusing on local landing `Cmd65` echo suppression alone.
   - that shifts the likely blocker away from "just add the right `Cmd70` trio" and toward either:
     - longer / different timing around the same states, or
     - additional recovery-side/local-state work such as `cmd12/action 0x15`, `Cmd73`, or another still-missing local posture/input transition,
