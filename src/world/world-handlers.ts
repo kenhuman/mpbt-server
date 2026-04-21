@@ -84,8 +84,11 @@ import { buildMechExamineText, MECH_STATS } from '../data/mech-stats.js';
 import { mechInternalStateBytes } from '../data/mechs.js';
 import {
   getWeaponNameByTypeId,
+  getWeaponLongRangeMeters,
+  getWeaponRangeBandForDistance,
   getWeaponSpecByName,
   getWeaponSpecByTypeId,
+  type WeaponSpec as WeaponDataSpec,
 } from '../data/weapons.js';
 import {
   type CombatAttachmentImpactContext,
@@ -2602,7 +2605,7 @@ function getShotMaxRangeGateForMechSlot(
   targetY: number | undefined,
 ): { allowed: boolean; distanceMeters?: number; maxRangeMeters?: number; weaponName?: string } {
   const weaponName = getWeaponNameForMechSlot(mechId, weaponSlot);
-  const maxRangeMeters = getWeaponSpecForMechSlot(mechId, weaponSlot)?.maxRangeMeters;
+  const maxRangeMeters = getWeaponLongRangeMeters(getWeaponSpecForMechSlot(mechId, weaponSlot));
   if (
     maxRangeMeters === undefined
     || sourceX === undefined
@@ -2710,6 +2713,7 @@ interface CombatToHitRollInput {
   targetMoveVectorX?: number;
   targetMoveVectorY?: number;
   distanceMeters: number;
+  weaponSpec?: WeaponDataSpec;
   maxRangeMeters?: number;
 }
 
@@ -2738,21 +2742,56 @@ function getCrossingFactorForVector(
   return Math.abs((shotUnitX * moveUnitY) - (shotUnitY * moveUnitX));
 }
 
-function resolveCombatToHitRoll(input: CombatToHitRollInput): CombatToHitRoll {
-  const shortRangeCap = Math.min(BOT_AI_MIN_PREFERRED_RANGE_METERS, input.maxRangeMeters ?? BOT_AI_MIN_PREFERRED_RANGE_METERS);
-  const mediumRangeCap = Math.min(270, input.maxRangeMeters ?? 270);
+function getCombatRangeCaps(
+  weaponSpec: WeaponDataSpec | undefined,
+  fallbackMaxRangeMeters: number | undefined,
+): { shortRangeCap: number; mediumRangeCap: number; longRangeCap?: number } {
+  const longRangeCap = getWeaponLongRangeMeters(weaponSpec) ?? fallbackMaxRangeMeters;
+  const shortRangeCap = Math.min(
+    weaponSpec?.shortRangeMeters ?? BOT_AI_MIN_PREFERRED_RANGE_METERS,
+    longRangeCap ?? BOT_AI_MIN_PREFERRED_RANGE_METERS,
+  );
+  const mediumRangeCap = Math.max(
+    shortRangeCap,
+    Math.min(
+      weaponSpec?.mediumRangeMeters ?? 270,
+      longRangeCap ?? (weaponSpec?.mediumRangeMeters ?? 270),
+    ),
+  );
+  return { shortRangeCap, mediumRangeCap, longRangeCap };
+}
 
-  let rangeBand: CombatRangeBand = 'long';
+function getCombatRangeBandForDistance(
+  weaponSpec: WeaponDataSpec | undefined,
+  distanceMeters: number,
+  fallbackMaxRangeMeters: number | undefined,
+): CombatRangeBand {
+  const explicitRangeBand = getWeaponRangeBandForDistance(weaponSpec, distanceMeters);
+  if (explicitRangeBand === 'short' || explicitRangeBand === 'medium' || explicitRangeBand === 'long') {
+    return explicitRangeBand;
+  }
+
+  const { shortRangeCap, mediumRangeCap } = getCombatRangeCaps(weaponSpec, fallbackMaxRangeMeters);
+  if (distanceMeters <= shortRangeCap) {
+    return 'short';
+  }
+  if (distanceMeters <= mediumRangeCap) {
+    return 'medium';
+  }
+  return 'long';
+}
+
+function resolveCombatToHitRoll(input: CombatToHitRollInput): CombatToHitRoll {
+  const { shortRangeCap, mediumRangeCap, longRangeCap } = getCombatRangeCaps(input.weaponSpec, input.maxRangeMeters);
+  const rangeBand = getCombatRangeBandForDistance(input.weaponSpec, input.distanceMeters, input.maxRangeMeters);
   let rangeModifier = 0;
-  if (input.distanceMeters <= shortRangeCap) {
-    rangeBand = 'short';
+  if (rangeBand === 'short') {
     rangeModifier = BOT_TO_HIT_SHORT_RANGE_BONUS;
-  } else if (input.distanceMeters <= mediumRangeCap) {
-    rangeBand = 'medium';
+  } else if (rangeBand === 'medium') {
     rangeModifier = BOT_TO_HIT_MEDIUM_RANGE_BONUS;
-  } else if (input.maxRangeMeters !== undefined && input.maxRangeMeters > mediumRangeCap) {
+  } else if (longRangeCap !== undefined && longRangeCap > mediumRangeCap) {
     const longRangeProgress = clampNumber(
-      (input.distanceMeters - mediumRangeCap) / (input.maxRangeMeters - mediumRangeCap),
+      (input.distanceMeters - mediumRangeCap) / (longRangeCap - mediumRangeCap),
       0,
       1,
     );
@@ -2868,6 +2907,7 @@ interface BotVolleyCandidateShot {
   damage: number;
   heat: number;
   weaponName?: string;
+  weaponSpec?: WeaponDataSpec;
   cooldownMs?: number;
   maxRangeMeters?: number;
   rangeBand: CombatRangeBand;
@@ -2880,16 +2920,6 @@ interface BotTicPreset {
   totalHeat: number;
   totalDamage: number;
   overheatRisk: number;
-}
-
-function getRangeBandForMaxRange(maxRangeMeters: number | undefined): CombatRangeBand {
-  if ((maxRangeMeters ?? 0) <= BOT_AI_MIN_PREFERRED_RANGE_METERS) {
-    return 'short';
-  }
-  if ((maxRangeMeters ?? 0) <= 270) {
-    return 'medium';
-  }
-  return 'long';
 }
 
 function getBotHeatSinkCount(session: ClientSession): number {
@@ -3512,7 +3542,7 @@ function getWeaponRangeProfileForMech(
   for (let weaponSlot = 0; weaponSlot < mechEntry.weaponTypeIds.length; weaponSlot += 1) {
     const mountGate = getWeaponMountGateForMech(mechId, internalValues, weaponSlot);
     if (!mountGate.allowed) continue;
-    const maxRangeMeters = getWeaponSpecForMechSlot(mechId, weaponSlot)?.maxRangeMeters ?? 0;
+    const maxRangeMeters = getWeaponLongRangeMeters(getWeaponSpecForMechSlot(mechId, weaponSlot)) ?? 0;
     if (maxRangeMeters <= 0) continue;
     hasUsableWeapon = true;
     shortestRangeMeters = Math.min(shortestRangeMeters, maxRangeMeters);
@@ -3594,7 +3624,7 @@ function chooseBotAttackSection(
   const botMechId = getBotMechId(session);
   const weaponSpec = getWeaponSpecForMechSlot(botMechId, weaponSlot);
   const weaponDamage = weaponSpec?.damage ?? BOT_FALLBACK_WEAPON_DAMAGE;
-  const weaponRangeMeters = weaponSpec?.maxRangeMeters ?? getBotPreferredRangeMeters(session);
+  const weaponRangeMeters = getWeaponLongRangeMeters(weaponSpec) ?? getBotPreferredRangeMeters(session);
   const botBehindOnDurability = (session.botHealth ?? BOT_INITIAL_HEALTH) < (session.playerHealth ?? BOT_INITIAL_HEALTH);
 
   const headRemaining = getSectionRemainingDurability(
@@ -4099,9 +4129,10 @@ function stepBotWeaponFire(
       damage: weaponSpec?.damage ?? BOT_FALLBACK_WEAPON_DAMAGE,
       heat: weaponSpec?.heat ?? 0,
       weaponName,
+      weaponSpec,
       cooldownMs: cooldownGate.cooldownMs,
       maxRangeMeters: rangeGate.maxRangeMeters,
-      rangeBand: getRangeBandForMaxRange(rangeGate.maxRangeMeters),
+      rangeBand: getCombatRangeBandForDistance(weaponSpec, distanceMeters, rangeGate.maxRangeMeters),
       efficiency: (weaponSpec?.damage ?? BOT_FALLBACK_WEAPON_DAMAGE) / Math.max(1, weaponSpec?.heat ?? 1),
     });
   }
@@ -4156,6 +4187,7 @@ function stepBotWeaponFire(
       targetMaxSpeedMag: session.combatMaxSpeedMag,
       targetAirborne: (session.combatJumpAltitude ?? 0) > 0,
       distanceMeters,
+      weaponSpec: shot.weaponSpec,
       maxRangeMeters: shot.maxRangeMeters,
     });
     if (!hitRoll.hit) {
@@ -8884,6 +8916,7 @@ export function handleCombatWeaponFireFrame(
 
   for (const shot of fireableShots) {
     const { damage: shotDamage, weaponName } = getShotDamage(session, shot.weaponSlot);
+    const weaponSpec = getWeaponSpecForSlot(session, shot.weaponSlot);
     const rangeGate = getShotMaxRangeGate(session, shot.weaponSlot, botX, botY);
     send(
       session.socket,
@@ -8926,6 +8959,7 @@ export function handleCombatWeaponFireFrame(
       targetMoveVectorX: session.combatBotMoveVectorX,
       targetMoveVectorY: session.combatBotMoveVectorY,
       distanceMeters: rangeGate.distanceMeters ?? Math.hypot((session.combatX ?? 0) - botX, (session.combatY ?? 0) - botY) / COMBAT_WORLD_UNITS_PER_METER,
+      weaponSpec,
       maxRangeMeters: rangeGate.maxRangeMeters,
     });
     if (!hitRoll.hit) {
