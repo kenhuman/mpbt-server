@@ -5631,6 +5631,27 @@ the stopped reset path for `clientSpeed == 0`. The earlier Cmd9-only
 `combatIntentStop` workaround was also removed because TAP mode never enters the
 Cmd9 path.
 
+On 2026-04-21, `mpbt-server` also adopted a bounded server-side reverse-speed
+policy for live combat movement. The new `tools\forward-range-physics.ts` probe
+showed `BJ-1` vs `BJ-1` from `1000m` produces `0 m/s` closure if full reverse is
+treated as symmetric with run speed, but still closes at `6 m/s` when reverse is
+walk-capped. Current combat handling therefore clamps over-cap reverse
+`cmd8/cmd9` position drift and echoed reverse `speedMag` to `walkSpeedMag` while
+leaving airborne movement alone. This is a current server fidelity policy for
+range pressure, not new retail RE proving a separate client-side reverse
+formula.
+
+Subsequent 2026-04-21 combat-bot tuning keeps the server bot inside that same
+movement envelope rather than letting the AI exploit looser prototype rules.
+Current bot retreat pacing also uses walk-capped reverse speed, its reverse
+throttle/leg-velocity echo is scaled from that capped retreat speed, and the
+bot's range/jump planning now scores only the **currently usable** loadout
+(mounted weapon still intact, ammo still available) instead of stale mounted
+range alone. Bot TIC-style volley choice likewise now weighs expected hit chance
+and expected damage from the current movement state. These remain server
+fidelity policies, not new retail RE proving the original client performed the
+same planning internally.
+
 ### §24.3 — Physics Equilibrium and the `globalA` Constant (DAT_004f56b4)
 
 **RE source:** Static analysis of `MPBTWIN.EXE` v1.23.

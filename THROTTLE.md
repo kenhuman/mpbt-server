@@ -240,6 +240,12 @@ Live validation on 2026-04-11 confirmed:
 The remaining Cmd8 `clientSpeed === 0` reset path stays in place so the next throttle
 input after a full stop still starts from a clean state.
 
+On 2026-04-21, `mpbt-server` added one narrow combat-authoritative exception for
+range pressure: if reverse `cmd8/cmd9` movement exceeds `walkSpeedMag`, the
+server clamps the accepted x/y drift and echoed reverse `speedMag` back to walk
+speed. Ordinary moving Cmd8 coasting still stays on the no-echo rule unless an
+over-cap reverse correction is required.
+
 ---
 
 ## 8. What Has Already Been Tried

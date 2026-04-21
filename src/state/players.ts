@@ -274,6 +274,12 @@ export interface ClientSession {
   combatLegVel?: number;
   /** Current speedMag echoed in Cmd65 responses. */
   combatSpeedMag?: number;
+  /** Timestamp (ms) when the server last accepted a cmd8/cmd9 position update. */
+  combatLastMoveAt?: number;
+  /** Most recent accepted local movement delta on X for crossing-shot estimation. */
+  combatMoveVectorX?: number;
+  /** Most recent accepted local movement delta on Y for crossing-shot estimation. */
+  combatMoveVectorY?: number;
   /** Nominal airborne altitude used for peer sync / collision logging only. */
   combatJumpAltitude?: number;
   /** Prototype jump-jet fuel percentage (0..100). */

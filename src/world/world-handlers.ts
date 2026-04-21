@@ -196,11 +196,15 @@ import {
   BOT_AI_MAX_PREFERRED_RANGE_METERS,
   BOT_AI_RANGE_BUFFER_METERS,
   BOT_AI_JUMP_COOLDOWN_MS,
+  BOT_AI_JUMP_RANGE_FIT_GAIN_THRESHOLD,
   BOT_AI_STRAFE_DIRECTION_HOLD_MS,
   BOT_AI_STRAFE_FLIP_CHANCE,
   BOT_AI_PLAYER_THREAT_BUFFER_METERS,
   BOT_AI_EVASIVE_STRAFE_WEIGHT,
   BOT_AI_APPROACH_STRAFE_WEIGHT,
+  BOT_AI_RANGE_FIT_SHORT_WEIGHT,
+  BOT_AI_RANGE_FIT_MEDIUM_WEIGHT,
+  BOT_AI_RANGE_FIT_LONG_WEIGHT,
   BOT_AI_RANGE_ADVANTAGE_BONUS_METERS,
   BOT_AI_RANGE_PRESSURE_BONUS_METERS,
   BOT_AI_FINISHER_PUSH_HEALTH_THRESHOLD,
@@ -360,6 +364,7 @@ const PLAYER_RESULT_DELAY_MS = 750;
 const BOT_RESULT_DELAY_MS = 1500;
 const COMBAT_DROP_DELAY_MS = 4000;
 const RESULT_WORLD_RESTORE_DELAY_MS = 10_500;
+const REVERSE_MOVEMENT_DISTANCE_TOLERANCE = 1.25;
 const COMSTAR_DIALOG_ID = 6;
 export const COMSTAR_INCOMING_DIALOG_ID = 7;
 const HEAD_RETALIATION_SECTION: CombatAttachmentHitSection = {
@@ -2645,6 +2650,85 @@ function clampNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+function speedMagToMetersPerSecond(speedMag: number): number {
+  return Math.abs(speedMag) / (300 * 3.6);
+}
+
+function clampAcceptedCombatPosition(
+  session: ClientSession,
+  nextX: number,
+  nextY: number,
+  clientSpeed: number,
+  now: number,
+): {
+  x: number;
+  y: number;
+  speedMag: number;
+  clamped: boolean;
+  elapsedMs?: number;
+  submittedDistanceUnits?: number;
+  maxDistanceUnits?: number;
+} {
+  const walkSpeedMag = session.combatWalkSpeedMag ?? 0;
+  const reverseSpeedCap = walkSpeedMag > 0
+    ? walkSpeedMag
+    : Math.abs(session.combatMaxSpeedMag ?? 0);
+  const cappedSpeedMag = clientSpeed < 0 && reverseSpeedCap > 0
+    ? Math.max(clientSpeed, -reverseSpeedCap)
+    : clientSpeed;
+  if (
+    clientSpeed >= 0
+    || reverseSpeedCap <= 0
+    || session.combatJumpActive
+    || (session.combatJumpAltitude ?? 0) > 0
+    || session.combatX === undefined
+    || session.combatY === undefined
+    || session.combatLastMoveAt === undefined
+  ) {
+    return { x: nextX, y: nextY, speedMag: cappedSpeedMag, clamped: false };
+  }
+
+  const elapsedMs = now - session.combatLastMoveAt;
+  if (elapsedMs <= 0) {
+    return { x: nextX, y: nextY, speedMag: cappedSpeedMag, clamped: false };
+  }
+
+  const deltaX = nextX - session.combatX;
+  const deltaY = nextY - session.combatY;
+  const submittedDistanceUnits = Math.hypot(deltaX, deltaY);
+  const maxDistanceUnits = Math.max(
+    COMBAT_WORLD_UNITS_PER_METER,
+    Math.round(
+      speedMagToMetersPerSecond(reverseSpeedCap)
+      * (elapsedMs / 1000)
+      * COMBAT_WORLD_UNITS_PER_METER
+      * REVERSE_MOVEMENT_DISTANCE_TOLERANCE,
+    ),
+  );
+  if (submittedDistanceUnits <= maxDistanceUnits || submittedDistanceUnits <= 0) {
+    return {
+      x: nextX,
+      y: nextY,
+      speedMag: cappedSpeedMag,
+      clamped: false,
+      elapsedMs,
+      submittedDistanceUnits: Math.round(submittedDistanceUnits),
+      maxDistanceUnits,
+    };
+  }
+
+  const scale = maxDistanceUnits / submittedDistanceUnits;
+  return {
+    x: Math.round(session.combatX + (deltaX * scale)),
+    y: Math.round(session.combatY + (deltaY * scale)),
+    speedMag: cappedSpeedMag,
+    clamped: true,
+    elapsedMs,
+    submittedDistanceUnits: Math.round(submittedDistanceUnits),
+    maxDistanceUnits,
+  };
+}
+
 function facingAccumulatorToRadians(facingAccumulator: number): number {
   const southFacingRadians = -Math.PI / 2;
   const deltaUnits = normalizeFacingAccumulator(facingAccumulator) - FACING_ACCUMULATOR_NEUTRAL;
@@ -2689,12 +2773,15 @@ function getCrossingFactor(
 
 type CombatRangeBand = 'short' | 'medium' | 'long';
 
-interface CombatToHitRoll {
-  hit: boolean;
+interface CombatToHitEstimate {
   chance: number;
-  roll: number;
   rangeBand: CombatRangeBand;
   crossingFactor: number;
+}
+
+interface CombatToHitRoll extends CombatToHitEstimate {
+  hit: boolean;
+  roll: number;
 }
 
 interface CombatToHitRollInput {
@@ -2781,7 +2868,7 @@ function getCombatRangeBandForDistance(
   return 'long';
 }
 
-function resolveCombatToHitRoll(input: CombatToHitRollInput): CombatToHitRoll {
+function estimateCombatToHit(input: CombatToHitRollInput): CombatToHitEstimate {
   const { shortRangeCap, mediumRangeCap, longRangeCap } = getCombatRangeCaps(input.weaponSpec, input.maxRangeMeters);
   const rangeBand = getCombatRangeBandForDistance(input.weaponSpec, input.distanceMeters, input.maxRangeMeters);
   let rangeModifier = 0;
@@ -2819,24 +2906,32 @@ function resolveCombatToHitRoll(input: CombatToHitRollInput): CombatToHitRoll {
     input.targetSpeedMag ?? 0,
   );
 
-  const chance = clampNumber(
-    BOT_TO_HIT_BASE_CHANCE
-      + rangeModifier
-      - (attackerSpeedRatio * BOT_TO_HIT_ATTACKER_SPEED_MAX_PENALTY)
-      - (targetSpeedRatio * BOT_TO_HIT_TARGET_SPEED_MAX_PENALTY)
-      - (targetSpeedRatio * crossingFactor * BOT_TO_HIT_TARGET_CROSSING_MAX_PENALTY)
-      - (input.attackerAirborne ? BOT_TO_HIT_ATTACKER_JUMP_PENALTY : 0)
-      - (input.targetAirborne ? BOT_TO_HIT_TARGET_JUMP_PENALTY : 0),
-    BOT_TO_HIT_MIN_CHANCE,
-    BOT_TO_HIT_MAX_CHANCE,
-  );
-  const roll = Math.random();
   return {
-    hit: roll <= chance,
-    chance,
-    roll,
+    chance: clampNumber(
+      BOT_TO_HIT_BASE_CHANCE
+        + rangeModifier
+        - (attackerSpeedRatio * BOT_TO_HIT_ATTACKER_SPEED_MAX_PENALTY)
+        - (targetSpeedRatio * BOT_TO_HIT_TARGET_SPEED_MAX_PENALTY)
+        - (targetSpeedRatio * crossingFactor * BOT_TO_HIT_TARGET_CROSSING_MAX_PENALTY)
+        - (input.attackerAirborne ? BOT_TO_HIT_ATTACKER_JUMP_PENALTY : 0)
+        - (input.targetAirborne ? BOT_TO_HIT_TARGET_JUMP_PENALTY : 0),
+      BOT_TO_HIT_MIN_CHANCE,
+      BOT_TO_HIT_MAX_CHANCE,
+    ),
     rangeBand,
     crossingFactor,
+  };
+}
+
+function resolveCombatToHitRoll(input: CombatToHitRollInput): CombatToHitRoll {
+  const estimate = estimateCombatToHit(input);
+  const roll = Math.random();
+  return {
+    hit: roll <= estimate.chance,
+    chance: estimate.chance,
+    roll,
+    rangeBand: estimate.rangeBand,
+    crossingFactor: estimate.crossingFactor,
   };
 }
 
@@ -2873,6 +2968,11 @@ function getMissImpactPoint(
 function setBotMoveVector(session: ClientSession, moveVectorX: number, moveVectorY: number): void {
   session.combatBotMoveVectorX = moveVectorX;
   session.combatBotMoveVectorY = moveVectorY;
+}
+
+function setPlayerMoveVector(session: ClientSession, moveVectorX: number, moveVectorY: number): void {
+  session.combatMoveVectorX = moveVectorX;
+  session.combatMoveVectorY = moveVectorY;
 }
 
 function chooseBotStrafeDirection(
@@ -2912,6 +3012,9 @@ interface BotVolleyCandidateShot {
   maxRangeMeters?: number;
   rangeBand: CombatRangeBand;
   efficiency: number;
+  hitChance: number;
+  expectedDamage: number;
+  expectedEfficiency: number;
 }
 
 interface BotTicPreset {
@@ -2919,6 +3022,7 @@ interface BotTicPreset {
   shots: BotVolleyCandidateShot[];
   totalHeat: number;
   totalDamage: number;
+  totalExpectedDamage: number;
   overheatRisk: number;
 }
 
@@ -2959,6 +3063,7 @@ function buildBotTicPresetFromCandidates(
   const shots: BotVolleyCandidateShot[] = [];
   let totalHeat = 0;
   let totalDamage = 0;
+  let totalExpectedDamage = 0;
   for (const shot of candidates) {
     if (shots.length > 0 && totalHeat + shot.heat > heatBudget) {
       continue;
@@ -2966,17 +3071,20 @@ function buildBotTicPresetFromCandidates(
     shots.push(shot);
     totalHeat += shot.heat;
     totalDamage += shot.damage;
+    totalExpectedDamage += shot.expectedDamage;
   }
   if (shots.length === 0 && candidates.length > 0) {
     shots.push(candidates[0]);
     totalHeat = candidates[0].heat;
     totalDamage = candidates[0].damage;
+    totalExpectedDamage = candidates[0].expectedDamage;
   }
   return {
     name,
     shots,
     totalHeat,
     totalDamage,
+    totalExpectedDamage,
     overheatRisk: estimateBotOverheatRisk(currentHeat, totalHeat, heatSinks),
   };
 }
@@ -2989,13 +3097,19 @@ function buildBotTicPresets(
   const alphaCandidates = [...availableShots].sort((a, b) => {
     const rangePriority = (band: CombatRangeBand) => band === 'short' ? 2 : band === 'medium' ? 1 : 0;
     return (rangePriority(b.rangeBand) - rangePriority(a.rangeBand))
+      || (b.expectedDamage - a.expectedDamage)
+      || (b.hitChance - a.hitChance)
       || (b.damage - a.damage)
       || (a.heat - b.heat)
+      || (b.expectedEfficiency - a.expectedEfficiency)
       || (b.efficiency - a.efficiency);
   });
   const sustainCandidates = [...availableShots].sort((a, b) => {
     const rangePriority = (band: CombatRangeBand) => band === 'medium' ? 2 : band === 'long' ? 1 : 0;
-    return (b.efficiency - a.efficiency)
+    return (b.expectedEfficiency - a.expectedEfficiency)
+      || (b.expectedDamage - a.expectedDamage)
+      || (b.hitChance - a.hitChance)
+      || (b.efficiency - a.efficiency)
       || (rangePriority(b.rangeBand) - rangePriority(a.rangeBand))
       || (b.damage - a.damage)
       || (a.heat - b.heat);
@@ -3003,6 +3117,9 @@ function buildBotTicPresets(
   const pokeCandidates = [...availableShots].sort((a, b) => {
     const rangePriority = (band: CombatRangeBand) => band === 'long' ? 2 : band === 'medium' ? 1 : 0;
     return (rangePriority(b.rangeBand) - rangePriority(a.rangeBand))
+      || (b.hitChance - a.hitChance)
+      || (b.expectedEfficiency - a.expectedEfficiency)
+      || (b.expectedDamage - a.expectedDamage)
       || (a.heat - b.heat)
       || (b.efficiency - a.efficiency)
       || (b.damage - a.damage);
@@ -3035,22 +3152,39 @@ function chooseBotTicPreset(
     playerHealth <= BOT_AI_FINISHER_PUSH_HEALTH_THRESHOLD
     && alpha.shots.length > 0
     && alpha.overheatRisk <= BOT_AI_TIC_FINISHER_OVERHEAT_RISK
+    && alpha.totalExpectedDamage >= Math.max(5, sustain.totalExpectedDamage * 0.85)
   ) {
     return alpha;
   }
   if (heatRatio >= 0.78 || sustain.overheatRisk > BOT_AI_TIC_SAFE_OVERHEAT_RISK) {
     return poke.shots.length > 0 ? poke : sustain.shots.length > 0 ? sustain : alpha;
   }
-  if (distanceMeters > 430 && poke.shots.length > 0) {
+  if (
+    distanceMeters > 430
+    && poke.shots.length > 0
+    && poke.totalExpectedDamage >= Math.max(3, sustain.totalExpectedDamage * 0.7)
+  ) {
     return poke;
   }
-  if (distanceMeters <= 170 && alpha.shots.length > 0 && alpha.overheatRisk <= BOT_AI_TIC_SAFE_OVERHEAT_RISK) {
+  if (
+    distanceMeters <= 170
+    && alpha.shots.length > 0
+    && alpha.overheatRisk <= BOT_AI_TIC_SAFE_OVERHEAT_RISK
+    && alpha.totalExpectedDamage >= Math.max(4, sustain.totalExpectedDamage * 0.9)
+  ) {
     return alpha;
   }
   if (distanceMeters <= 300 && sustain.shots.length > 0) {
+    if (
+      alpha.shots.length > 0
+      && alpha.overheatRisk <= BOT_AI_TIC_SAFE_OVERHEAT_RISK
+      && alpha.totalExpectedDamage >= sustain.totalExpectedDamage * 1.15
+    ) {
+      return alpha;
+    }
     return sustain;
   }
-  if (poke.shots.length > 0 && poke.totalDamage >= Math.max(4, sustain.totalDamage * 0.6)) {
+  if (poke.shots.length > 0 && poke.totalExpectedDamage >= Math.max(3, sustain.totalExpectedDamage * 0.7)) {
     return poke;
   }
   return sustain.shots.length > 0 ? sustain : alpha.shots.length > 0 ? alpha : poke;
@@ -3570,17 +3704,102 @@ function getWeaponRangeProfileForMech(
   };
 }
 
+function isBotWeaponUsableForRangePlanning(session: ClientSession, weaponSlot: number): boolean {
+  return peekBotWeaponAmmo(session, weaponSlot).allowed;
+}
+
 function getBotWeaponRangeProfile(session: ClientSession): {
   shortestRangeMeters: number;
   longestRangeMeters: number;
   preferredRangeMeters: number;
   hasUsableWeapon: boolean;
 } {
-  return getWeaponRangeProfileForMech(getBotMechId(session), session.combatBotInternalValues);
+  const botMechId = getBotMechId(session);
+  const mechEntry = getMechEntryForId(botMechId);
+  if (!mechEntry) {
+    return {
+      shortestRangeMeters: BOT_AI_MIN_PREFERRED_RANGE_METERS,
+      longestRangeMeters: BOT_AI_MIN_PREFERRED_RANGE_METERS,
+      preferredRangeMeters: 180,
+      hasUsableWeapon: false,
+    };
+  }
+
+  let shortestRangeMeters = Number.POSITIVE_INFINITY;
+  let longestRangeMeters = 0;
+  let hasUsableWeapon = false;
+  for (let weaponSlot = 0; weaponSlot < mechEntry.weaponTypeIds.length; weaponSlot += 1) {
+    const mountGate = getWeaponMountGateForMech(botMechId, session.combatBotInternalValues, weaponSlot);
+    if (!mountGate.allowed || !isBotWeaponUsableForRangePlanning(session, weaponSlot)) continue;
+    const maxRangeMeters = getWeaponLongRangeMeters(getWeaponSpecForMechSlot(botMechId, weaponSlot)) ?? 0;
+    if (maxRangeMeters <= 0) continue;
+    hasUsableWeapon = true;
+    shortestRangeMeters = Math.min(shortestRangeMeters, maxRangeMeters);
+    longestRangeMeters = Math.max(longestRangeMeters, maxRangeMeters);
+  }
+
+  if (!Number.isFinite(shortestRangeMeters)) {
+    shortestRangeMeters = BOT_AI_MIN_PREFERRED_RANGE_METERS;
+  }
+  if (longestRangeMeters <= 0) {
+    longestRangeMeters = BOT_AI_MIN_PREFERRED_RANGE_METERS;
+  }
+
+  return {
+    shortestRangeMeters,
+    longestRangeMeters,
+    preferredRangeMeters: Math.max(
+      BOT_AI_MIN_PREFERRED_RANGE_METERS,
+      Math.min(
+        BOT_AI_MAX_PREFERRED_RANGE_METERS,
+        Math.round(longestRangeMeters * 0.75),
+      ),
+    ),
+    hasUsableWeapon,
+  };
 }
 
 function getBotPreferredRangeMeters(session: ClientSession): number {
   return getBotWeaponRangeProfile(session).preferredRangeMeters;
+}
+
+function getWeaponFitScoreForMechAtDistance(
+  mechId: number | undefined,
+  internalValues: readonly number[] | undefined,
+  distanceMeters: number,
+  isWeaponUsable?: (weaponSlot: number) => boolean,
+): number {
+  const mechEntry = getMechEntryForId(mechId);
+  if (!mechEntry) {
+    return 0;
+  }
+
+  let score = 0;
+  for (let weaponSlot = 0; weaponSlot < mechEntry.weaponTypeIds.length; weaponSlot += 1) {
+    const mountGate = getWeaponMountGateForMech(mechId, internalValues, weaponSlot);
+    if (!mountGate.allowed || (isWeaponUsable !== undefined && !isWeaponUsable(weaponSlot))) continue;
+    const weaponSpec = getWeaponSpecForMechSlot(mechId, weaponSlot);
+    const maxRangeMeters = getWeaponLongRangeMeters(weaponSpec);
+    if (maxRangeMeters === undefined || maxRangeMeters <= 0 || distanceMeters > maxRangeMeters) {
+      continue;
+    }
+    const rangeBand = getCombatRangeBandForDistance(weaponSpec, distanceMeters, maxRangeMeters);
+    const bandWeight = rangeBand === 'short'
+      ? BOT_AI_RANGE_FIT_SHORT_WEIGHT
+      : rangeBand === 'medium'
+        ? BOT_AI_RANGE_FIT_MEDIUM_WEIGHT
+        : BOT_AI_RANGE_FIT_LONG_WEIGHT;
+    score += (weaponSpec?.damage ?? BOT_FALLBACK_WEAPON_DAMAGE) * bandWeight;
+  }
+  return score;
+}
+
+function isMeaningfulJumpFitGain(currentScore: number, landingScore: number): boolean {
+  return landingScore > currentScore
+    && (
+      currentScore <= 0
+      || landingScore >= currentScore + BOT_AI_JUMP_RANGE_FIT_GAIN_THRESHOLD
+    );
 }
 
 function getSectionRemainingDurability(
@@ -3867,7 +4086,14 @@ function stepBotMovement(
   const dx = playerX - currentBotX;
   const dy = playerY - currentBotY;
   const distanceUnits = Math.hypot(dx, dy);
+  const distanceMeters = distanceUnits / COMBAT_WORLD_UNITS_PER_METER;
   const rangeProfile = getBotWeaponRangeProfile(session);
+  const currentRangeFitScore = getWeaponFitScoreForMechAtDistance(
+    getBotMechId(session),
+    session.combatBotInternalValues,
+    distanceMeters,
+    weaponSlot => isBotWeaponUsableForRangePlanning(session, weaponSlot),
+  );
   const rangeBufferUnits = BOT_AI_RANGE_BUFFER_METERS * COMBAT_WORLD_UNITS_PER_METER;
   const playerRangeProfile = getWeaponRangeProfileForMech(
     session.selectedMechId ?? FALLBACK_MECH_ID,
@@ -3879,6 +4105,7 @@ function stepBotMovement(
   const playerThreatRangeUnits = (playerRangeProfile.hasUsableWeapon ? playerRangeProfile.longestRangeMeters : 0)
     * COMBAT_WORLD_UNITS_PER_METER;
   const maxSpeedMag = botMechEntry?.maxSpeedMag ?? 0;
+  const walkSpeedMag = botMechEntry?.walkSpeedMag ?? maxSpeedMag;
   const botBehindOnDurability = durabilityDelta < -8;
   const botAheadOnDurability = durabilityDelta > 12;
   let tacticalPreferredRangeMeters = rangeProfile.preferredRangeMeters;
@@ -3932,7 +4159,16 @@ function stepBotMovement(
     );
     const landingX = currentBotX - Math.round((dx / distanceUnits) * retreatUnits);
     const landingY = currentBotY - Math.round((dy / distanceUnits) * retreatUnits);
-    if (startBotJump(session, connLog, capture, landingX, landingY, 'defensive range reset')) {
+    const landingRangeFitScore = getWeaponFitScoreForMechAtDistance(
+      getBotMechId(session),
+      session.combatBotInternalValues,
+      (distanceUnits + retreatUnits) / COMBAT_WORLD_UNITS_PER_METER,
+      weaponSlot => isBotWeaponUsableForRangePlanning(session, weaponSlot),
+    );
+    if (
+      isMeaningfulJumpFitGain(currentRangeFitScore, landingRangeFitScore)
+      && startBotJump(session, connLog, capture, landingX, landingY, 'defensive range reset')
+    ) {
       return;
     }
   }
@@ -3948,7 +4184,16 @@ function stepBotMovement(
     );
     const landingX = currentBotX + Math.round((dx / distanceUnits) * advanceUnits);
     const landingY = currentBotY + Math.round((dy / distanceUnits) * advanceUnits);
-    if (startBotJump(session, connLog, capture, landingX, landingY, 'aggressive range close')) {
+    const landingRangeFitScore = getWeaponFitScoreForMechAtDistance(
+      getBotMechId(session),
+      session.combatBotInternalValues,
+      Math.max(0, (distanceUnits - advanceUnits) / COMBAT_WORLD_UNITS_PER_METER),
+      weaponSlot => isBotWeaponUsableForRangePlanning(session, weaponSlot),
+    );
+    if (
+      isMeaningfulJumpFitGain(currentRangeFitScore, landingRangeFitScore)
+      && startBotJump(session, connLog, capture, landingX, landingY, 'aggressive range close')
+    ) {
       return;
     }
   }
@@ -4003,9 +4248,18 @@ function stepBotMovement(
     const desiredMoveY = (radialUnitY * radialWeight) + (tangentUnitY * tangentialWeight);
     const desiredMagnitude = Math.hypot(desiredMoveX, desiredMoveY);
     if (desiredMagnitude > 0 && speedScale > 0) {
+      const mostlyRetreating = radialWeight < -Math.max(0.3, tangentialWeight * 0.75);
+      const movementSpeedCap = mostlyRetreating
+        ? Math.max(1, Math.abs(walkSpeedMag))
+        : Math.max(1, Math.abs(maxSpeedMag));
       const intendedSpeedMag = Math.max(
         COMBAT_WORLD_UNITS_PER_METER / 10,
-        Math.round(Math.abs(maxSpeedMag) * speedScale),
+        Math.round(movementSpeedCap * speedScale),
+      );
+      const throttleScale = clampNumber(
+        intendedSpeedMag / Math.max(1, Math.abs(maxSpeedMag)),
+        0,
+        1,
       );
       const desiredRangeDelta = distanceUnits > preferredRangeUnits + rangeBufferUnits
         ? Math.max(COMBAT_WORLD_UNITS_PER_METER, Math.round(distanceUnits - preferredRangeUnits))
@@ -4021,12 +4275,11 @@ function stepBotMovement(
       nextBotX += moveVectorX;
       nextBotY += moveVectorY;
 
-      const mostlyRetreating = radialWeight < -Math.max(0.3, tangentialWeight * 0.75);
       if (mostlyRetreating) {
-        nextThrottle = Math.round(THROTTLE_RUN_SCALE * MOTION_DIV * speedScale);
+        nextThrottle = Math.round(THROTTLE_RUN_SCALE * MOTION_DIV * throttleScale);
         nextSpeedMag = -intendedSpeedMag;
       } else {
-        nextThrottle = -Math.round(THROTTLE_RUN_SCALE * MOTION_DIV * speedScale);
+        nextThrottle = -Math.round(THROTTLE_RUN_SCALE * MOTION_DIV * throttleScale);
         nextSpeedMag = intendedSpeedMag;
       }
       nextLegVel = nextThrottle;
@@ -4124,16 +4377,42 @@ function stepBotWeaponFire(
     const ammoGate = peekBotWeaponAmmo(session, weaponSlot);
     if (!ammoGate.allowed) continue;
 
+    const toHitEstimate = estimateCombatToHit({
+      attackerX: botX,
+      attackerY: botY,
+      attackerFacing: session.combatBotFacing ?? FACING_ACCUMULATOR_NEUTRAL,
+      attackerSpeedMag: session.combatBotSpeedMag,
+      attackerMaxSpeedMag: botMechEntry.maxSpeedMag,
+      attackerAirborne: session.combatBotJumpActive === true,
+      targetX,
+      targetY,
+      targetFacing: getCombatCmd65Facing(session),
+      targetSpeedMag: session.combatSpeedMag,
+      targetMaxSpeedMag: session.combatMaxSpeedMag,
+      targetAirborne: (session.combatJumpAltitude ?? 0) > 0,
+      targetMoveVectorX: session.combatMoveVectorX,
+      targetMoveVectorY: session.combatMoveVectorY,
+      distanceMeters,
+      weaponSpec,
+      maxRangeMeters: rangeGate.maxRangeMeters,
+    });
+    const damage = weaponSpec?.damage ?? BOT_FALLBACK_WEAPON_DAMAGE;
+    const heat = weaponSpec?.heat ?? 0;
+    const expectedDamage = damage * toHitEstimate.chance;
+
     availableShots.push({
       weaponSlot,
-      damage: weaponSpec?.damage ?? BOT_FALLBACK_WEAPON_DAMAGE,
-      heat: weaponSpec?.heat ?? 0,
+      damage,
+      heat,
       weaponName,
       weaponSpec,
       cooldownMs: cooldownGate.cooldownMs,
       maxRangeMeters: rangeGate.maxRangeMeters,
-      rangeBand: getCombatRangeBandForDistance(weaponSpec, distanceMeters, rangeGate.maxRangeMeters),
-      efficiency: (weaponSpec?.damage ?? BOT_FALLBACK_WEAPON_DAMAGE) / Math.max(1, weaponSpec?.heat ?? 1),
+      rangeBand: toHitEstimate.rangeBand,
+      efficiency: damage / Math.max(1, heat),
+      hitChance: toHitEstimate.chance,
+      expectedDamage,
+      expectedEfficiency: expectedDamage / Math.max(1, heat),
     });
   }
 
@@ -4186,6 +4465,8 @@ function stepBotWeaponFire(
       targetSpeedMag: session.combatSpeedMag,
       targetMaxSpeedMag: session.combatMaxSpeedMag,
       targetAirborne: (session.combatJumpAltitude ?? 0) > 0,
+      targetMoveVectorX: session.combatMoveVectorX,
+      targetMoveVectorY: session.combatMoveVectorY,
       distanceMeters,
       weaponSpec: shot.weaponSpec,
       maxRangeMeters: shot.maxRangeMeters,
@@ -4302,12 +4583,13 @@ function stepBotWeaponFire(
   session.playerHealth = getCombatDurability(playerArmorValues, playerInternalValues) + playerHeadArmor;
   send(session.socket, buildCmd71ResetEffectStatePacket(nextSeq(session)), capture, 'CMD71_BOT_CLOSE');
   connLog.info(
-    '[world/combat] bot volley: mechId=%d tic=%s distance=%dm weapons=%s heat=%s playerHealth=%d updates=%d shots=[%s]',
+    '[world/combat] bot volley: mechId=%d tic=%s distance=%dm weapons=%s heat=%s expected=%.1f playerHealth=%d updates=%d shots=[%s]',
     botMechId,
     selectedPreset.name,
     Math.round(distanceMeters),
     volley.map(shot => shot.weaponSlot).join('/'),
     `${Math.round(currentHeat * 10) / 10}->${Math.round((session.combatBotHeat ?? 0) * 10) / 10} risk=${Math.round(selectedPreset.overheatRisk * 100)}`,
+    selectedPreset.totalExpectedDamage,
     session.playerHealth,
     totalDamageUpdates,
     shotSummaries.join(','),
@@ -4578,6 +4860,9 @@ export function resetCombatState(session: ClientSession): void {
   session.combatJumpActive = undefined;
   session.combatJumpAltitude = undefined;
   session.combatJumpFuel = undefined;
+  session.combatLastMoveAt = undefined;
+  session.combatMoveVectorX = undefined;
+  session.combatMoveVectorY = undefined;
   session.combatLastCollisionProbeAt = undefined;
   session.combatLastContactReportAt = undefined;
   session.combatLastJumpLandAt = undefined;
@@ -5664,6 +5949,9 @@ function initializeSharedCombatParticipant(
   session.combatThrottle = 0;
   session.combatLegVel = 0;
   session.combatSpeedMag = 0;
+  session.combatLastMoveAt = undefined;
+  session.combatMoveVectorX = 0;
+  session.combatMoveVectorY = 0;
   session.combatJumpAltitude = 0;
   session.combatJumpFuel = JUMP_JET_FUEL_MAX;
   session.combatPlayerArmorValues = [...(mechEntry?.armorLikeMaxValues ?? DEFAULT_BOT_ARMOR_VALUES)];
@@ -5989,6 +6277,9 @@ export function tryStartStagedDuelCombat(
     participant.local.combatThrottle = 0;
     participant.local.combatLegVel = 0;
     participant.local.combatSpeedMag = 0;
+    participant.local.combatLastMoveAt = undefined;
+    participant.local.combatMoveVectorX = 0;
+    participant.local.combatMoveVectorY = 0;
     participant.local.combatJumpAltitude = 0;
     participant.local.combatJumpFuel = JUMP_JET_FUEL_MAX;
     participant.local.combatPlayerArmorValues = [...(mechEntry?.armorLikeMaxValues ?? DEFAULT_BOT_ARMOR_VALUES)];
@@ -7158,6 +7449,8 @@ export function sendCombatBootstrapSequence(
   session.combatJumpActive = false;
   session.combatJumpAltitude = 0;
   session.combatJumpFuel = JUMP_JET_FUEL_MAX;
+  session.combatMoveVectorX = 0;
+  session.combatMoveVectorY = 0;
   session.combatLastCollisionProbeAt = undefined;
   session.combatLastJumpLandAt = undefined;
   session.combatLastJumpLandAltitude = undefined;
@@ -8335,26 +8628,71 @@ export function handleCombatMovementFrame(
   if (cmd === 8) {
     const frame = parseClientCmd8Coasting(payload);
     if (!frame) return;
-    session.combatX          = frame.xRaw - COORD_BIAS;
-    session.combatY          = frame.yRaw - COORD_BIAS;
+    const now = Date.now();
+    const clientSpeed = frame.rotationRaw - MOTION_NEUTRAL;
+    const previousX = session.combatX ?? (frame.xRaw - COORD_BIAS);
+    const previousY = session.combatY ?? (frame.yRaw - COORD_BIAS);
+    const nextPosition = clampAcceptedCombatPosition(
+      session,
+      frame.xRaw - COORD_BIAS,
+      frame.yRaw - COORD_BIAS,
+      clientSpeed,
+      now,
+    );
+    session.combatX          = nextPosition.x;
+    session.combatY          = nextPosition.y;
+    setPlayerMoveVector(session, nextPosition.x - previousX, nextPosition.y - previousY);
     session.combatHeadingRaw = frame.headingRaw;
     session.combatTurnMomentumRaw = frame.turnMomRaw;
-
-    const clientSpeed       = frame.rotationRaw - MOTION_NEUTRAL;
+    session.combatLastMoveAt = now;
 
     if (clientSpeed !== 0) {
-      session.combatSpeedMag = clientSpeed;
+      session.combatSpeedMag = nextPosition.speedMag;
+      if (nextPosition.clamped) {
+        send(
+          session.socket,
+          buildCmd65PositionSyncPacket(
+            {
+              slot:     0,
+              x:        session.combatX,
+              y:        session.combatY,
+              z:        getLocalCmd65Altitude(session),
+              facing:   getCombatCmd65Facing(session),
+              throttle: session.combatThrottle ?? 0,
+              legVel:   session.combatLegVel ?? 0,
+              speedMag: session.combatSpeedMag ?? 0,
+            },
+            nextSeq(session),
+          ),
+          capture,
+          'CMD65_MOVEMENT_REVERSE_CLAMP',
+        );
+        connLog.debug(
+          '[world/combat] cmd8 reverse clamp: clientSpeed=%d effectiveSpeed=%d elapsed=%dms submitted=%d allowed=%d',
+          clientSpeed,
+          nextPosition.speedMag,
+          nextPosition.elapsedMs ?? 0,
+          nextPosition.submittedDistanceUnits ?? 0,
+          nextPosition.maxDistanceUnits ?? 0,
+        );
+      }
       mirrorCombatRemotePosition(players, session, 'CMD65_COMBAT_REMOTE_COAST');
       maybeLogCollisionProbeCandidate(players, session, connLog, 'CMD8_COAST');
       connLog.debug(
-        '[world/combat] cmd8 coasting: x=%d y=%d heading=%d clientSpeed=%d -> no echo (trust local key events)',
-        session.combatX, session.combatY, frame.headingRaw, clientSpeed,
+        '[world/combat] cmd8 coasting: x=%d y=%d heading=%d clientSpeed=%d effectiveSpeed=%d%s',
+        session.combatX,
+        session.combatY,
+        frame.headingRaw,
+        clientSpeed,
+        nextPosition.speedMag,
+        nextPosition.clamped ? ' -> reverse clamp correction sent' : ' -> no echo (trust local key events)',
       );
       return;
     }
 
     // clientSpeed === 0 → mech has fully stopped; reset so the next KP8 press
     // is treated as a fresh startup (breaks the trap correctly).
+    setPlayerMoveVector(session, 0, 0);
     session.combatSpeedMag  = 0;
     mirrorCombatRemotePosition(players, session, 'CMD65_COMBAT_REMOTE_STOP');
     maybeLogCollisionProbeCandidate(players, session, connLog, 'CMD8_STOP');
@@ -8368,11 +8706,6 @@ export function handleCombatMovementFrame(
   if (cmd === 9) {
     const frame = parseClientCmd9Moving(payload);
     if (!frame) return;
-    session.combatX          = frame.xRaw - COORD_BIAS;
-    session.combatY          = frame.yRaw - COORD_BIAS;
-    session.combatHeadingRaw = frame.headingRaw;
-    session.combatTurnMomentumRaw = frame.turnMomRaw;
-
     const maxSpeedMag    = session.combatMaxSpeedMag ?? 0;
     const throttlePct    = frame.throttleRaw - MOTION_NEUTRAL; // negative = forward
     const legVelPct      = frame.legVelRaw   - MOTION_NEUTRAL;
@@ -8385,6 +8718,22 @@ export function handleCombatMovementFrame(
 
     // iVar5 from FUN_0042c7a0: actual physics speed (+ve=forward, -ve=reverse).
     const clientSpeed = frame.rotationRaw - MOTION_NEUTRAL;
+    const now = Date.now();
+    const previousX = session.combatX ?? (frame.xRaw - COORD_BIAS);
+    const previousY = session.combatY ?? (frame.yRaw - COORD_BIAS);
+    const nextPosition = clampAcceptedCombatPosition(
+      session,
+      frame.xRaw - COORD_BIAS,
+      frame.yRaw - COORD_BIAS,
+      clientSpeed,
+      now,
+    );
+    session.combatX          = nextPosition.x;
+    session.combatY          = nextPosition.y;
+    setPlayerMoveVector(session, nextPosition.x - previousX, nextPosition.y - previousY);
+    session.combatHeadingRaw = frame.headingRaw;
+    session.combatTurnMomentumRaw = frame.turnMomRaw;
+    session.combatLastMoveAt = now;
 
     // throttle: preserve DAT_004f1f7c as-is (no sign flip).
     // Ghidra: encodeThrottle(V) → client reads back V; -throttle was wrong and
@@ -8393,11 +8742,21 @@ export function handleCombatMovementFrame(
     const legVel   = legVelPct   * MOTION_DIV;
     session.combatThrottle = throttle;
     session.combatLegVel   = legVel;
-    session.combatSpeedMag = clientSpeed;
+    session.combatSpeedMag = nextPosition.speedMag;
 
     connLog.debug(
-      '[world/combat] cmd9 moving: throttlePct=%d legVelPct=%d clientSpeed=%d throttle=%d legVel=%d maxSpeedMag=%d nextSpeedMag=%d',
-      throttlePct, legVelPct, clientSpeed, throttle, legVel, maxSpeedMag, nextSpeedMag,
+      '[world/combat] cmd9 moving: throttlePct=%d legVelPct=%d clientSpeed=%d effectiveSpeed=%d throttle=%d legVel=%d maxSpeedMag=%d nextSpeedMag=%d%s',
+      throttlePct,
+      legVelPct,
+      clientSpeed,
+      nextPosition.speedMag,
+      throttle,
+      legVel,
+      maxSpeedMag,
+      nextSpeedMag,
+      nextPosition.clamped
+        ? ` reverseClamp elapsed=${nextPosition.elapsedMs ?? 0}ms submitted=${nextPosition.submittedDistanceUnits ?? 0} allowed=${nextPosition.maxDistanceUnits ?? 0}`
+        : '',
     );
 
     if (session.combatSuppressLocalCmd65WhileDowned && session.combatLocalDowned) {
@@ -8414,7 +8773,7 @@ export function handleCombatMovementFrame(
             facing:   getCombatCmd65Facing(session),
             throttle,
             legVel,
-            speedMag: clientSpeed,
+            speedMag: session.combatSpeedMag ?? 0,
           },
           nextSeq(session),
         ),
@@ -9152,6 +9511,7 @@ export function handleCombatActionFrame(
     session.combatThrottle = 0;
     session.combatLegVel = 0;
     session.combatSpeedMag = 0;
+    setPlayerMoveVector(session, 0, 0);
     session.combatJumpFuel = fuel;
     session.combatLastJumpLandAt = undefined;
     session.combatLastJumpLandAltitude = undefined;

@@ -103,6 +103,9 @@ export const BOT_AI_RANGE_BUFFER_METERS = 24;
 /** Minimum time between deliberate bot jump-jet commits. */
 export const BOT_AI_JUMP_COOLDOWN_MS = 2_100;
 
+/** Minimum weapon-fit gain before the bot spends jump fuel on a reposition jump. */
+export const BOT_AI_JUMP_RANGE_FIT_GAIN_THRESHOLD = 4;
+
 /** Minimum hold time before the bot intentionally flips its evasive strafe side. */
 export const BOT_AI_STRAFE_DIRECTION_HOLD_MS = 1_500;
 
@@ -117,6 +120,11 @@ export const BOT_AI_EVASIVE_STRAFE_WEIGHT = 1.1;
 
 /** Smaller lateral weight used while still closing distance into its own band. */
 export const BOT_AI_APPROACH_STRAFE_WEIGHT = 0.65;
+
+/** Heuristic per-band weights used when deciding whether a jump meaningfully improves current weapon fit. */
+export const BOT_AI_RANGE_FIT_SHORT_WEIGHT = 1.0;
+export const BOT_AI_RANGE_FIT_MEDIUM_WEIGHT = 0.75;
+export const BOT_AI_RANGE_FIT_LONG_WEIGHT = 0.45;
 
 /** Additional preferred-range offset when the bot can exploit a range advantage. */
 export const BOT_AI_RANGE_ADVANTAGE_BONUS_METERS = 45;
