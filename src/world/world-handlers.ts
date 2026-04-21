@@ -6804,14 +6804,14 @@ export function handleCombatMovementFrame(
       send(
         session.socket,
         buildCmd65PositionSyncPacket(
-            {
-              slot:     0,
-              x:        session.combatX,
-              y:        session.combatY,
-              z:        getLocalCmd65Altitude(session),
-              facing:   getCombatCmd65Facing(session),
-              throttle,
-              legVel,
+          {
+            slot:     0,
+            x:        session.combatX,
+            y:        session.combatY,
+            z:        getLocalCmd65Altitude(session),
+            facing:   getCombatCmd65Facing(session),
+            throttle,
+            legVel,
             speedMag: clientSpeed,
           },
           nextSeq(session),
