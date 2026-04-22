@@ -2651,7 +2651,9 @@ function clampNumber(value: number, min: number, max: number): number {
 }
 
 function speedMagToMetersPerSecond(speedMag: number): number {
-  return Math.abs(speedMag) / (300 * 3.6);
+  // mechKph(speedMag) = speedMag * 16.2 / 450 = speedMag * 0.036 kph,
+  // so combat speedMag converts to meters/sec as speedMag * 0.01.
+  return Math.abs(speedMag) / 100;
 }
 
 function clampAcceptedCombatPosition(
