@@ -2700,6 +2700,9 @@ function getCombatClientIntegerSqrt(value: number): number {
     delta = Math.abs(nextEstimate - estimate);
     estimate = nextEstimate;
   }
+  while ((estimate * estimate) > value) {
+    estimate -= 1;
+  }
   return estimate;
 }
 
