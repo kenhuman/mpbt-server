@@ -4481,11 +4481,6 @@ function stepBotMovement(
       : distanceUnits < minimumRetreatUnits
         ? Math.max(COMBAT_WORLD_UNITS_PER_METER, Math.round(preferredRangeUnits - distanceUnits))
         : Number.POSITIVE_INFINITY;
-    const throttleScale = clampNumber(
-      Math.abs(targetSpeedMag) / movementSpeedCap,
-      0,
-      1,
-    );
   }
 
   nextSpeedMag = stepBotGroundedSpeedMagTowardTarget(
