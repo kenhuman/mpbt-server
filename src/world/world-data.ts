@@ -388,7 +388,7 @@ export const CANONICAL_MECH_CATALOG: Record<string, CanonicalMechCatalogEntry> =
   SHD:     { chassis: 'Shadow Hawk',  weightClass: 'MEDIUM'  },
   VL:      { chassis: 'Vulcan',       weightClass: 'MEDIUM'  },
 
-  WVR:     { chassis: 'Wolverine',    weightClass: 'HEAVY'   },
+  WVR:     { chassis: 'Wolverine',    weightClass: 'MEDIUM'  },
   DRG:     { chassis: 'Dragon',       weightClass: 'HEAVY'   },
   OSR:     { chassis: 'Ostroc',       weightClass: 'HEAVY'   },
   OTL:     { chassis: 'Ostsol',       weightClass: 'HEAVY'   },

@@ -91,6 +91,13 @@ export const BOT_RETALIATION_DAMAGE = 10;
 /** Tick interval (ms) for the live bot-combat movement / fire planner. */
 export const BOT_AI_TICK_MS = 250;
 
+/** Cmd72 grounded acceleration scalar (client DAT_004f56b4 / globalA). */
+export const COMBAT_GLOBAL_A = 1462;
+/** Cmd72 grounded drag offset (client DAT_004f1d24 / globalB). */
+export const COMBAT_GLOBAL_B = 39;
+/** Cmd72 airborne damping scalar (client DAT_004f5684 / globalC). */
+export const COMBAT_GLOBAL_C = 0;
+
 /** Shortest distance band the bot tries to hold while maneuvering. */
 export const BOT_AI_MIN_PREFERRED_RANGE_METERS = 90;
 
@@ -106,20 +113,8 @@ export const BOT_AI_JUMP_COOLDOWN_MS = 2_100;
 /** Minimum weapon-fit gain before the bot spends jump fuel on a reposition jump. */
 export const BOT_AI_JUMP_RANGE_FIT_GAIN_THRESHOLD = 4;
 
-/** Minimum hold time before the bot intentionally flips its evasive strafe side. */
-export const BOT_AI_STRAFE_DIRECTION_HOLD_MS = 1_500;
-
-/** Chance to swap strafe side once the hold window expires under normal evasive pressure. */
-export const BOT_AI_STRAFE_FLIP_CHANCE = 0.65;
-
 /** Additional buffer around the player's longest weapon range that still counts as dangerous. */
 export const BOT_AI_PLAYER_THREAT_BUFFER_METERS = 60;
-
-/** Lateral movement weight when the bot is actively trying to stay hard to hit. */
-export const BOT_AI_EVASIVE_STRAFE_WEIGHT = 1.1;
-
-/** Smaller lateral weight used while still closing distance into its own band. */
-export const BOT_AI_APPROACH_STRAFE_WEIGHT = 0.65;
 
 /** Heuristic per-band weights used when deciding whether a jump meaningfully improves current weapon fit. */
 export const BOT_AI_RANGE_FIT_SHORT_WEIGHT = 1.0;
@@ -185,10 +180,3 @@ export const VERIFY_SWEEP_STEP_MS = 700;
 /** Damage codes used for quick client-side classifier probing. */
 export const VERIFY_DAMAGE_CODES = [1, 2, 8, 16, 32, 64] as const;
 
-// ── Movement scaling ──────────────────────────────────────────────────────────
-
-/**
- * KP8 full-forward produces sVar2 ≈ 20 in the client's throttle accumulator.
- * Using 20 as the scale means sVar2=20 → maxSpeedMag (run speed).
- */
-export const THROTTLE_RUN_SCALE = 20;

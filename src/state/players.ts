@@ -264,14 +264,14 @@ export interface ClientSession {
   combatX?: number;
   /** Last decoded world Y coordinate from client Cmd8/9. */
   combatY?: number;
-  /** Last raw heading value from client Cmd8/9. */
-  combatHeadingRaw?: number;
-  /** Last raw turn-momentum / positional-adjust value from client Cmd8/9. */
-  combatTurnMomentumRaw?: number;
-  /** Last decoded throttle velocity echoed in Cmd65 responses. */
-  combatThrottle?: number;
-  /** Last decoded leg velocity echoed in Cmd65 responses. */
-  combatLegVel?: number;
+  /** Last raw altitude/type2 field from client Cmd8/9. */
+  combatAltitudeRaw?: number;
+  /** Last raw facing-accumulator field from client Cmd8/9. */
+  combatFacingRaw?: number;
+  /** Last decoded Cmd65 upper-body pitch/bend channel. */
+  combatUpperBodyPitch?: number;
+  /** Last decoded Cmd65 torso-yaw / upper-body heading-offset channel. */
+  combatTorsoYaw?: number;
   /** Current speedMag echoed in Cmd65 responses. */
   combatSpeedMag?: number;
   /** Timestamp (ms) when the server last accepted a cmd8/cmd9 position update. */
@@ -370,26 +370,22 @@ export interface ClientSession {
   combatBotZ?: number;
   /** Current remote bot facing accumulator mirrored through Cmd65 slot 1 updates. */
   combatBotFacing?: number;
-  /** Current remote bot throttle value mirrored through Cmd65 slot 1 updates. */
-  combatBotThrottle?: number;
-  /** Current remote bot leg velocity mirrored through Cmd65 slot 1 updates. */
-  combatBotLegVel?: number;
   /** Current remote bot speedMag mirrored through Cmd65 slot 1 updates. */
   combatBotSpeedMag?: number;
-  /** Most recent server-side bot movement delta X, used for evasive to-hit evaluation. */
+  /** Timestamp (ms) when the server last advanced the bot movement tick. */
+  combatBotLastMoveAt?: number;
+  /** Most recent server-side bot movement delta X, used for combat motion / to-hit evaluation. */
   combatBotMoveVectorX?: number;
-  /** Most recent server-side bot movement delta Y, used for evasive to-hit evaluation. */
+  /** Most recent server-side bot movement delta Y, used for combat motion / to-hit evaluation. */
   combatBotMoveVectorY?: number;
-  /** Persistent strafe/orbit direction for bot evasive movement (-1 = left, 1 = right). */
-  combatBotStrafeDirection?: -1 | 1;
-  /** Wall-clock timestamp when the bot last committed to a strafe-direction flip. */
-  combatBotLastStrafeFlipAt?: number;
   /** Per-weapon-slot ready-at wall-clock values for the bot's current mech. */
   combatBotWeaponReadyAtBySlot?: number[];
   /** Current remote bot ammo-bin state for the active bot mech. */
   combatBotAmmoStateValues?: number[];
   /** Bot-only rolling heat estimate used for TIC / volley selection. */
   combatBotHeat?: number;
+  /** Timestamp (ms) of the most recent bot aim-limit diagnostic log. */
+  combatBotLastAimLimitLogAt?: number;
   /** True while the bot is traversing a jump-jet arc. */
   combatBotJumpActive?: boolean;
   /** Current bot jump-jet fuel snapshot (same 0..120 scale as the player mirror). */

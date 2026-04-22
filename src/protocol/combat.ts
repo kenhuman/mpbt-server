@@ -210,12 +210,14 @@ export function buildCmd64RemoteActorPacket(actor: Cmd64RemoteActor, seq = 0): B
 //   z         type2    — altitude (no bias)
 //   facing    type1    — (raw − FACING_BASE) * MOTION_DIV → DAT_004f1d5c
 //   throttle  type1    — (MOTION_NEUTRAL − raw) * MOTION_DIV → DAT_004f1f7c
+//                          likely upper-body pitch / bend accumulator
 //   legVel    type1    — (raw − MOTION_NEUTRAL) * MOTION_DIV → DAT_004f1f7a
+//                          likely torso-yaw / upper-body heading offset
 //   speedMag  type1    — raw − MOTION_NEUTRAL → DAT_004f20a2 / DAT_004f1d9e
 //
 // Ghidra assumptions:
 //   • Signed direction conventions for facing/throttle/legVel still need live
-//     capture to confirm zero-north vs zero-east, +/− throttle direction.
+//     capture to confirm zero-north vs zero-east, and +/− pitch/yaw polarity.
 
 export interface Cmd65PositionSync {
   slot: number;
@@ -227,9 +229,9 @@ export interface Cmd65PositionSync {
   z: number;
   /** Facing/heading accumulator value (in mech internal units, divided by MOTION_DIV). */
   facing: number;
-  /** Throttle velocity (sign-inverted from client cmd9 convention). */
+  /** Cmd65 throttle channel; likely the client's upper-body pitch / bend accumulator. */
   throttle: number;
-  /** Leg velocity (forward/back). */
+  /** Cmd65 legVel channel; likely the client's torso-yaw / upper-body heading offset. */
   legVel: number;
   /** Forward/speed magnitude. */
   speedMag: number;

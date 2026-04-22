@@ -582,21 +582,21 @@ export function parseClientCmd23LocationAction(
 
 // ── Combat client frames (cmd8 / cmd9 / cmd10 / cmd12) ───────────────────────
 
-/** Raw decoded fields from client cmd8 (coasting: no throttle and no turning). */
+/** Raw decoded fields from client cmd8 (coasting: no upper-body input active). */
 export interface ClientCmd8Coasting {
   seq: number;
   xRaw: number;
   yRaw: number;
-  headingRaw: number;
-  turnMomRaw: number;
-  rotationRaw: number;
+  altitudeRaw: number;
+  facingRaw: number;
+  speedRaw: number;
 }
 
-/** Raw decoded fields from client cmd9 (moving: throttle or turning active). */
+/** Raw decoded fields from client cmd9 (moving: upper-body input and/or speed active). */
 export interface ClientCmd9Moving extends ClientCmd8Coasting {
   neutralRaw: number;
-  throttleRaw: number;
-  legVelRaw: number;
+  upperBodyPitchRaw: number;
+  torsoYawRaw: number;
 }
 
 /** Raw decoded fields from client cmd10 weapon-fire geometry. */
@@ -642,13 +642,13 @@ export function parseClientCmd8Coasting(payload: Buffer): ClientCmd8Coasting | n
   if (payload.length < 21 || payload[0] !== 0x1B) return null;
   if (payload[2] - 0x21 !== 8) return null;
   let off = 3;
-  let xRaw: number, yRaw: number, headingRaw: number, turnMomRaw: number, rotationRaw: number;
-  [xRaw,       off] = decodeArgType3(payload, off);
-  [yRaw,       off] = decodeArgType3(payload, off);
-  [headingRaw, off] = decodeArgType2(payload, off);
-  [turnMomRaw, off] = decodeArgType1(payload, off);
-  [rotationRaw,   ] = decodeArgType1(payload, off);
-  return { seq: payload[1] - 0x21, xRaw, yRaw, headingRaw, turnMomRaw, rotationRaw };
+  let xRaw: number, yRaw: number, altitudeRaw: number, facingRaw: number, speedRaw: number;
+  [xRaw,        off] = decodeArgType3(payload, off);
+  [yRaw,        off] = decodeArgType3(payload, off);
+  [altitudeRaw, off] = decodeArgType2(payload, off);
+  [facingRaw,   off] = decodeArgType1(payload, off);
+  [speedRaw,      ] = decodeArgType1(payload, off);
+  return { seq: payload[1] - 0x21, xRaw, yRaw, altitudeRaw, facingRaw, speedRaw };
 }
 
 /** Parse a client-sent combat cmd9 moving frame. */
@@ -656,20 +656,20 @@ export function parseClientCmd9Moving(payload: Buffer): ClientCmd9Moving | null 
   if (payload.length < 27 || payload[0] !== 0x1B) return null;
   if (payload[2] - 0x21 !== 9) return null;
   let off = 3;
-  let xRaw: number, yRaw: number, headingRaw: number;
-  let turnMomRaw: number, neutralRaw: number, throttleRaw: number, legVelRaw: number, rotationRaw: number;
-  [xRaw,        off] = decodeArgType3(payload, off);
-  [yRaw,        off] = decodeArgType3(payload, off);
-  [headingRaw,  off] = decodeArgType2(payload, off);
-  [turnMomRaw,  off] = decodeArgType1(payload, off);
-  [neutralRaw,  off] = decodeArgType1(payload, off);
-  [throttleRaw, off] = decodeArgType1(payload, off);
-  [legVelRaw,   off] = decodeArgType1(payload, off);
-  [rotationRaw,    ] = decodeArgType1(payload, off);
+  let xRaw: number, yRaw: number, altitudeRaw: number;
+  let facingRaw: number, neutralRaw: number, upperBodyPitchRaw: number, torsoYawRaw: number, speedRaw: number;
+  [xRaw,            off] = decodeArgType3(payload, off);
+  [yRaw,            off] = decodeArgType3(payload, off);
+  [altitudeRaw,     off] = decodeArgType2(payload, off);
+  [facingRaw,       off] = decodeArgType1(payload, off);
+  [neutralRaw,      off] = decodeArgType1(payload, off);
+  [upperBodyPitchRaw, off] = decodeArgType1(payload, off);
+  [torsoYawRaw,     off] = decodeArgType1(payload, off);
+  [speedRaw,          ] = decodeArgType1(payload, off);
   return {
     seq: payload[1] - 0x21,
-    xRaw, yRaw, headingRaw,
-    turnMomRaw, neutralRaw, throttleRaw, legVelRaw, rotationRaw,
+    xRaw, yRaw, altitudeRaw,
+    facingRaw, neutralRaw, upperBodyPitchRaw, torsoYawRaw, speedRaw,
   };
 }
 

@@ -2626,25 +2626,32 @@ Encodes `value` into `2×n` bytes using base-85 (each pair of chars encodes one 
 - Full packet every **100 ms** (`param_3 − _DAT_00478d90 ≥ 100`)
 - Partial buffer flush at **50 ms** if output buffer already has pending bytes
 
-**Velocity accumulators (written by keyboard input handlers):**
+**Upper-body / facing accumulators (written by combat input handlers):**
 
 | Global | Divisor | Meaning |
 |--------|---------|---------|
-| `DAT_004f1f7a` | `÷ 0xb6 (182)` | `sVar1` — leg velocity (forward/back) |
-| `DAT_004f1f7c` | `÷ 0xb6 (182)` | `sVar2` — throttle velocity |
-| `DAT_004f1d5c` | `− 0x3ffc, ÷ 0xb6` | positional adjustment (`sVar4`) |
+| `DAT_004f1f7a` | `÷ 0xb6 (182)` | torso-yaw / upper-body heading offset |
+| `DAT_004f1f7c` | `÷ 0xb6 (182)` | upper-body pitch / bend |
+| `DAT_004f1d5c` | `− 0x3ffc, ÷ 0xb6` | chassis-facing accumulator |
 
 Accumulator clamp: `±0x1ffe` (±8190). Bias applied before encoding: `+0xe1c` (3612), which centres the signed range into `[0..7224]` (= 85²−1, the base-85 single-word range).
 
 Rotation/heading value: `iVar5 = FUN_0042c7a0(...)` (fixed-point heading calculator).
 
-**Keyboard input chain:**
+**Input chain:**
 ```
 KeyDown → FUN_0040d090 / FUN_0040d0f0 (key state readers)
-         → FUN_0040d270 (leg accumulator → DAT_004f1f7a)
-         → FUN_0040d2d0 (throttle accumulator → DAT_004f1f7c)
+         → FUN_0040d270 (torso-yaw accumulator → DAT_004f1f7a)
+         → FUN_0040d2d0 (upper-body pitch accumulator → DAT_004f1f7c)
 FUN_00447f70 (arrow-key dispatcher) also calls FUN_0043b110 to set dirty flag
 ```
+
+Fresh 2026-04-22 correction from deeper Ghidra work:
+
+- the client→server `cmd8/cmd9` layout is `x`, `y`, `type2 altitude`, `type1 facing`, optional neutral filler, `DAT_004f1f7c`, `DAT_004f1f7a`, then the real speed from `FUN_0042c7a0`
+- the earlier "leg velocity / throttle velocity" names in this section were provisional and are now superseded by the upper-body pitch / torso-yaw interpretation above
+- `FUN_00446e40` draws `DAT_004f1d5c` and `DAT_004f1d5c + DAT_004f1f7a` separately on the combat heading tape, confirming `DAT_004f1f7a` is the torso-yaw offset rather than a locomotion scalar
+- `FUN_0040d270` / `FUN_0040d2d0` clamp both upper-body channels to `+/-0x1ffe`, which is about `+/-45 deg` in the client's `value * 10 / 0xb6` display scale
 
 **Cmd 8 — Coasting (`sVar1 == 0 AND sVar2 == 0`):**
 ```
@@ -5643,9 +5650,11 @@ formula.
 
 Subsequent 2026-04-21 combat-bot tuning keeps the server bot inside that same
 movement envelope rather than letting the AI exploit looser prototype rules.
-Current bot retreat pacing also uses walk-capped reverse speed, its reverse
-throttle/leg-velocity echo is scaled from that capped retreat speed, and the
-bot's range/jump planning now scores only the **currently usable** loadout
+Current bot retreat pacing also uses walk-capped reverse speed, and later
+2026-04-22 packet-fidelity work replaced the bot's earlier locomotion-style
+`Cmd65` upper-body echoes with live torso-yaw plus elevation-derived pitch that
+stay inside the recovered `+/-0x1ffe` client aim window. The bot's range/jump
+planning now scores only the **currently usable** loadout
 (mounted weapon still intact, ammo still available) instead of stale mounted
 range alone. Bot TIC-style volley choice likewise now weighs expected hit chance
 and expected damage from the current movement state. These remain server
