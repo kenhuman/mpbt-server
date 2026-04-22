@@ -399,6 +399,22 @@ function rotateLocalPointToWorld(
   ];
 }
 
+export function projectCombatImpactToTargetLocalSpace(
+  context: CombatAttachmentImpactContext,
+): { forward: number; lateral: number; vertical: number } {
+  const angleRaw = (context.facingAccumulator + ROOT_FACING_OFFSET) & 0xffff;
+  const radians = angleRaw * (Math.PI * 2 / ANGLE_UNITS_PER_TURN);
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const dx = context.impactX - context.targetX;
+  const dy = context.impactY - context.targetY;
+  return {
+    forward: (dx * cos) + (dy * sin),
+    lateral: (-dx * sin) + (dy * cos),
+    vertical: context.impactZ - context.targetZ,
+  };
+}
+
 function squaredDistance3(a: Vec3, b: Vec3): number {
   const dx = a[0] - b[0];
   const dy = a[1] - b[1];

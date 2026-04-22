@@ -5120,6 +5120,10 @@ Step 6: Cmd65 timer (every 1000 ms) — keep bot position fresh
 - `COORD_BIAS = 0x18e4258` is added to all type3 world coordinates in Cmd65/Cmd72 payloads
 - Earlier `z=300000` bot-spawn notes in this section are stale. The later confirmed bot-spawn path uses `y=BOT_SPAWN_DISTANCE`, while the `Cmd65` handler work still points to the **third** coordinate field as airborne altitude.
 - Treat `x/y` as the arena ground plane and `z` as the current best-confirmed altitude field for `Cmd65`.
+- Fresh 2026-04-22 radar-calibration pass:
+  - `Combat_ActiveRound` (`FUN_004466c0`) projects actor radar deltas as `dx100 = trunc((actorX - localX) / 100)` and `dy100 = trunc((actorY - localY) / 100)`, then compares `FUN_0041ef20(dx100*dx100 + dy100*dy100)` against the selected radar-range value in `DAT_004ee948`
+  - `FUN_00425480` cycles `DAT_004ee948` through `50 / 100 / 300 / 800 / 2500`
+  - practical server implication: if `mpbt-server` wants its range math and spawn stand-off to match the client radar / range text, combat `x/y` should be calibrated as **100 world units per displayed meter**, not `1000`
 
 ---
 

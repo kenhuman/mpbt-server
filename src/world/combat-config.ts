@@ -11,8 +11,16 @@
 /** Baseline server-side durability counter used for simple bot/player estimates. */
 export const BOT_INITIAL_HEALTH = 100;
 
+/**
+ * Combat-world coordinate scale: the client radar/render path truncates each x/y
+ * delta by 100, then runs integer sqrt(dx^2 + dy^2) against the selected
+ * 50/100/300/800/2500 radar-range setting. That makes 100 combat world units
+ * correspond to 1 displayed meter.
+ */
+export const COMBAT_WORLD_UNITS_PER_METER = 100;
+
 /** Initial shared remote-actor stand-off distance in combat world units (1000m north). */
-export const BOT_SPAWN_DISTANCE = 1_000_000;
+export const BOT_SPAWN_DISTANCE = 1_000 * COMBAT_WORLD_UNITS_PER_METER;
 
 /** Initial single-player AI-bot stand-off distance in combat world units (1000m north). */
 export const BOT_AI_SPAWN_DISTANCE = BOT_SPAWN_DISTANCE;
@@ -24,9 +32,6 @@ export const BOT_AI_SPAWN_DISTANCE = BOT_SPAWN_DISTANCE;
 export const BOT_FALLBACK_WEAPON_DAMAGE = 5;
 
 // ── Jump jets ──────────────────────────────────────────────────────────────────
-
-/** Combat-world coordinate scale: 1000 units = 1 meter. */
-export const COMBAT_WORLD_UNITS_PER_METER = 1_000;
 
 /**
  * Fallback visible jump apex (meters) when a chassis has jump jets but no
@@ -64,10 +69,10 @@ export const JUMP_JET_FUEL_REGEN_PER_TICK = 10;
 // ── Collision-damage research probes ───────────────────────────────────────────
 
 /** Horizontal distance (combat world units) considered "close contact" for probe logging. */
-export const COLLISION_PROBE_HORIZONTAL_DISTANCE = 18_000;
+export const COLLISION_PROBE_HORIZONTAL_DISTANCE = 18 * COMBAT_WORLD_UNITS_PER_METER;
 
 /** Vertical tolerance for grounded overlap probes when neither actor is airborne. */
-export const COLLISION_PROBE_VERTICAL_TOLERANCE = 2_500;
+export const COLLISION_PROBE_VERTICAL_TOLERANCE = Math.round(2.5 * COMBAT_WORLD_UNITS_PER_METER);
 
 /** Cooldown between repeated collision-candidate probe logs for the same duel pair. */
 export const COLLISION_PROBE_LOG_COOLDOWN_MS = 1_500;

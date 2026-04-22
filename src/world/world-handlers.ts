@@ -95,6 +95,7 @@ import {
   type CombatAttachmentHitSection,
   findRepresentativeCombatAttachmentIdForSection,
   getCombatModelIdForMechId,
+  projectCombatImpactToTargetLocalSpace,
   resolveCombatAttachmentHitSection,
 } from '../data/mech-attachments.js';
 
@@ -2433,6 +2434,22 @@ function buildTargetImpactContext(
   };
 }
 
+function getModel13AttachProbeSuffix(
+  mechId: number | undefined,
+  attach: number,
+  impactContext: CombatAttachmentImpactContext | undefined,
+): string {
+  if (impactContext === undefined) return '';
+  if (getCombatModelIdForMechId(mechId) !== 13) return '';
+  if (attach !== 41 && attach !== 55) return '';
+
+  const localImpact = projectCombatImpactToTargetLocalSpace(impactContext);
+  return `:m13probe=local(${Math.round(localImpact.forward)},${Math.round(localImpact.lateral)},${Math.round(localImpact.vertical)})`
+    + `:target=${impactContext.targetX}/${impactContext.targetY}/${impactContext.targetZ}`
+    + `:impact=${impactContext.impactX}/${impactContext.impactY}/${impactContext.impactZ}`
+    + `:facing=${impactContext.facingAccumulator}`;
+}
+
 function shouldSpillUpperBodyHitToCenter(hitSection: CombatAttachmentHitSection): boolean {
   return hitSection.armorIndex === 0
     || hitSection.armorIndex === 1
@@ -2635,7 +2652,7 @@ function getShotMaxRangeGateForMechSlot(
     return { allowed: true, maxRangeMeters, weaponName };
   }
 
-  const distanceMeters = Math.hypot(sourceX - targetX, sourceY - targetY) / COMBAT_WORLD_UNITS_PER_METER;
+  const distanceMeters = getCombatDisplayDistanceMeters(sourceX, sourceY, targetX, targetY);
   return {
     allowed: distanceMeters <= maxRangeMeters,
     distanceMeters,
@@ -2662,6 +2679,44 @@ function getShotMaxRangeGate(
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function getCombatClientIntegerSqrt(value: number): number {
+  if (value < 2) {
+    return value;
+  }
+  let scaled = value;
+  let estimate = value;
+  if (value < 4) {
+    return 1;
+  }
+  while (scaled > 2) {
+    scaled = Math.trunc(scaled / 4);
+    estimate = Math.trunc(estimate / 2);
+  }
+  let delta = Math.abs(estimate - value);
+  while (delta > 1) {
+    const nextEstimate = estimate + Math.trunc((Math.trunc(value / estimate) - estimate) / 2);
+    delta = Math.abs(nextEstimate - estimate);
+    estimate = nextEstimate;
+  }
+  while ((estimate * estimate) > value) {
+    estimate -= 1;
+  }
+  return estimate;
+}
+
+function getCombatDisplayDistanceMeters(
+  sourceX: number,
+  sourceY: number,
+  targetX: number,
+  targetY: number,
+): number {
+  // Match the client radar exactly: truncate each axis delta by 100 world units
+  // first, then run the client's integer sqrt helper on dx^2 + dy^2.
+  const dxMeters = Math.trunc((sourceX - targetX) / COMBAT_WORLD_UNITS_PER_METER);
+  const dyMeters = Math.trunc((sourceY - targetY) / COMBAT_WORLD_UNITS_PER_METER);
+  return getCombatClientIntegerSqrt((dxMeters * dxMeters) + (dyMeters * dyMeters));
 }
 
 function speedMagToMetersPerSecond(speedMag: number): number {
@@ -4289,7 +4344,7 @@ function stepBotMovement(
   const dx = playerX - currentBotX;
   const dy = playerY - currentBotY;
   const distanceUnits = Math.hypot(dx, dy);
-  const distanceMeters = distanceUnits / COMBAT_WORLD_UNITS_PER_METER;
+  const distanceMeters = getCombatDisplayDistanceMeters(currentBotX, currentBotY, playerX, playerY);
   const rangeProfile = getBotWeaponRangeProfile(session);
   const currentRangeFitScore = getWeaponFitScoreForMechAtDistance(
     getBotMechId(session),
@@ -4575,7 +4630,7 @@ function stepBotWeaponFire(
     maybeLogBotAimLimit(session, connLog, botX, botY, botZ, targetX, targetY, targetZ, rawYaw, rawPitch);
     return;
   }
-  const distanceMeters = Math.hypot(botX - targetX, botY - targetY) / COMBAT_WORLD_UNITS_PER_METER;
+  const distanceMeters = getCombatDisplayDistanceMeters(botX, botY, targetX, targetY);
   const now = Date.now();
   const currentHeat = session.combatBotHeat ?? 0;
   const heatSinks = Math.max(1, botMechEntry.heatSinks ?? getBotHeatSinkCount(session));
@@ -5067,6 +5122,12 @@ export function resetCombatState(session: ClientSession): void {
   session.phase = 'world';
   session.botHealth = undefined;
   session.playerHealth = undefined;
+  session.combatX = undefined;
+  session.combatY = undefined;
+  session.combatFacingRaw = undefined;
+  session.combatUpperBodyPitch = undefined;
+  session.combatTorsoYaw = undefined;
+  session.combatSpeedMag = undefined;
   session.combatBotArmorValues = undefined;
   session.combatBotInternalValues = undefined;
   session.combatBotHeadArmor = undefined;
@@ -7713,6 +7774,14 @@ export function sendCombatBootstrapSequence(
   session.combatJumpActive = false;
   session.combatJumpAltitude = 0;
   session.combatJumpFuel = JUMP_JET_FUEL_MAX;
+  session.combatX = 0;
+  session.combatY = 0;
+  session.combatAltitudeRaw = 0;
+  session.combatFacingRaw = MOTION_NEUTRAL;
+  session.combatUpperBodyPitch = 0;
+  session.combatTorsoYaw = 0;
+  session.combatSpeedMag = 0;
+  session.combatLastMoveAt = undefined;
   session.combatMoveVectorX = 0;
   session.combatMoveVectorY = 0;
   session.combatLastCollisionProbeAt = undefined;
@@ -9277,7 +9346,7 @@ export function handleCombatWeaponFireFrame(
 
       totalDamageUpdates += allUpdates.length;
       shotSummaries.push(
-        `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${hitSection.label}:mech=${duelPeerMechId}:model=${getCombatModelIdForMechId(duelPeerMechId) ?? 'n/a'}:attach=${shot.targetAttach}:peerHealth=${duelPeer.playerHealth ?? 'n/a'}:headArmor=${duelPeerHeadArmor}:updates=${allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join('/') || 'none'}`,
+        `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${hitSection.label}:mech=${duelPeerMechId}:model=${getCombatModelIdForMechId(duelPeerMechId) ?? 'n/a'}:attach=${shot.targetAttach}:peerHealth=${duelPeer.playerHealth ?? 'n/a'}:headArmor=${duelPeerHeadArmor}:updates=${allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join('/') || 'none'}${getModel13AttachProbeSuffix(duelPeerMechId, shot.targetAttach, impactContext)}`,
       );
     }
 
@@ -9475,7 +9544,7 @@ export function handleCombatWeaponFireFrame(
         );
       }
       shotSummaries.push(
-        `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${getDisplayName(target)}:${hitSection.label}:mech=${targetMechId}:model=${targetModelId ?? 'n/a'}:attach=${shot.targetAttach}:health=${target.playerHealth}:updates=${allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join('/') || 'none'}`,
+        `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${getDisplayName(target)}:${hitSection.label}:mech=${targetMechId}:model=${targetModelId ?? 'n/a'}:attach=${shot.targetAttach}:health=${target.playerHealth}:updates=${allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join('/') || 'none'}${getModel13AttachProbeSuffix(targetMechId, shot.targetAttach, impactContext)}`,
       );
 
       if (isActorDestroyed(targetInternalValues)) {
@@ -9578,7 +9647,7 @@ export function handleCombatWeaponFireFrame(
       targetAirborne: session.combatBotJumpActive === true || botZ > 0,
       targetMoveVectorX: session.combatBotMoveVectorX,
       targetMoveVectorY: session.combatBotMoveVectorY,
-      distanceMeters: rangeGate.distanceMeters ?? Math.hypot((session.combatX ?? 0) - botX, (session.combatY ?? 0) - botY) / COMBAT_WORLD_UNITS_PER_METER,
+      distanceMeters: rangeGate.distanceMeters ?? getCombatDisplayDistanceMeters(session.combatX ?? 0, session.combatY ?? 0, botX, botY),
       weaponSpec,
       maxRangeMeters: rangeGate.maxRangeMeters,
     });
@@ -9644,7 +9713,7 @@ export function handleCombatWeaponFireFrame(
 
     totalDamageUpdates += allUpdates.length;
     shotSummaries.push(
-      `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${hitSection.label}:${shot.targetSlot}/${shot.targetAttach}:chance=${Math.round(hitRoll.chance * 100)}:roll=${Math.round(hitRoll.roll * 100)}:cross=${Math.round(hitRoll.crossingFactor * 100)}:bot=${botX}/${botY}:headArmor=${botHeadArmor}:updates=${allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join('/') || 'none'}`,
+      `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${hitSection.label}:${shot.targetSlot}/${shot.targetAttach}:chance=${Math.round(hitRoll.chance * 100)}:roll=${Math.round(hitRoll.roll * 100)}:cross=${Math.round(hitRoll.crossingFactor * 100)}:bot=${botX}/${botY}:headArmor=${botHeadArmor}:updates=${allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join('/') || 'none'}${getModel13AttachProbeSuffix(botMechId, shot.targetAttach, impactContext)}`,
     );
   }
 
