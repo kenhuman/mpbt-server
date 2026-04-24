@@ -3,7 +3,7 @@
     {
       "roomId": 161,
       "_name": "Wasteland",
-      "description": "This grim, deadly jungle of abandoned manufacturing plants, warehouses, foundries and offices hold only the desperate, luckless and ruthless, who accept the brutal living conditions as the price of a great hiding place. The street layout is complex.",
+      "description": "You are in a sad little shop called Froglover's Pizza, which appears to have a dearth of customers. To the south you see a public data terminal. To the west you see the Via Dolorosa.",
       "type": "street",
       "sector": "montenegro",
       "icon": 53,
@@ -20,7 +20,7 @@
     {
       "roomId": 151,
       "_name": "Kobe Slums",
-      "description": "Despite Kobe's general high standard of living, some still live in poverty, pursued by the demons of gambling addiction and crime. The street layout is complex.",
+      "description": "You are relieved of your weapons at the door by a big guy in a fuzzy suit. To the east you see the intersection of Yamato and Proserpina St. To the west you see a data terminal.",
       "type": "street",
       "sector": "kobe",
       "icon": 57,
@@ -28,7 +28,7 @@
         "north": null,
         "south": 2011,
         "west": null,
-        "east": null
+        "east": 2005
       },
       "_gridCol": 7,
       "_gridRow": 6,
@@ -37,15 +37,15 @@
     {
       "roomId": 157,
       "_name": "Factory",
-      "description": "A refitted shuttle production facility, The Factory has enjoyed remarkable success despite its small size and lack of sophistication.  Situated within the industrial sector, it draws consistent crowds, who suffer the cramped conditions gladly. The street layout is very simple.",
+      "description": "You are in a bar called The Reiver. To the east you see a public data terminal. To the west you see Montenegro Street.",
       "type": "arena",
       "sector": "montenegro",
       "icon": 12,
       "exits": {
         "north": null,
         "south": 2049,
-        "west": null,
-        "east": 2129
+        "west": 2129,
+        "east": null
       },
       "_gridCol": 20,
       "_gridRow": 6,
@@ -57,23 +57,23 @@
       "sector": "montenegro",
       "exits": {
         "north": null,
-        "south": null,
-        "west": 157,
-        "east": 2130
+        "south": 2130,
+        "west": null,
+        "east": 157
       },
       "_gridCol": 21,
       "_gridRow": 6,
       "icon": 51,
-      "_name": "Road"
+      "_name": "Montenegro Street"
     },
     {
       "roomId": 2130,
       "type": "street",
       "sector": "montenegro",
       "exits": {
-        "north": null,
+        "north": 2129,
         "south": null,
-        "west": 2129,
+        "west": null,
         "east": 2131
       },
       "_gridCol": 22,
@@ -109,20 +109,20 @@
       "_gridCol": 24,
       "_gridRow": 6,
       "icon": 53,
-      "_name": "Road"
+      "_name": "Via Dolorosa"
     },
     {
       "roomId": 149,
       "_name": "White Lotus",
-      "description": "The standard of living in White Lotus is second only to the Chancellor's Quarter in Cathay, and security in the district is the best on the planet. The street layout is of average complexity.",
+      "description": "You are in the Snowbird. To the north you see Buckminster Circle. To the east you see a public data terminal.",
       "type": "bar",
       "sector": "kobe",
       "icon": 26,
       "exits": {
-        "north": null,
-        "south": null,
+        "north": 2094,
+        "south": 2009,
         "west": null,
-        "east": 2094
+        "east": null
       },
       "_gridCol": 3,
       "_gridRow": 7,
@@ -134,14 +134,14 @@
       "sector": "kobe",
       "exits": {
         "north": null,
-        "south": 2009,
-        "west": 149,
+        "south": 149,
+        "west": null,
         "east": null
       },
       "_gridCol": 4,
       "_gridRow": 7,
       "icon": 50,
-      "_name": "Road"
+      "_name": "Buckminster Circle"
     },
     {
       "roomId": 2011,
@@ -161,7 +161,7 @@
     {
       "roomId": 148,
       "_name": "Government House",
-      "description": "With a sweeping view of War Memorial Park, this district is the center of civil administration for the sector. The stately white Government House is the official home of the Kobe governor. The street layout is simple.",
+      "description": "You are in the Marauder Bar. To the north you see a public data terminal. To the south you see Yamato St.",
       "type": "terminal",
       "sector": "kobe",
       "icon": 45,
@@ -285,7 +285,7 @@
       "type": "street",
       "sector": "kobe",
       "exits": {
-        "north": 2094,
+        "north": 149,
         "south": 2010,
         "west": null,
         "east": 2008
@@ -365,7 +365,7 @@
         "north": null,
         "south": null,
         "west": 2003,
-        "east": 2005
+        "east": null
       },
       "_gridCol": 9,
       "_gridRow": 8,
@@ -379,13 +379,13 @@
       "exits": {
         "north": 148,
         "south": 2006,
-        "west": 2004,
+        "west": 151,
         "east": 2046
       },
       "_gridCol": 10,
       "_gridRow": 8,
       "icon": 50,
-      "_name": "Road"
+      "_name": "Yamato St"
     },
     {
       "roomId": 2046,
@@ -400,7 +400,7 @@
       "_gridCol": 11,
       "_gridRow": 8,
       "icon": 56,
-      "_name": "Road"
+      "_name": "Proserpina St"
     },
     {
       "roomId": 2045,
@@ -552,7 +552,7 @@
       "_gridCol": 4,
       "_gridRow": 9,
       "icon": 54,
-      "_name": "Road"
+      "_name": "Robert Kurita St"
     },
     {
       "roomId": 2006,
@@ -602,7 +602,7 @@
     {
       "roomId": 159,
       "_name": "Allman",
-      "description": "The common people's residential area is every bit as bleak and charmless as the rest of Montenegro, with anonymous high-rises and row houses as the rule. The street layout is of average complexity.",
+      "description": "You are in Brit's. To the south you see the Via Dolorosa. To the east you see a public data terminal.",
       "type": "street",
       "sector": "montenegro",
       "icon": 54,
@@ -619,7 +619,7 @@
     {
       "roomId": 150,
       "_name": "Waterfront",
-      "description": "Shrines, parks and statuary line the immaculate waterfront of Kobe. The high security is used to advantage by the crime bosses for their meetings, much to the exasperation of the Kobe upper-class. The street layout is of average complexity.",
+      "description": "You are in The Silver Claw. To the north you see Robert Kurita St. To the west you see a public data terminal.",
       "type": "bar",
       "sector": "kobe",
       "icon": 46,
@@ -666,7 +666,7 @@
     {
       "roomId": 147,
       "_name": "Ishiyama Arena",
-      "description": "Iron Mountain, the centerpiece of Kobe and the destination of thousands of game fans each week, stands here. Ishiyama is perhaps the most feared arena by Mechwarriors, perhaps accounting for its consistently high ratings and huge waiting list. The street layout is very simple.",
+      "description": "You are in a bar called The Paradise. To the east you see Theodore Kurita St. To the west you see a public data terminal.",
       "type": "arena",
       "sector": "kobe",
       "icon": 28,
@@ -693,7 +693,7 @@
       "_gridCol": 11,
       "_gridRow": 10,
       "icon": 57,
-      "_name": "Road"
+      "_name": "Theodore Kurita St"
     },
     {
       "roomId": 2073,
@@ -708,7 +708,7 @@
       "_gridCol": 12,
       "_gridRow": 10,
       "icon": 56,
-      "_name": "Road"
+      "_name": "North Theodore Kurita St"
     },
     {
       "roomId": 2074,
@@ -733,12 +733,12 @@
         "north": null,
         "south": null,
         "west": 2074,
-        "east": 2076
+        "east": null
       },
       "_gridCol": 14,
       "_gridRow": 10,
       "icon": 53,
-      "_name": "Road"
+      "_name": "West Bolivar St"
     },
     {
       "roomId": 2076,
@@ -747,26 +747,26 @@
       "exits": {
         "north": null,
         "south": null,
-        "west": 2075,
-        "east": 158
+        "west": 158,
+        "east": null
       },
       "_gridCol": 15,
       "_gridRow": 10,
       "icon": 54,
-      "_name": "Road"
+      "_name": "Bolivar St"
     },
     {
       "roomId": 158,
       "_name": "Marik Tower",
-      "description": "This brand-new mountain of glass and steel bears the Marik eagle proudly over its main entrance, and is the center of Montenegro civic authority, as well as the diplomatic and governmental quarter of the sector. The street layout is simple.",
+      "description": "You are in The Home Guard Club. To the east you see Bolivar St. To the west you see a public data terminal.",
       "type": "terminal",
       "sector": "montenegro",
       "icon": 17,
       "exits": {
         "north": 2050,
         "south": 2133,
-        "west": 2076,
-        "east": null
+        "west": null,
+        "east": 2076
       },
       "_gridCol": 16,
       "_gridRow": 10,
@@ -800,7 +800,7 @@
       "_gridCol": 8,
       "_gridRow": 11,
       "icon": 54,
-      "_name": "Road"
+      "_name": "Frances Ave"
     },
     {
       "roomId": 2077,
@@ -850,13 +850,13 @@
     {
       "roomId": 160,
       "_name": "Riverfront",
-      "description": "A place of burned-out warehouses and the twisted remains of dock cranes and loaders, the Riverfront, like the Wasteland, is home to numerous gangs, squatters and other criminals. The street layout is of average complexity.",
+      "description": "You are in Hangar 66. To the north you see Reisman St. To the south you see a public data terminal.",
       "type": "street",
-      "sector": "silesia",
+      "sector": "montenegro",
       "icon": 53,
       "exits": {
-        "north": null,
-        "south": 2112,
+        "north": 2112,
+        "south": null,
         "west": null,
         "east": null
       },
@@ -867,7 +867,7 @@
     {
       "roomId": 2147,
       "type": "street",
-      "sector": "kobe",
+      "sector": "blackhills",
       "exits": {
         "north": null,
         "south": 2148,
@@ -897,9 +897,9 @@
     {
       "roomId": 170,
       "_name": "Marina",
-      "description": "This opulent district is the resort of many wealthy Davions, who keep their yachts (or floating palaces) here for parties and getaways. The street layout is of average complexity.",
+      "description": "You are in the Pelican. To the north you see Frances Ave. To the south you see a public data terminal.",
       "type": "bar",
-      "sector": "kobe",
+      "sector": "blackhills",
       "icon": 1,
       "exits": {
         "north": 2087,
@@ -959,17 +959,17 @@
     {
       "roomId": 2112,
       "type": "street",
-      "sector": "silesia",
+      "sector": "montenegro",
       "exits": {
-        "north": 160,
-        "south": 2111,
+        "north": null,
+        "south": 160,
         "west": null,
-        "east": null
+        "east": 2111
       },
       "_gridCol": 20,
       "_gridRow": 12,
       "icon": 52,
-      "_name": "Road"
+      "_name": "Reisman St"
     },
     {
       "roomId": 2148,
@@ -984,7 +984,7 @@
       "_gridCol": 6,
       "_gridRow": 13,
       "icon": 52,
-      "_name": "Road"
+      "_name": "East Frances Ave"
     },
     {
       "roomId": 2079,
@@ -1054,7 +1054,7 @@
         "north": null,
         "south": 2120,
         "west": 2082,
-        "east": 2084
+        "east": null
       },
       "_gridCol": 14,
       "_gridRow": 13,
@@ -1068,26 +1068,26 @@
       "exits": {
         "north": null,
         "south": null,
-        "west": 2083,
-        "east": 165
+        "west": 165,
+        "east": null
       },
       "_gridCol": 15,
       "_gridRow": 13,
       "icon": 53,
-      "_name": "Road"
+      "_name": "Capellan St"
     },
     {
       "roomId": 165,
       "_name": "Rivertown",
-      "description": "The lowest level of the Cathay slums lies along this filthy stretch of water, and the houseboats and shacks on rickety piers frequently crowd as many as ten adults into a single cramped room. The street layout is of average complexity.",
+      "description": "You are in the Cobalt Coil. To the east you see Capellan St. To the west you see a public data terminal.",
       "type": "street",
-      "sector": "montenegro",
+      "sector": "cathay",
       "icon": 51,
       "exits": {
         "north": 2134,
         "south": 2116,
-        "west": 2084,
-        "east": null
+        "west": null,
+        "east": 2084
       },
       "_gridCol": 16,
       "_gridRow": 13,
@@ -1100,7 +1100,7 @@
       "exits": {
         "north": 2054,
         "south": 2114,
-        "west": null,
+        "west": 2056,
         "east": null
       },
       "_gridCol": 18,
@@ -1113,9 +1113,9 @@
       "type": "street",
       "sector": "silesia",
       "exits": {
-        "north": 2112,
+        "north": null,
         "south": 2110,
-        "west": null,
+        "west": 2112,
         "east": 2105
       },
       "_gridCol": 20,
@@ -1136,7 +1136,7 @@
       "_gridCol": 21,
       "_gridRow": 13,
       "icon": 48,
-      "_name": "Road"
+      "_name": "Fraunstalh St"
     },
     {
       "roomId": 2104,
@@ -1171,7 +1171,7 @@
     {
       "roomId": 153,
       "_name": "Lyran Building",
-      "description": "The armored fist of House Steiner graces the entrance to this grim, gray structure, where Lyran officials administer their sector of Solaris. The street layout is of average complexity.",
+      "description": "You are in the Vindictive Philanthropist, writing bad checks to charity. To the north you see a public data terminal. To the south you see Arnulf St.",
       "type": "terminal",
       "sector": "silesia",
       "icon": 17,
@@ -1198,7 +1198,7 @@
       "_gridCol": 6,
       "_gridRow": 14,
       "icon": 54,
-      "_name": "Road"
+      "_name": "Laurel Ave"
     },
     {
       "roomId": 2123,
@@ -1208,7 +1208,7 @@
         "north": 2080,
         "south": 167,
         "west": null,
-        "east": null
+        "east": 2122
       },
       "_gridCol": 11,
       "_gridRow": 14,
@@ -1222,8 +1222,8 @@
       "exits": {
         "north": 2083,
         "south": 2136,
-        "west": null,
-        "east": null
+        "west": 2121,
+        "east": 2119
       },
       "_gridCol": 14,
       "_gridRow": 14,
@@ -1233,11 +1233,11 @@
     {
       "roomId": 2116,
       "type": "street",
-      "sector": "montenegro",
+      "sector": "cathay",
       "exits": {
         "north": 165,
         "south": 2117,
-        "west": null,
+        "west": 2119,
         "east": 2115
       },
       "_gridCol": 16,
@@ -1248,7 +1248,7 @@
     {
       "roomId": 2115,
       "type": "street",
-      "sector": "silesia",
+      "sector": "cathay",
       "exits": {
         "north": null,
         "south": 166,
@@ -1263,7 +1263,7 @@
     {
       "roomId": 2114,
       "type": "street",
-      "sector": "silesia",
+      "sector": "cathay",
       "exits": {
         "north": 2055,
         "south": null,
@@ -1278,7 +1278,7 @@
     {
       "roomId": 2113,
       "type": "street",
-      "sector": "silesia",
+      "sector": "cathay",
       "exits": {
         "north": null,
         "south": null,
@@ -1288,7 +1288,7 @@
       "_gridCol": 19,
       "_gridRow": 14,
       "icon": 51,
-      "_name": "Road"
+      "_name": "Alley off Maximilian Ave"
     },
     {
       "roomId": 2110,
@@ -1308,7 +1308,7 @@
     {
       "roomId": 155,
       "_name": "Riverside",
-      "description": "Within sight of Cathay River Town, the Silesian waterfront is the location of numerous high-class hotels and condominiums. The street layout is of average complexity.",
+      "description": "You are in the Swooping Crane. To the north you see Fraunstalh St. To the south you see a public data terminal.",
       "type": "bar",
       "sector": "silesia",
       "icon": 46,
@@ -1325,14 +1325,14 @@
     {
       "roomId": 171,
       "_name": "Viewpoint",
-      "description": "This magnificent vantage point looks out over the whole of Solaris City, and plaques and memorials point out the sights to the masses of tourists. The street layout is complex.",
+      "description": "You are in the Cryptic Skeptic, though probably not for too much longer...considering. To the north you see a public data terminal. To the west you see a busy pedestrian interchange.",
       "type": "street",
       "sector": "blackhills",
       "icon": 53,
       "exits": {
         "north": 2149,
-        "south": 2145,
-        "west": null,
+        "south": null,
+        "west": 2145,
         "east": null
       },
       "_gridCol": 6,
@@ -1387,9 +1387,9 @@
     {
       "roomId": 167,
       "_name": "Davion Arena",
-      "description": "The Davion Arena is the largest and most sophisticated Arena on Solaris, seating half again as many as its nearest rival. This ultra-modern edifice towers over the defunct industrial park in which it was built. The street layout is very simple.",
+      "description": "You are in The Sun and Sword, one of the older bars in the city. To the east you see Halloran St. To the west you see a public data terminal.",
       "type": "arena",
-      "sector": "silesia",
+      "sector": "blackhills",
       "icon": 32,
       "exits": {
         "north": 2123,
@@ -1414,7 +1414,7 @@
       "_gridCol": 12,
       "_gridRow": 15,
       "icon": 53,
-      "_name": "Road"
+      "_name": "Halloran St"
     },
     {
       "roomId": 2137,
@@ -1434,7 +1434,7 @@
     {
       "roomId": 2136,
       "type": "street",
-      "sector": "silesia",
+      "sector": "cathay",
       "exits": {
         "north": 2120,
         "south": null,
@@ -1449,7 +1449,7 @@
     {
       "roomId": 2135,
       "type": "street",
-      "sector": "silesia",
+      "sector": "cathay",
       "exits": {
         "north": null,
         "south": null,
@@ -1464,7 +1464,7 @@
     {
       "roomId": 2117,
       "type": "street",
-      "sector": "silesia",
+      "sector": "cathay",
       "exits": {
         "north": 2116,
         "south": 2118,
@@ -1479,9 +1479,9 @@
     {
       "roomId": 166,
       "_name": "Maze",
-      "description": "The absolute center of Cathay's crome and poverty, this twosting labyrinth of streets, burned-out storefronts, decayed shacks, tottering tenements, bars and opium dens is home to many of the area's major gangs and crime families. The street layout is complex.",
+      "description": "You are in Belthasar's Hideaway, where you had better keep looking over your shoulder and keep your back to the wall. To the north you see a public data terminal. To the south you see Confederation Ave. running east and west.",
       "type": "street",
-      "sector": "silesia",
+      "sector": "cathay",
       "icon": 54,
       "exits": {
         "north": 2115,
@@ -1513,15 +1513,15 @@
       "type": "street",
       "sector": "blackhills",
       "exits": {
-        "north": 171,
+        "north": null,
         "south": 2144,
         "west": null,
-        "east": null
+        "east": 171
       },
       "_gridCol": 6,
       "_gridRow": 16,
       "icon": 54,
-      "_name": "Road"
+      "_name": "Hanse Davion Dr"
     },
     {
       "roomId": 2142,
@@ -1566,7 +1566,7 @@
       "_gridCol": 16,
       "_gridRow": 16,
       "icon": 57,
-      "_name": "Road"
+      "_name": "Confederation Ave"
     },
     {
       "roomId": 2027,
@@ -1574,14 +1574,14 @@
       "sector": "silesia",
       "exits": {
         "north": 2028,
-        "south": 152,
-        "west": null,
+        "south": null,
+        "west": 152,
         "east": null
       },
       "_gridCol": 21,
       "_gridRow": 16,
       "icon": 47,
-      "_name": "Road"
+      "_name": "Dusseldorf Street"
     },
     {
       "roomId": 2144,
@@ -1601,7 +1601,7 @@
     {
       "roomId": 169,
       "_name": "Guzman Park",
-      "description": "The centerpiece of the Black Hill's residential district, the winding trails and sports fields of this heavily forested park become virtual battlegrounds after dark as slum gangs fight their turf wars. The street layout is of average complexity.",
+      "description": "You are in Skippy's Fern Bar. A classy joint where warriors meet to drink and tell lies about their battles. Skippy's is known for serving the best. To the south you see Swift Shore Drive. To the west you see a public data terminal.",
       "type": "street",
       "sector": "blackhills",
       "icon": 53,
@@ -1693,7 +1693,7 @@
     {
       "roomId": 162,
       "_name": "Jungle",
-      "description": "The Jungle rises above the Cathay slums, a tribute to the greatness of House Liao amid the pathetic tenements of the teeming masses. Its lush interior is in stark contrast to the intimidating bulk of this massive ferrocrete pyramidal stadium.. The street layout is very simple.",
+      "description": "You are in a bar. To the north you see Confederation Ave. To the south you see a public data terminal.",
       "type": "arena",
       "sector": "cathay",
       "icon": 31,
@@ -1770,15 +1770,15 @@
     {
       "roomId": 152,
       "_name": "Steiner Stadium",
-      "description": "Looking like a tremendous Roman coliseum, Steiner Stadium is the only arena to offer seating within the actual arena for spectators, and utilizes lostech to protect them from weapons fire and explosions from the fierce battles taking place within this neoclassical edifice. The street layout is very simple.",
+      "description": "You are in a bar called the Copper Coin. To the east you see Dusseldorf Street. To the west you see a public data terminal.",
       "type": "arena",
       "sector": "silesia",
       "icon": 29,
       "exits": {
-        "north": 2027,
+        "north": null,
         "south": 2021,
         "west": 2095,
-        "east": null
+        "east": 2027
       },
       "_gridCol": 21,
       "_gridRow": 17,
@@ -1787,7 +1787,7 @@
     {
       "roomId": 168,
       "_name": "Sortek Building",
-      "description": "The ugly brick Sortek Building characterizes much of this district, heavy on administrative muscle and rather short on style. The street layout is simple.",
+      "description": "You are an exclusive establishment called Seventh Heaven. To the south you see Hanse Davion Ave. To the east you see a public data terminal.",
       "type": "terminal",
       "sector": "blackhills",
       "icon": 17,
@@ -1829,7 +1829,7 @@
       "_gridCol": 8,
       "_gridRow": 18,
       "icon": 53,
-      "_name": "Road"
+      "_name": "Swift Shore Drive"
     },
     {
       "roomId": 2037,
@@ -1889,7 +1889,7 @@
       "_gridCol": 5,
       "_gridRow": 19,
       "icon": 53,
-      "_name": "Road"
+      "_name": "Hanse Davion Ave"
     },
     {
       "roomId": 2068,
@@ -1924,7 +1924,7 @@
     {
       "roomId": 164,
       "_name": "Middletown",
-      "description": "The middle-class of Cathay enjoy a relatively comfortable existence here, positioned between the crime and poverty of the slums and the wealth and influence of the upper-class Liaoists. The street layout is of average complexity.",
+      "description": "You are in The Bitter Pool, where bitterness is not just a state of mind, but a way of life. Whenever you get bitter, come down to The Bitter Pool. To the east you see Solaris Highway One. To the west you see a public data terminal.",
       "type": "street",
       "sector": "cathay",
       "icon": 57,
@@ -2086,7 +2086,7 @@
       "_gridCol": 17,
       "_gridRow": 20,
       "icon": 48,
-      "_name": "Road"
+      "_name": "Solaris Highway One"
     },
     {
       "roomId": 2014,
@@ -2213,7 +2213,7 @@
     {
       "roomId": 146,
       "_name": "Solaris Starport",
-      "description": "This area, composed primarily of public-works installations and tourist areas, is under the direct control of the Solaris central authority. There are no arenas in this sector.",
+      "description": "Click on the stone arch icon to the east for a tutorial if you are new to Solaris City and need help. Click on the tram icon to the south if you know your way around and you're ready to go find a fight. Remember players with [MPBT] in front of their names are the game staff. They will help to teach you the game. Other players that want to train you or that want you to join their group may not have the best intentions.",
       "type": "hub",
       "sector": "international",
       "icon": 4,
@@ -2373,7 +2373,7 @@
       "icon": 36,
       "exits": {
         "north": 2019,
-        "south": 2062,
+        "south": null,
         "west": null,
         "east": 2057
       },
@@ -2386,7 +2386,7 @@
       "type": "street",
       "sector": "cathay",
       "exits": {
-        "north": null,
+        "north": 2062,
         "south": null,
         "west": 5,
         "east": 2058
@@ -2529,12 +2529,12 @@
       "_gridCol": 24,
       "_gridRow": 22,
       "icon": 52,
-      "_name": "Road"
+      "_name": "Vialla Circle"
     },
     {
       "roomId": 154,
       "_name": "Chahar Park",
-      "description": "The man-made lake at the center of the park is well-loved by boaters and picnickers, but night brings muggers and drug dealers, who have thus far resisted the stepped-up patrols instituted by F-C security forces. The street layout is simple.",
+      "description": "You are in Thor's Shieldhall. To the south you see a public data terminal. To the west you see Vialla Circle.",
       "type": "street",
       "sector": "silesia",
       "icon": 45,
@@ -2568,15 +2568,15 @@
       "type": "street",
       "sector": "cathay",
       "exits": {
-        "north": 5,
-        "south": 163,
+        "north": 163,
+        "south": 2057,
         "west": null,
         "east": null
       },
       "_gridCol": 14,
       "_gridRow": 23,
       "icon": 57,
-      "_name": "Road"
+      "_name": "Maximilian Ave"
     },
     {
       "roomId": 2128,
@@ -2596,7 +2596,7 @@
     {
       "roomId": 2031,
       "type": "street",
-      "sector": "cathay",
+      "sector": "silesia",
       "exits": {
         "north": 2030,
         "south": 156,
@@ -2606,7 +2606,7 @@
       "_gridCol": 20,
       "_gridRow": 23,
       "icon": 48,
-      "_name": "Road"
+      "_name": "Arnulf St"
     },
     {
       "roomId": 2000,
@@ -2625,14 +2625,14 @@
     },
     {
       "roomId": 163,
-      "_name": "Chancellor's Quarters",
-      "description": "A stark contrast to the slums below, the Chancellor's Quarter is home to Cathay's elite. Boasting the highest standard of living in Solaris City, gleaming towers and rambling estates are the rule here. The street layout is simple.",
+      "_name": "Chancellor's Quarter",
+      "description": "You are in Warrior's Hall. To the south you see Maximilian Ave. To the east you see a public data terminal.",
       "type": "terminal",
       "sector": "cathay",
       "icon": 45,
       "exits": {
-        "north": 2062,
-        "south": null,
+        "north": null,
+        "south": 2062,
         "west": null,
         "east": null
       },
@@ -2658,7 +2658,7 @@
     {
       "roomId": 2126,
       "type": "street",
-      "sector": "cathay",
+      "sector": "silesia",
       "exits": {
         "north": null,
         "south": null,
@@ -2673,7 +2673,7 @@
     {
       "roomId": 2125,
       "type": "street",
-      "sector": "cathay",
+      "sector": "silesia",
       "exits": {
         "north": null,
         "south": null,
@@ -2683,34 +2683,34 @@
       "_gridCol": 18,
       "_gridRow": 24,
       "icon": 48,
-      "_name": "Road"
+      "_name": "North Dusseldorf St"
     },
     {
       "roomId": 2124,
       "type": "street",
-      "sector": "cathay",
+      "sector": "silesia",
       "exits": {
-        "north": null,
+        "north": 156,
         "south": null,
         "west": 2125,
-        "east": 156
+        "east": null
       },
       "_gridCol": 19,
       "_gridRow": 24,
       "icon": 49,
-      "_name": "Road"
+      "_name": "Marburg St"
     },
     {
       "roomId": 156,
-      "_name": "Black Throne",
-      "description": "Parts of this district live in relative comfort, but other areas still experience a high crime rate, and many citizens arm themselves for protection against the organized crime triads. The street layout is complex.",
+      "_name": "Black Thorne",
+      "description": "You are just in time. The mysterious \"Deadhead\" cult is having a reading. Plus, some woman named \"Sunshine\" keeps telling you you're \"beautiful.\" To the north you see a public data terminal. To the south you see the intersection of Arnulf St. and Marburg St.",
       "type": "street",
-      "sector": "cathay",
+      "sector": "silesia",
       "icon": 48,
       "exits": {
         "north": 2031,
-        "south": null,
-        "west": 2124,
+        "south": 2124,
+        "west": null,
         "east": null
       },
       "_gridCol": 20,
@@ -2742,10 +2742,11 @@
         "north": null,
         "south": null,
         "east": 2055,
-        "west": 165
+        "west": null
       },
       "_gridCol": 17,
-      "_gridRow": 13
+      "_gridRow": 13,
+      "_name": "Road"
     },
     {
       "roomId": 2119,
@@ -2758,7 +2759,8 @@
         "west": 2120
       },
       "_gridCol": 15,
-      "_gridRow": 14
+      "_gridRow": 14,
+      "_name": "Road"
     },
     {
       "roomId": 2121,
@@ -2771,7 +2773,8 @@
         "west": 2122
       },
       "_gridCol": 13,
-      "_gridRow": 14
+      "_gridRow": 14,
+      "_name": "Road"
     },
     {
       "roomId": 2122,
@@ -2784,7 +2787,8 @@
         "west": 2123
       },
       "_gridCol": 12,
-      "_gridRow": 14
+      "_gridRow": 14,
+      "_name": "Road"
     }
   ],
   "_schema": {

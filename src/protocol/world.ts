@@ -386,6 +386,19 @@ export function buildCmd14PersonnelRecordPacket(
   return buildGamePacket(14, buildCmd14Args(opts), false, seq);
 }
 
+// ── Cmd 8 — Menu Close ────────────────────────────────────────────────────────
+// CONFIRMED: World_Cmd08_MenuClose_v129 @ 0x00440780.
+//
+// Wire args:
+//   none
+//
+// Late-world clients use this as an explicit close/ack path for the active
+// menu-style surface before the next world child UI opens.
+
+export function buildCmd8MenuClosePacket(seq = 0): Buffer {
+  return buildGamePacket(8, Buffer.alloc(0), false, seq);
+}
+
 // ── Cmd 45 / Cmd 58 — Scroll-list shell ───────────────────────────────────────
 // Current best RE fit for paged Solaris ranking/result displays.
 //
@@ -482,6 +495,10 @@ export function buildCmd58SetScrollListIdPacket(listId: number, seq = 0): Buffer
 //   v1.23's Cmd46 rich info-panel was repurposed to
 //   World_Cmd46_ClearWorldUiChildren_v129. This server targets v1.29 and
 //   intentionally does not expose the old Cmd46 detail builder.
+
+export function buildCmd46ClearWorldUiChildrenPacket(seq = 0): Buffer {
+  return buildGamePacket(46, Buffer.alloc(0), false, seq);
+}
 
 // ── Cmd 17 — Scene-Action Response Family / Duel Terms ──────────────────────
 // CONFIRMED subtype 3 handler: World_HandleCmd5SceneActionSubtype3_v123 @ 0x0041e5b0.

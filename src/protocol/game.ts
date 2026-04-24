@@ -496,6 +496,32 @@ export function parseClientCmd7(
 }
 
 /**
+ * Parse a client-sent world cmd-29 control frame.
+ *
+ * CONFIRMED from MPBTWIN.EXE World_SendCmd1dControlFrame_v129:
+ *   [byte subtype] [type1 controlId] [type4 value]
+ *
+ * subtype=2 is the mouse/pointer submission path for ordinary Cmd7 menu dialogs.
+ */
+export function parseClientCmd29ControlFrame(
+  payload: Buffer,
+): { seq: number; subtype: number; controlId: number; value: number } | null {
+  if (payload.length < 14 || payload[0] !== 0x1B || !verifyInboundGameCRC(payload)) {
+    return null;
+  }
+
+  const seq = payload[1] - 0x21;
+  const cmd = payload[2] - 0x21;
+  if (cmd !== 29) return null;
+
+  const subtype = payload[3] - 0x21;
+  const [controlId, offset] = decodeArgType1(payload, 4);
+  const [value] = decodeArgType4(payload, offset);
+
+  return { seq, subtype, controlId, value };
+}
+
+/**
  * Parse a client-sent cmd-4 free-text frame.
  *
  * World chat uses a 2-byte type-1 length. Combat chat uses a 1-byte length
