@@ -26,7 +26,7 @@ contributors who want to extend or audit the server emulator.
 16. [Open Questions](#16-open-questions)
 17. [COMMEG32.DLL — Secondary Connection Protocol (M2 RE)](#17-commeg32dll--secondary-connection-protocol-m2-re)
 18. [Game World Protocol — MPBTWIN.EXE RE](#18-game-world-protocol--mpbtwinexe-re)
-19. [Client v1.23 Migration Notes](#19-client-v123-migration-notes)
+19. [Client Migration Notes](#19-client-migration-notes)
 20. [MEC File Binary Format](#20-mec-file-binary-format)
 21. [MAP File Leading Room Table](#21-map-file-leading-room-table)
 22. [Windowed Mode — DirectDraw Rendering Architecture](#22-windowed-mode--directdraw-rendering-architecture)
@@ -1178,6 +1178,13 @@ Combat-only entries (cmd 62–79, only non-null in combat table):
 
 ### 12.1 World UI / display-family map (2026-04-14)
 
+> **Version scope warning:** §12.1–§12.2 describe the **v1.23** world/RPS
+> client. The later `v1.29` client now targeted by `mpbt-server` diverges
+> materially in world slots `39`, `44`, `46`, and `57`, and also preserves a
+> Solaris mech-management family at `Cmd30` / `Cmd31` that is not reflected in
+> the older display-family summary below. See §19.4 before reusing these
+> mappings for `v1.29` server work.
+
 Not every RPS/world dispatch address is a real function start. Several entries
 (`17`, `21`–`24`, `44`, `46`–`47`, `50`–`51`, `61`) jump into interior labels of
 larger handlers. Even with that limitation, the inbound world-command table now
@@ -1191,6 +1198,19 @@ clusters into a few concrete UI families:
 | Scroll-list shell | `45`, `58` plus row-feed helpers | scrollable list with optional `Space` / `ESC` footer controls | Backed by `DAT_004e2620`. `Cmd58` latches the list id; `Cmd45` opens the shell; Enter on a populated row emits `Cmd7(listId, item_id + 1)`. |
 | Solaris map / scene overlays | `40`, `43`, `49`, `56`, `60`, `61` | map / overlay family | `Cmd40` / `Cmd43` open the Inner Sphere / Solaris maps; `Cmd49`, `Cmd56`, and `Cmd60` draw connectors/markers; `Cmd61` refreshes scene location icons after map/scene state changes. |
 | Scene status text | `39` | inline world status text | Updates the status/toast text region in the current world scene. |
+
+Important `v1.29` override for `mpbt-server` work: the later client **does not**
+keep the same meaning for every world slot above. Current migration RE now shows:
+
+- `Cmd39` is no longer the inline scene-status slot; in `v1.29` it is the
+  selectable **Buy Extra Ammo** list under Solaris mech management.
+- `Cmd44` is no longer the keyed single-string chooser; in `v1.29` it is a
+  location-distance-scale setter for the Solaris browser family.
+- `Cmd46` is no longer the richer ranking/personnel info-panel candidate; in
+  `v1.29` it is an explicit world-UI clear / browser-child teardown packet.
+- `Cmd57` is the strongest live `v1.29` chooser-family replacement, and
+  `Cmd30` / `Cmd31` survive as the preserved per-mech **Mech Status** /
+  component-maintenance pages above the repurposed `Cmd39`.
 
 ### 12.2 Sanctioned-duel ranking and results display-family inference
 
@@ -2454,10 +2474,12 @@ Offset  Ptr (LE32)   Resolved
 
 ---
 
-## 19. Client v1.23 Migration Notes
+## 19. Client Migration Notes
 
 > **Branch:** `feat/client-1.23` — all RE below is being re-verified against the 1.23 Ghidra project.
 > All function addresses throughout §1–§18 are from the **v1.06** binaries unless explicitly noted here.
+> The earlier material in this section is `v1.23`-centric; the `v1.29` deltas
+> that now matter for `mpbt-server` are summarized in §19.4.
 
 ### Binary metadata
 
@@ -2856,8 +2878,9 @@ Confirmed call sites:
     - `F12` pressed during the active collapse-animation window is expected to be ignored even if `Cmd70/8` already set the down latch
     - but this gate is **not** a long-lived timer and does **not** look like a one-frame blip either: once the callback fires, the bit should clear and stay clear while the actor remains parked on the collapse end pose
     - the double-`Cmd70/8` pattern in the live `legseq` probe can only restart that short animation-gate once; it does not explain the full multi-second absence of `cmd12/action0` by itself
-    - practical next probe: begin with a sustained `F12` hold shortly after the **last** observed `Cmd70/8` and continue for several seconds, then also test a rapid repeated-press burst in the same post-collapse window; that matches the recovered gate logic and the broader remembered retail interaction better than a single brief tap
-    - if that still yields no `cmd12/action0`, collapse-animation timing is effectively ruled out as the primary blocker, and the next best RE target is why state `8` never seems to leave the client in a truly recoverable local posture
+  - practical next probe: begin with a sustained `F12` hold shortly after the **last** observed `Cmd70/8` and continue for several seconds, then also test a rapid repeated-press burst in the same post-collapse window; that matches the recovered gate logic and the broader remembered retail interaction better than a single brief tap
+  - if that still yields no `cmd12/action0`, collapse-animation timing is effectively ruled out as the primary blocker, and the next best RE target is why state `8` never seems to leave the client in a truly recoverable local posture
+
 - Fresh 2026-04-19 collapse-trigger follow-up:
   - `FUN_0043b4a0` is now clearly the **state-8 collapse installer**, not the upstream cause:
     - it clears two posture/fall bits in the actor flag field
@@ -4894,6 +4917,26 @@ The exact labels for the early code ranges still need correlation against `.MEC`
 - Retail visible fall/recovery state still sits on the separate `Cmd70` sequence: `4` airborne, `8` immediate/deferred collapse, `6` landing resolution.
 - Server implication: `mpbt-server` now mirrors the minimum retail-fall experiment by sending class-2 internal updates, head criticals, conservative leg-actuator critical updates on first leg destruction, and a non-death `Cmd70/8` collapse transition. It still does **not** emit `Cmd73` rate-field packets or handle stand-up / `cmd12 action 0x15`, so recovery fidelity remains the next open slice.
 
+2026-04-22 death / destruction-tail follow-up on `Cmd70` and result handoff:
+
+- `Combat_Cmd70_ActorAnimState_v123` (`0x0040e700`) is the live combat animation/status driver for stand / fall / jump / collapse / destruction-style transitions.
+- `Cmd70` subcommand `8` is the confirmed **collapse start** path:
+  - it sets the collapse/deferred-collapse state,
+  - uses `Combat_StartFallDownAnim_SetRecoveryBlock_v123` (`0x0043b4a0`) for the immediate fall path,
+  - and reaches the nearby sound/effect helper chain that includes `FUN_00419100`.
+- `Cmd70` subcommand `0` is **not** just a neutral stand/reset command. When the actor is already in late collapse/death states, it advances into the destruction tail:
+  - current state `7` -> `FUN_0043b4e0` -> state `0xb`
+  - current state `8` -> `FUN_0043b500` -> state `0xc`
+  - current state `9` -> `FUN_0043b540` -> state `0xd` (with callback back toward the `0xb` path)
+  - current state `10` -> `FUN_0043b520` -> state `0xe` (also callback-linked toward `0xb`)
+- `Cmd70` subcommand `4` is **not** the post-death "wreck/explosion" transition. In the v1.23 client it is the airborne/jump helper, so using `8 -> 4` for destruction is the wrong shape.
+- Practical server implication: retail-shaped death animation should use **`Cmd70 8 -> 0`**, not `8 -> 4`.
+- Result-scene handoff is a separate packet-driven step:
+  - `Cmd75` (`FUN_00445820`) stores the match result selector (`0 = VICT`, `1 = LOST`) and enters the pending result path.
+  - `Cmd63` (`FUN_00445870`) then initializes the arena/result scene.
+  - Therefore `Cmd75/Cmd63` are **not** the live explosion/death animation; they are the later result-scene transition.
+- Heuristic asset cross-check (`MPBTWIN.EXE.c`) also shows distinct loaded audio resources for both explosion and ejection (`SOUND_EXPLD1..4_PCM`, `SOUND_EJECT_PCM`), but the exact live-binary eject animation path is still less certain than the kill/death path above.
+
 ---
 
 ### §19.7 — v1.23 IS.MAP / SOLARIS.MAP Binary Format (CONFIRMED)
@@ -5495,7 +5538,7 @@ rendering investigation and should be considered canonical names:
 
 ### §23.1 — Finding: No Server-to-Client "Match-End" Packet
 
-**The match-end transition is entirely client-driven.** There is no dedicated server→client combat command that signals "match over, show results screen." The client determines match outcome using its local combat simulation.
+**The client determines combat death locally, but the full post-match handoff is not entirely client-driven.** There is no single server→client "you died, explode now" packet; live death presentation is driven by local combat state plus `Cmd70` animation/status transitions. However, the later result-scene handoff is packet-assisted through `Cmd75` (result selector) followed by `Cmd63` (arena/result scene init).
 
 ---
 
@@ -5585,9 +5628,11 @@ Live packet capture is needed to confirm the exact IS component threshold and de
 
 ### §23.7 — Server Implementation Implications
 
-- **No match-end packet to send.** The server does not need to signal match-end.
+- **No single death packet to send.** The server does not need a dedicated "explode now / match over" packet beyond the normal damage and `Cmd70` transition path.
 - **WIN** is triggered automatically by client local simulation when the bot (seeded via `Cmd64`) dies from player weapon fire. The server should only ensure the bot has correct IS/HP seeded (see Issue #80).
 - **LOSS** is triggered when enough `Cmd67` damage drains an IS component on actor 0 to zero. Server should stop sending `Cmd67` once it estimates player HP is depleted.
+- **Live death presentation** should use the retail-shaped `Cmd70` destruction sequence (`8 -> 0`), not the older `8 -> 4` guess.
+- **Result scene** is a separate server-assisted step: send `Cmd75` to choose `VICT` / `LOST`, then `Cmd63` to enter the corresponding result scene.
 - **Cleanup**: The client closes the TCP connection itself (via `FUN_0040b3d0`) after the results screen. Server handles cleanup in the TCP-close handler.
 
 ---
@@ -5603,6 +5648,9 @@ Live packet capture is needed to confirm the exact IS component threshold and de
 | `Combat_ProjectileLoop` | `0x004409f0` | Iterates active projectiles; calls `FUN_00441130` on expiry |
 | `Combat_InputFlagSet` | `0x0040b4a0` | Generic bit-setter for `g_inputFlags` |
 | `Combat_KeyTranslator` | `0x0043d500` | Translates raw key scancode → flag index → `FUN_0040b4a0` |
+| `Combat_Cmd75_ResultSelector` | `0x00445820` | Stores `VICT` / `LOST` and enters pending result path |
+| `Combat_Cmd63_ResultSceneInit` | `0x00445870` | Initializes the arena/result scene after the selector |
+| `Combat_Cmd70_ActorAnimState` | `0x0040e700` | Live actor animation/status transition handler; collapse and destruction tail |
 | `Combat_TimerSet` | `0x004461c0` | Sets `g_disconnectTimer = now + N` (only if `g_exitState == 4`) |
 | `Combat_Disconnect` | `FUN_0040b3d0` | Closes TCP connection (called when timer fires) |
 | `Combat_ResultsPanel` | `0x00438170` | Renders the post-match results screen panel |
@@ -5730,5 +5778,129 @@ equilibrium depends on the `globalA/globalB` pair rather than `globalA` alone.
 | `FUN_0042c830` | `0x0042c830` | Velocity integrator; uses `DAT_004f56b4` (globalA) |
 | `FUN_0042cd20` | `0x0042cd20` | Ground drag; uses `DAT_004f56b4` (globalA) |
 | `FUN_004229a0` | `0x004229a0` | Client-local throttle target update (KP8/KP2 path) |
+
+### §19.4 — v1.29 client migration deltas (2026-04-23)
+
+This is the part of the migration story that currently matters most for
+`mpbt-server`: **the transport/launcher side is largely unchanged, while the
+world/Solaris UI routing is not.**
+
+#### High-confidence baseline
+
+- Baseline binaries compared:
+  - `v1.23`: `C:\MPBT\Mpbtwin.exe` (`FileVersion 1.23`, `621,568` bytes)
+  - `v1.29`: `C:\MPBT-v1.29\mpbtwin.exe` (`FileVersion 1.29`, `629,248` bytes)
+  - `v1.23` `mpbtwin.exe` SHA-256: `DDB766C5F5092EF814ABC5E2D5331E86E3076832CF67A45881CD04A30F15FC5A`
+  - `v1.29` `mpbtwin.exe` SHA-256: `F9ACDA6290F820D0BD632E791CAB1CB8324A7D4145FA8E163BAEC0BC30196D68`
+- `COMMEG32.DLL` is byte-identical between the local retail `v1.23` install and
+  `C:\MPBT-v1.29`.
+  - SHA-256: `683A2424B5C57BF6B07E7429087797FA2EEFD3EB408A064C03CEB34B25AAE82A`
+- `INITAR.DLL` is also byte-identical between those installs.
+  - SHA-256: `7BD4C51D4C45091A62B8493EB02B05EB45D8B7D68CE5EB946EEC08E718345640`
+- Practical implication: moving `mpbt-server` to a `v1.29` client does **not**
+  require a new ARIES transport interpretation or a new launcher/`play.pcgi`
+  contract just because of the version bump.
+
+#### Release-history clues from `v1.29` client text
+
+- `v1.29` notes (24 Jun 1999): fixed bugs introduced by `1.28` anti-hacking code,
+  fixed target-info HUD color, restored missile-impact sounds on the player's
+  mech, restored fall-impact sound.
+- `v1.28` notes (27 May 1999): added client hacking-prevention code.
+- `v1.27` notes (16 Oct 1998): jump-jet fix for mechs with fewer than 4 jets
+  and Team Sanctioned Battles support.
+- Practical implication: migration risk is concentrated in anti-tamper checks,
+  world/Solaris UI flow, low-jet jump behavior, and combat event hooks.
+
+#### Combat-side migration read
+
+- The later `v1.29` combat decoded-packet table at `DAT_0047EA38` is now
+  recovered across the full `Cmd59`-`Cmd74` window.
+- `Combat_Cmd65_UpdateActorPosition_v123` survives semantically in `v1.29` at
+  `0x0042A050`; the earlier mismatch was caused by a missing function boundary,
+  not a wire-level redesign.
+- The recovered `v1.29` `Cmd65` body still reads the same
+  `3 / 3 / 2 / 1 / 1 / 1 / 1` type pattern and still uses the same motion /
+  heading constants seen in `v1.23`.
+- Practical implication: existing `mpbt-server` combat packet work should be
+  treated as **largely portable** to `v1.29`, with follow-up attention aimed
+  more at feature deltas (anti-hacking, Team Sanctioned Battles, low-jet jump,
+  sound/event fixes) than at a wholesale combat-protocol rewrite.
+
+#### World/Solaris-side migration read
+
+The highest-risk `v1.23` carry-forward mistakes are now known:
+
+- `Cmd39` is **not** the old scene-status text slot in `v1.29`.
+  - It is now `World_Cmd39_BuyExtraAmmoList_v129`.
+  - It reads repeated `string + type2 + type2` rows and builds a true chooser.
+  - Confirm/cancel path uses outbound `cmd22(selectionIndex + 1)` / `cmd22(0)`.
+  - Its visible strings are anchored by the real `v1.29` `MPBT.MSG`:
+    - `0x4f` = `Ammo Type       Amount  Cost`
+    - `0x50` = `Buy`
+    - nearby `0xd0` = `Buy Extra Ammo`
+
+- `Cmd30` and `Cmd31` survive as a preserved Solaris mech-management family in
+  `v1.29`:
+  - `Cmd30 -> World_Cmd30_MechStatusOptionPage_v129`
+    - per-mech **Mech Status** option hub
+    - numbered server-provided option rows
+    - row picks submit through `World_SendMenuSelection_v129(listId, selection)`
+  - `Cmd31 -> World_Cmd31_MechComponentActionPage_v129`
+    - deeper component/location maintenance/detail page
+    - action form uses `Repair / Examine / Replace / Store / Done`
+    - `mode == 2` is read-only / Done-only; other modes are actionable
+
+- `Cmd26` / `Cmd27` also survive as the mech chooser family above that branch.
+  - Strong current route:
+    - `Cmd26 Choose a mech`
+    - `Cmd30 Mech Status option page`
+    - one server-provided row
+    - `Cmd39 Buy Extra Ammo list` or `Cmd31` deeper maintenance/details
+  - Main remaining uncertainty is only the exact `Cmd30` row order for:
+    - `Repair All`
+    - `Reload`
+    - `Buy Extra Ammo`
+    - `Name Mech`
+
+- `Cmd41` no longer reads best as a plain standings list in `v1.29`.
+  - Current live name/classification is `World_Cmd41_NameMechScoreMatrix_v129`.
+  - Best current read is a round-robin / match-results matrix surface with
+    `NAME / MECH / SCORE` columns plus per-opponent score cells and row totals.
+
+- `Cmd44` and `Cmd46` are genuine repurposings in `v1.29`, not simple moved
+  equivalents of the older world UI:
+  - `Cmd44 -> World_Cmd44_SetLocationDistanceScale_v129`
+  - `Cmd46 -> World_Cmd46_ClearWorldUiChildren_v129`
+
+- `Cmd57` is now the strongest live chooser-family replacement in the `v1.29`
+  world UI.
+  - `World_Cmd57_HotkeySelectionMenu_v129` builds a keyed menu from a title plus
+    repeated `(hotkey,row-text)` style entries.
+  - Its input callback sends `World_SendMenuSelection_v129(menu_id,
+    selection_index)` on Enter or hotkey match.
+
+#### Practical server implications
+
+- When `mpbt-server` is paired with the `v1.29` client, **do not assume the old
+  `v1.23` world-slot meanings for `Cmd39`, `Cmd44`, or `Cmd46`**.
+- Solaris/world work should treat this section as the current compatibility note
+  for repurposed `v1.29` world slots.
+- The most important `v1.29` world-side surfaces to align in code are now:
+  - chooser/menu flows that likely need `Cmd57` rather than old `Cmd44`
+  - Solaris mech-management flows built around `Cmd26` / `Cmd30` / `Cmd31` /
+    repurposed `Cmd39`
+  - any location-browser/map work that depends on the now-recovered
+    `Cmd40` / `Cmd43` / `Cmd44` / `Cmd46` / `Cmd47` / `Cmd49` / `Cmd54` /
+    `Cmd55` / `Cmd56` / `Cmd57` / `Cmd60` / `Cmd61` family
+
+#### Current migration summary for implementation planning
+
+- **Good news:** auth/login transport, launcher behavior, and the core combat
+  packet families are much closer to `v1.23` than the raw version jump suggests.
+- **Main risk:** the Solaris/world UI layer in `v1.29` contains several real
+  slot repurposings and preserved late-game mech-management pages that can make
+  a `v1.23`-shaped server look superficially alive while still driving the wrong
+  screens.
 
 

@@ -92,6 +92,10 @@ export interface ClientSession {
   id: string;
   /** Authenticated username (empty until auth completes). */
   username: string;
+  /** Session ID of a newer connection that is replacing this one, if any. */
+  replacedBySessionId?: string;
+  /** True when reconnect handoff already persisted the old world snapshot. */
+  skipWorldResumeSave?: boolean;
   /** Current lifecycle phase. */
   phase: SessionPhase;
   /** Current room ID in the world. */
@@ -551,6 +555,7 @@ export class PlayerRegistry {
       session.id !== excludeId &&
       session.accountId === accountId &&
       session.phase !== 'closing' &&
+      session.replacedBySessionId === undefined &&
       !session.socket.destroyed,
     );
   }

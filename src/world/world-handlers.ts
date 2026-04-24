@@ -7,8 +7,8 @@
  */
 
 import {
+  buildCmd14PersonnelRecordPacket,
   buildCmd3BroadcastPacket,
-  buildCmd46InfoPanelPacket,
   buildCmd17DuelTermsPacket,
   buildCmd4SceneInitPacket,
   buildCmd5CursorNormalPacket,
@@ -374,7 +374,6 @@ const LEG_SECTION_LABEL_BY_INTERNAL_INDEX: Readonly<Record<number, string>> = {
   5: 'left-leg',
   6: 'right-leg',
 };
-const WEAPON_STATE_READY = 0;
 const WEAPON_STATE_UNAVAILABLE = 1;
 const PLAYER_RESULT_DELAY_MS = 750;
 const BOT_RESULT_DELAY_MS = 1500;
@@ -403,15 +402,30 @@ const LEFT_TORSO_FRONT_RETALIATION_SECTION: CombatAttachmentHitSection = {
   internalIndex: 2,
   label: 'left-torso-front',
 };
+const LEFT_TORSO_REAR_RETALIATION_SECTION: CombatAttachmentHitSection = {
+  armorIndex: 8,
+  internalIndex: 2,
+  label: 'left-torso-rear',
+};
 const CENTER_TORSO_FRONT_RETALIATION_SECTION: CombatAttachmentHitSection = {
   armorIndex: 4,
   internalIndex: 4,
   label: 'center-torso-front',
 };
+const CENTER_TORSO_REAR_RETALIATION_SECTION: CombatAttachmentHitSection = {
+  armorIndex: 7,
+  internalIndex: 4,
+  label: 'center-torso-rear',
+};
 const RIGHT_TORSO_FRONT_RETALIATION_SECTION: CombatAttachmentHitSection = {
   armorIndex: 6,
   internalIndex: 3,
   label: 'right-torso-front',
+};
+const RIGHT_TORSO_REAR_RETALIATION_SECTION: CombatAttachmentHitSection = {
+  armorIndex: 9,
+  internalIndex: 3,
+  label: 'right-torso-rear',
 };
 const LEFT_LEG_RETALIATION_SECTION: CombatAttachmentHitSection = {
   armorIndex: 2,
@@ -1662,16 +1676,20 @@ function sendRankingInfoPanel(
     classKey?: SolarisClassKey;
   },
 ): void {
+  const packetOptions = {
+    comstarId: standing.comstarId,
+    battlesToDate: standing.matches,
+    lines: buildRankingInfoPanelLines(standing, latestResult, context),
+  };
+
+  // v1.29 repurposes world Cmd46 as an explicit UI-clear/browser-child teardown
+  // packet. Cmd14 keeps the same detail payload shape and is the v1.29-safe
+  // ranking-detail surface.
+  const packet = buildCmd14PersonnelRecordPacket(packetOptions, nextSeq(session));
+
   send(
     session.socket,
-    buildCmd46InfoPanelPacket(
-      {
-        comstarId: standing.comstarId,
-        battlesToDate: standing.matches,
-        lines: buildRankingInfoPanelLines(standing, latestResult, context),
-      },
-      nextSeq(session),
-    ),
+    packet,
     capture,
     label,
   );
@@ -2042,22 +2060,28 @@ export function savePendingIncomingComstarPrompt(
 type CombatResultCode = 0 | 1;
 
 const LOCAL_RETALIATION_SECTIONS: readonly CombatAttachmentHitSection[] = [
-  { armorIndex: 0, internalIndex: 0, label: 'left-arm' },
-  { armorIndex: 5, internalIndex: 2, label: 'left-torso-front' },
-  { armorIndex: 8, internalIndex: 2, label: 'left-torso-rear' },
-  { armorIndex: 4, internalIndex: 4, label: 'center-torso-front' },
-  { armorIndex: 7, internalIndex: 4, label: 'center-torso-rear' },
-  { armorIndex: 6, internalIndex: 3, label: 'right-torso-front' },
-  { armorIndex: 9, internalIndex: 3, label: 'right-torso-rear' },
-  { armorIndex: 1, internalIndex: 1, label: 'right-arm' },
-  { armorIndex: 2, internalIndex: 5, label: 'left-leg' },
-  { armorIndex: 3, internalIndex: 6, label: 'right-leg' },
+  LEFT_ARM_RETALIATION_SECTION,
+  LEFT_TORSO_FRONT_RETALIATION_SECTION,
+  LEFT_TORSO_REAR_RETALIATION_SECTION,
+  CENTER_TORSO_FRONT_RETALIATION_SECTION,
+  CENTER_TORSO_REAR_RETALIATION_SECTION,
+  RIGHT_TORSO_FRONT_RETALIATION_SECTION,
+  RIGHT_TORSO_REAR_RETALIATION_SECTION,
+  RIGHT_ARM_RETALIATION_SECTION,
+  LEFT_LEG_RETALIATION_SECTION,
+  RIGHT_LEG_RETALIATION_SECTION,
   HEAD_RETALIATION_SECTION,
 ] as const;
 
 type DamageCodeUpdate = { damageCode: number; damageValue: number };
 type DestroyedLegSection = { internalIndex: number; label: string };
 type PostDamageStateUpdates = { updates: DamageCodeUpdate[]; newlyDestroyedLegs: DestroyedLegSection[] };
+type AppliedWeaponDamageResult = {
+  updates: DamageCodeUpdate[];
+  headArmor: number;
+  hitSections: CombatAttachmentHitSection[];
+  headInternalDamaged: boolean;
+};
 
 function sumValues(values: readonly number[]): number {
   return values.reduce((sum, value) => sum + value, 0);
@@ -2628,16 +2652,17 @@ function getWeaponSectionLossUpdates(
 function getShotDamageForMechSlot(
   mechId: number | undefined,
   weaponSlot: number,
-): { damage: number; weaponName?: string } {
+): { damage: number; weaponName?: string; weaponSpec?: WeaponDataSpec } {
   const weaponName = getWeaponNameForMechSlot(mechId, weaponSlot);
   const weaponSpec = getWeaponSpecForMechSlot(mechId, weaponSlot);
   return {
     damage: weaponSpec?.damage ?? BOT_FALLBACK_WEAPON_DAMAGE,
     weaponName,
+    weaponSpec,
   };
 }
 
-function getShotDamage(session: ClientSession, weaponSlot: number): { damage: number; weaponName?: string } {
+function getShotDamage(session: ClientSession, weaponSlot: number): { damage: number; weaponName?: string; weaponSpec?: WeaponDataSpec } {
   return getShotDamageForMechSlot(session.selectedMechId ?? FALLBACK_MECH_ID, weaponSlot);
 }
 
@@ -3312,31 +3337,6 @@ function getWeaponCooldownGate(
   );
 }
 
-function sendLocalWeaponStateUpdate(
-  session: ClientSession,
-  weaponSlot: number,
-  weaponState: number,
-  label: string,
-): void {
-  sendToWorldSession(
-    session,
-    buildCmd67LocalDamagePacket(0x28 + weaponSlot, weaponState, nextSeq(session)),
-    label,
-  );
-}
-
-function sendLocalAmmoStateUpdate(
-  session: ClientSession,
-  damageCode: number,
-  ammoValue: number,
-): void {
-  sendToWorldSession(
-    session,
-    buildCmd67LocalDamagePacket(damageCode, ammoValue, nextSeq(session)),
-    'CMD67_LOCAL_AMMO_UPDATE',
-  );
-}
-
 function consumeWeaponAmmo(
   session: ClientSession,
   weaponSlot: number,
@@ -3404,8 +3404,8 @@ function markWeaponSlotFired(
     clearTimeout(existingTimer);
   }
 
-  sendLocalWeaponStateUpdate(session, weaponSlot, WEAPON_STATE_UNAVAILABLE, 'CMD67_LOCAL_WEAPON_COOLDOWN');
-
+  // Retail updates the local actor's weapon/ammo HUD state inside the client's
+  // own fire gate. We keep the timer only for server-side rejection logic.
   const readyTimer = setTimeout(() => {
     if (session.combatWeaponReadyTimerBySlot) {
       session.combatWeaponReadyTimerBySlot[weaponSlot] = undefined;
@@ -3432,7 +3432,6 @@ function markWeaponSlotFired(
     if (!mountGate.allowed) {
       return;
     }
-    sendLocalWeaponStateUpdate(session, weaponSlot, WEAPON_STATE_READY, 'CMD67_LOCAL_WEAPON_READY');
   }, cooldownMs);
   readyTimer.unref();
   session.combatWeaponReadyTimerBySlot[weaponSlot] = readyTimer;
@@ -3677,6 +3676,280 @@ function resolveEffectiveHitSection(
     hitSection = { armorIndex: 4, internalIndex: 4, label: 'ct-front-spill' };
   }
   return hitSection;
+}
+
+function sectionsMatch(
+  a: CombatAttachmentHitSection,
+  b: CombatAttachmentHitSection,
+): boolean {
+  return a.armorIndex === b.armorIndex && a.internalIndex === b.internalIndex;
+}
+
+function getMissileSpreadFallbackSection(primaryHitSection: CombatAttachmentHitSection): CombatAttachmentHitSection {
+  if (
+    sectionsMatch(primaryHitSection, LEFT_TORSO_REAR_RETALIATION_SECTION)
+    || sectionsMatch(primaryHitSection, CENTER_TORSO_REAR_RETALIATION_SECTION)
+    || sectionsMatch(primaryHitSection, RIGHT_TORSO_REAR_RETALIATION_SECTION)
+  ) {
+    return CENTER_TORSO_REAR_RETALIATION_SECTION;
+  }
+  if (shouldSpillUpperBodyHitToCenter(primaryHitSection)) {
+    return CENTER_TORSO_FRONT_RETALIATION_SECTION;
+  }
+  return primaryHitSection;
+}
+
+function getMissileSpreadCandidates(
+  primaryHitSection: CombatAttachmentHitSection,
+  spreadSeed: number,
+): readonly CombatAttachmentHitSection[] {
+  const preferRight = (spreadSeed & 1) !== 0;
+  const frontTorsoA = preferRight ? RIGHT_TORSO_FRONT_RETALIATION_SECTION : LEFT_TORSO_FRONT_RETALIATION_SECTION;
+  const frontTorsoB = preferRight ? LEFT_TORSO_FRONT_RETALIATION_SECTION : RIGHT_TORSO_FRONT_RETALIATION_SECTION;
+  const rearTorsoA = preferRight ? RIGHT_TORSO_REAR_RETALIATION_SECTION : LEFT_TORSO_REAR_RETALIATION_SECTION;
+  const rearTorsoB = preferRight ? LEFT_TORSO_REAR_RETALIATION_SECTION : RIGHT_TORSO_REAR_RETALIATION_SECTION;
+  const frontArmA = preferRight ? RIGHT_ARM_RETALIATION_SECTION : LEFT_ARM_RETALIATION_SECTION;
+  const frontArmB = preferRight ? LEFT_ARM_RETALIATION_SECTION : RIGHT_ARM_RETALIATION_SECTION;
+  const frontLegA = preferRight ? RIGHT_LEG_RETALIATION_SECTION : LEFT_LEG_RETALIATION_SECTION;
+  const frontLegB = preferRight ? LEFT_LEG_RETALIATION_SECTION : RIGHT_LEG_RETALIATION_SECTION;
+
+  if (sectionsMatch(primaryHitSection, HEAD_RETALIATION_SECTION)) {
+    return [
+      HEAD_RETALIATION_SECTION,
+      HEAD_RETALIATION_SECTION,
+      CENTER_TORSO_FRONT_RETALIATION_SECTION,
+      frontTorsoA,
+      frontTorsoB,
+    ];
+  }
+  if (sectionsMatch(primaryHitSection, LEFT_ARM_RETALIATION_SECTION)) {
+    return [
+      LEFT_ARM_RETALIATION_SECTION,
+      LEFT_ARM_RETALIATION_SECTION,
+      LEFT_TORSO_FRONT_RETALIATION_SECTION,
+      LEFT_TORSO_FRONT_RETALIATION_SECTION,
+      CENTER_TORSO_FRONT_RETALIATION_SECTION,
+    ];
+  }
+  if (sectionsMatch(primaryHitSection, RIGHT_ARM_RETALIATION_SECTION)) {
+    return [
+      RIGHT_ARM_RETALIATION_SECTION,
+      RIGHT_ARM_RETALIATION_SECTION,
+      RIGHT_TORSO_FRONT_RETALIATION_SECTION,
+      RIGHT_TORSO_FRONT_RETALIATION_SECTION,
+      CENTER_TORSO_FRONT_RETALIATION_SECTION,
+    ];
+  }
+  if (sectionsMatch(primaryHitSection, LEFT_TORSO_FRONT_RETALIATION_SECTION)) {
+    return [
+      LEFT_TORSO_FRONT_RETALIATION_SECTION,
+      LEFT_TORSO_FRONT_RETALIATION_SECTION,
+      LEFT_ARM_RETALIATION_SECTION,
+      CENTER_TORSO_FRONT_RETALIATION_SECTION,
+      LEFT_LEG_RETALIATION_SECTION,
+      HEAD_RETALIATION_SECTION,
+    ];
+  }
+  if (sectionsMatch(primaryHitSection, CENTER_TORSO_FRONT_RETALIATION_SECTION)) {
+    return [
+      CENTER_TORSO_FRONT_RETALIATION_SECTION,
+      CENTER_TORSO_FRONT_RETALIATION_SECTION,
+      frontTorsoA,
+      frontTorsoB,
+      HEAD_RETALIATION_SECTION,
+      frontArmA,
+      frontArmB,
+      frontLegA,
+      frontLegB,
+    ];
+  }
+  if (sectionsMatch(primaryHitSection, RIGHT_TORSO_FRONT_RETALIATION_SECTION)) {
+    return [
+      RIGHT_TORSO_FRONT_RETALIATION_SECTION,
+      RIGHT_TORSO_FRONT_RETALIATION_SECTION,
+      RIGHT_ARM_RETALIATION_SECTION,
+      CENTER_TORSO_FRONT_RETALIATION_SECTION,
+      RIGHT_LEG_RETALIATION_SECTION,
+      HEAD_RETALIATION_SECTION,
+    ];
+  }
+  if (sectionsMatch(primaryHitSection, LEFT_LEG_RETALIATION_SECTION)) {
+    return [
+      LEFT_LEG_RETALIATION_SECTION,
+      LEFT_LEG_RETALIATION_SECTION,
+      LEFT_TORSO_FRONT_RETALIATION_SECTION,
+      CENTER_TORSO_FRONT_RETALIATION_SECTION,
+    ];
+  }
+  if (sectionsMatch(primaryHitSection, RIGHT_LEG_RETALIATION_SECTION)) {
+    return [
+      RIGHT_LEG_RETALIATION_SECTION,
+      RIGHT_LEG_RETALIATION_SECTION,
+      RIGHT_TORSO_FRONT_RETALIATION_SECTION,
+      CENTER_TORSO_FRONT_RETALIATION_SECTION,
+    ];
+  }
+  if (sectionsMatch(primaryHitSection, LEFT_TORSO_REAR_RETALIATION_SECTION)) {
+    return [
+      LEFT_TORSO_REAR_RETALIATION_SECTION,
+      LEFT_TORSO_REAR_RETALIATION_SECTION,
+      CENTER_TORSO_REAR_RETALIATION_SECTION,
+      LEFT_TORSO_FRONT_RETALIATION_SECTION,
+      LEFT_ARM_RETALIATION_SECTION,
+      LEFT_LEG_RETALIATION_SECTION,
+    ];
+  }
+  if (sectionsMatch(primaryHitSection, CENTER_TORSO_REAR_RETALIATION_SECTION)) {
+    return [
+      CENTER_TORSO_REAR_RETALIATION_SECTION,
+      CENTER_TORSO_REAR_RETALIATION_SECTION,
+      rearTorsoA,
+      rearTorsoB,
+      HEAD_RETALIATION_SECTION,
+      frontTorsoA,
+      frontTorsoB,
+    ];
+  }
+  if (sectionsMatch(primaryHitSection, RIGHT_TORSO_REAR_RETALIATION_SECTION)) {
+    return [
+      RIGHT_TORSO_REAR_RETALIATION_SECTION,
+      RIGHT_TORSO_REAR_RETALIATION_SECTION,
+      CENTER_TORSO_REAR_RETALIATION_SECTION,
+      RIGHT_TORSO_FRONT_RETALIATION_SECTION,
+      RIGHT_ARM_RETALIATION_SECTION,
+      RIGHT_LEG_RETALIATION_SECTION,
+    ];
+  }
+  return [primaryHitSection];
+}
+
+function getMissileSpreadSeed(
+  weaponSlot: number,
+  targetAttach: number,
+  angleSeedA: number,
+  angleSeedB: number,
+): number {
+  const attachSeed = Math.max(0, targetAttach);
+  return (
+    ((weaponSlot + 1) * 97)
+    ^ ((attachSeed + 1) * 193)
+    ^ ((angleSeedA + 1) * 389)
+    ^ ((angleSeedB + 1) * 769)
+  ) >>> 0;
+}
+
+function chooseMissileClusterHitSection(
+  primaryHitSection: CombatAttachmentHitSection,
+  spreadSeed: number,
+  clusterIndex: number,
+  armorValues: readonly number[],
+  internalValues: readonly number[],
+  headArmor: number,
+): CombatAttachmentHitSection {
+  if (
+    clusterIndex === 0
+    && getSectionRemainingDurability(armorValues, internalValues, headArmor, primaryHitSection) > 0
+  ) {
+    return primaryHitSection;
+  }
+
+  const candidates = getMissileSpreadCandidates(primaryHitSection, spreadSeed);
+  const startIndex = clusterIndex <= 0
+    ? 0
+    : (spreadSeed + clusterIndex - 1) % candidates.length;
+  for (let offset = 0; offset < candidates.length; offset += 1) {
+    const candidate = candidates[(startIndex + offset) % candidates.length] ?? primaryHitSection;
+    if (getSectionRemainingDurability(armorValues, internalValues, headArmor, candidate) > 0) {
+      return candidate;
+    }
+  }
+
+  return getMissileSpreadFallbackSection(primaryHitSection);
+}
+
+function summarizeHitSections(hitSections: readonly CombatAttachmentHitSection[]): string {
+  const counts = new Map<string, number>();
+  for (const section of hitSections) {
+    counts.set(section.label, (counts.get(section.label) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([label, count]) => count > 1 ? `${label}x${count}` : label)
+    .join('+');
+}
+
+function applyWeaponDamage(
+  weaponSpec: WeaponDataSpec | undefined,
+  shotDamage: number,
+  primaryHitSection: CombatAttachmentHitSection,
+  weaponSlot: number,
+  targetAttach: number,
+  angleSeedA: number,
+  angleSeedB: number,
+  armorValues: number[],
+  internalValues: number[],
+  headArmor: number,
+): AppliedWeaponDamageResult {
+  const missileCount = weaponSpec?.missileCount ?? 0;
+  const damagePerMissile = weaponSpec?.damagePerMissile ?? 0;
+  if (
+    missileCount <= 1
+    || damagePerMissile <= 0
+    || missileCount * damagePerMissile !== shotDamage
+  ) {
+    const damageResult = applyDamageToSection(
+      armorValues,
+      internalValues,
+      primaryHitSection,
+      shotDamage,
+      headArmor,
+    );
+    return {
+      updates: damageResult.updates,
+      headArmor: damageResult.headArmor,
+      hitSections: [primaryHitSection],
+      headInternalDamaged: damageResult.updates.some(update => update.damageCode === 0x27),
+    };
+  }
+
+  const spreadSeed = getMissileSpreadSeed(weaponSlot, targetAttach, angleSeedA, angleSeedB);
+  const updates: DamageCodeUpdate[] = [];
+  const hitSections: CombatAttachmentHitSection[] = [];
+  let nextHeadArmor = headArmor;
+  let headInternalDamaged = false;
+  for (let clusterIndex = 0; clusterIndex < missileCount; clusterIndex += 1) {
+    const hitSection = chooseMissileClusterHitSection(
+      primaryHitSection,
+      spreadSeed,
+      clusterIndex,
+      armorValues,
+      internalValues,
+      nextHeadArmor,
+    );
+    const damageResult = applyDamageToSection(
+      armorValues,
+      internalValues,
+      hitSection,
+      damagePerMissile,
+      nextHeadArmor,
+    );
+    nextHeadArmor = damageResult.headArmor;
+    if (damageResult.updates.length > 0 || clusterIndex === 0) {
+      hitSections.push(hitSection);
+    }
+    if (damageResult.updates.length > 0) {
+      updates.push(...damageResult.updates);
+      if (!headInternalDamaged && damageResult.updates.some(update => update.damageCode === 0x27)) {
+        headInternalDamaged = true;
+      }
+    }
+  }
+
+  return {
+    updates,
+    headArmor: nextHeadArmor,
+    hitSections: hitSections.length > 0 ? hitSections : [primaryHitSection],
+    headInternalDamaged,
+  };
 }
 
 function getBotMechId(session: ClientSession): number {
@@ -4981,9 +5254,8 @@ function sendBotDeathTransition(
     session.botDeathTimer = undefined;
   }
 
-  // Dynamic test result: subcommand 1 leaves the dead bot upright in the v1.23
-  // client, so try 8 as the pre-wreck collapse trigger before the confirmed 4
-  // wreck transition.
+  // Retail v1.23 death flow uses Cmd70 subcommand 8 to start the collapse and
+  // then subcommand 0 to advance the actor through the destruction tail.
   connLog.info('[world/combat] bot destroyed — sending collapse transition (%s)', reason);
   send(
     session.socket,
@@ -4995,12 +5267,12 @@ function sendBotDeathTransition(
   session.botDeathTimer = setTimeout(() => {
     session.botDeathTimer = undefined;
     if (session.socket.destroyed || !session.socket.writable || session.phase !== 'combat') return;
-    connLog.info('[world/combat] bot wreck transition after fall (%s)', reason);
+    connLog.info('[world/combat] bot death-tail advance after collapse (%s)', reason);
     send(
       session.socket,
-      buildCmd70ActorTransitionPacket(1, 4, nextSeq(session)),
+      buildCmd70ActorTransitionPacket(1, 0, nextSeq(session)),
       capture,
-      'CMD70_BOT_WRECK',
+      'CMD70_BOT_DEATH_ADVANCE',
     );
   }, 1200);
   session.botDeathTimer.unref();
@@ -5768,8 +6040,8 @@ function sendArenaParticipantDeathTransition(
       }
       sendToWorldSession(
         viewer,
-        buildCmd70ActorTransitionPacket(slot, 4, nextSeq(viewer)),
-        viewer.id === eliminated.id ? 'CMD70_ARENA_LOCAL_WRECK' : 'CMD70_ARENA_REMOTE_WRECK',
+        buildCmd70ActorTransitionPacket(slot, 0, nextSeq(viewer)),
+        viewer.id === eliminated.id ? 'CMD70_ARENA_LOCAL_DEATH_ADVANCE' : 'CMD70_ARENA_REMOTE_DEATH_ADVANCE',
       );
     }
     eliminated.botDeathTimer = undefined;
@@ -6048,15 +6320,15 @@ function sendDuelDeathTransition(
     if (!winner.socket.destroyed && winner.socket.writable && winner.phase === 'combat') {
       sendToWorldSession(
         winner,
-        buildCmd70ActorTransitionPacket(1, 4, nextSeq(winner)),
-        'CMD70_DUEL_REMOTE_WRECK',
+        buildCmd70ActorTransitionPacket(1, 0, nextSeq(winner)),
+        'CMD70_DUEL_REMOTE_DEATH_ADVANCE',
       );
     }
     if (!loser.socket.destroyed && loser.socket.writable && loser.phase === 'combat') {
       sendToWorldSession(
         loser,
-        buildCmd70ActorTransitionPacket(0, 4, nextSeq(loser)),
-        'CMD70_DUEL_LOCAL_WRECK',
+        buildCmd70ActorTransitionPacket(0, 0, nextSeq(loser)),
+        'CMD70_DUEL_LOCAL_DEATH_ADVANCE',
       );
     }
     winner.botDeathTimer = undefined;
@@ -9094,24 +9366,9 @@ export function handleCombatMovementFrame(
     session.combatTorsoYaw = legVel;
     session.combatSpeedMag = nextPosition.speedMag;
 
-    connLog.debug(
-      '[world/combat] cmd9 moving: altitude=%d facingRaw=%d pitchRaw=%d torsoYawRaw=%d clientSpeed=%d effectiveSpeed=%d pitch=%d torsoYaw=%d%s',
-      frame.altitudeRaw,
-      frame.facingRaw,
-      frame.upperBodyPitchRaw,
-      frame.torsoYawRaw,
-      clientSpeed,
-      nextPosition.speedMag,
-      throttle,
-      legVel,
-      nextPosition.clamped
-        ? ` reverseClamp elapsed=${nextPosition.elapsedMs ?? 0}ms submitted=${nextPosition.submittedDistanceUnits ?? 0} allowed=${nextPosition.maxDistanceUnits ?? 0}`
-        : '',
-    );
-
     if (session.combatSuppressLocalCmd65WhileDowned && session.combatLocalDowned) {
       connLog.debug('[world/combat] cmd9 moving: suppressing local Cmd65 movement echo while local downed verifier is active');
-    } else {
+    } else if (nextPosition.clamped) {
       send(
         session.socket,
         buildCmd65PositionSyncPacket(
@@ -9128,9 +9385,27 @@ export function handleCombatMovementFrame(
           nextSeq(session),
         ),
         capture,
-        'CMD65_MOVEMENT',
+        'CMD65_MOVEMENT_CORRECTION',
       );
     }
+    const localEchoDetail =
+      session.combatSuppressLocalCmd65WhileDowned && session.combatLocalDowned
+        ? ' localEcho=suppressed-while-downed'
+        : nextPosition.clamped
+          ? ` localEcho=correction elapsed=${nextPosition.elapsedMs ?? 0}ms submitted=${nextPosition.submittedDistanceUnits ?? 0} allowed=${nextPosition.maxDistanceUnits ?? 0}`
+          : ' localEcho=none';
+    connLog.debug(
+      '[world/combat] cmd9 moving: altitude=%d facingRaw=%d pitchRaw=%d torsoYawRaw=%d clientSpeed=%d effectiveSpeed=%d pitch=%d torsoYaw=%d%s',
+      frame.altitudeRaw,
+      frame.facingRaw,
+      frame.upperBodyPitchRaw,
+      frame.torsoYawRaw,
+      clientSpeed,
+      nextPosition.speedMag,
+      throttle,
+      legVel,
+      localEchoDetail,
+    );
     mirrorCombatRemotePosition(players, session, 'CMD65_COMBAT_REMOTE_MOVEMENT');
     maybeLogCollisionProbeCandidate(players, session, connLog, 'CMD9_MOVEMENT');
   }
@@ -9207,9 +9482,6 @@ export function handleCombatWeaponFireFrame(
     }
 
     fireableShots.push(shot);
-    if (ammoGate.damageCode !== undefined && ammoGate.remainingAmmo !== undefined) {
-      sendLocalAmmoStateUpdate(session, ammoGate.damageCode, ammoGate.remainingAmmo);
-    }
     markWeaponSlotFired(session, shot.weaponSlot, cooldownGate.cooldownMs, now);
   }
   const rejectedWeaponStateShots = shots.length - fireableShots.length;
@@ -9260,7 +9532,7 @@ export function handleCombatWeaponFireFrame(
     let totalDamageUpdates = 0;
 
     for (const shot of fireableShots) {
-      const { damage: shotDamage, weaponName } = getShotDamage(session, shot.weaponSlot);
+      const { damage: shotDamage, weaponName, weaponSpec } = getShotDamage(session, shot.weaponSlot);
       const rangeGate = getShotMaxRangeGate(
         session,
         shot.weaponSlot,
@@ -9328,11 +9600,16 @@ export function handleCombatWeaponFireFrame(
         impactContext,
       );
       const previousInternalValues = [...duelPeerInternalValues];
-      const damageResult = applyDamageToSection(
+      const damageResult = applyWeaponDamage(
+        weaponSpec,
+        shotDamage,
+        hitSection,
+        shot.weaponSlot,
+        shot.targetAttach,
+        shot.angleSeedA,
+        shot.angleSeedB,
         duelPeerArmorValues,
         duelPeerInternalValues,
-        hitSection,
-        shotDamage,
         duelPeerHeadArmor,
       );
       const postDamageUpdates = collectPostDamageStateUpdates(
@@ -9340,7 +9617,7 @@ export function handleCombatWeaponFireFrame(
         duelPeerCriticalStateBytes,
         previousInternalValues,
         duelPeerInternalValues,
-        hitSection.internalIndex === 7 && damageResult.updates.some(update => update.damageCode === 0x27),
+        damageResult.headInternalDamaged,
       );
       duelPeerHeadArmor = damageResult.headArmor;
       const allUpdates = [...damageResult.updates, ...postDamageUpdates.updates];
@@ -9366,7 +9643,7 @@ export function handleCombatWeaponFireFrame(
 
       totalDamageUpdates += allUpdates.length;
       shotSummaries.push(
-        `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${hitSection.label}:mech=${duelPeerMechId}:model=${getCombatModelIdForMechId(duelPeerMechId) ?? 'n/a'}:attach=${shot.targetAttach}:peerHealth=${duelPeer.playerHealth ?? 'n/a'}:headArmor=${duelPeerHeadArmor}:updates=${allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join('/') || 'none'}${getModel13AttachProbeSuffix(duelPeerMechId, shot.targetAttach, impactContext)}`,
+        `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${summarizeHitSections(damageResult.hitSections)}:mech=${duelPeerMechId}:model=${getCombatModelIdForMechId(duelPeerMechId) ?? 'n/a'}:attach=${shot.targetAttach}:peerHealth=${duelPeer.playerHealth ?? 'n/a'}:headArmor=${duelPeerHeadArmor}:updates=${allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join('/') || 'none'}${getModel13AttachProbeSuffix(duelPeerMechId, shot.targetAttach, impactContext)}`,
       );
     }
 
@@ -9423,7 +9700,7 @@ export function handleCombatWeaponFireFrame(
     const eliminatedParticipants = new Map<string, ClientSession>();
 
     for (const shot of fireableShots) {
-      const { damage: shotDamage, weaponName } = getShotDamage(session, shot.weaponSlot);
+      const { damage: shotDamage, weaponName, weaponSpec } = getShotDamage(session, shot.weaponSlot);
       const target = getCombatTargetParticipantForViewerSlot(players, combatSession, session, shot.targetSlot);
       const targetActive = !!target
         && !target.socket.destroyed
@@ -9507,11 +9784,16 @@ export function handleCombatWeaponFireFrame(
         impactContext,
       );
       const previousInternalValues = [...targetInternalValues];
-      const damageResult = applyDamageToSection(
+      const damageResult = applyWeaponDamage(
+        weaponSpec,
+        shotDamage,
+        hitSection,
+        shot.weaponSlot,
+        shot.targetAttach,
+        shot.angleSeedA,
+        shot.angleSeedB,
         targetArmorValues,
         targetInternalValues,
-        hitSection,
-        shotDamage,
         targetHeadArmor,
       );
       const postDamageUpdates = collectPostDamageStateUpdates(
@@ -9519,7 +9801,7 @@ export function handleCombatWeaponFireFrame(
         targetCriticalStateBytes,
         previousInternalValues,
         targetInternalValues,
-        hitSection.internalIndex === 7 && damageResult.updates.some(update => update.damageCode === 0x27),
+        damageResult.headInternalDamaged,
       );
       targetHeadArmor = damageResult.headArmor;
       const allUpdates = [...damageResult.updates, ...postDamageUpdates.updates];
@@ -9564,7 +9846,7 @@ export function handleCombatWeaponFireFrame(
         );
       }
       shotSummaries.push(
-        `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${getDisplayName(target)}:${hitSection.label}:mech=${targetMechId}:model=${targetModelId ?? 'n/a'}:attach=${shot.targetAttach}:health=${target.playerHealth}:updates=${allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join('/') || 'none'}${getModel13AttachProbeSuffix(targetMechId, shot.targetAttach, impactContext)}`,
+        `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${getDisplayName(target)}:${summarizeHitSections(damageResult.hitSections)}:mech=${targetMechId}:model=${targetModelId ?? 'n/a'}:attach=${shot.targetAttach}:health=${target.playerHealth}:updates=${allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join('/') || 'none'}${getModel13AttachProbeSuffix(targetMechId, shot.targetAttach, impactContext)}`,
       );
 
       if (isActorDestroyed(targetInternalValues)) {
@@ -9624,8 +9906,7 @@ export function handleCombatWeaponFireFrame(
   let totalDamageUpdates = 0;
 
   for (const shot of fireableShots) {
-    const { damage: shotDamage, weaponName } = getShotDamage(session, shot.weaponSlot);
-    const weaponSpec = getWeaponSpecForSlot(session, shot.weaponSlot);
+    const { damage: shotDamage, weaponName, weaponSpec } = getShotDamage(session, shot.weaponSlot);
     const rangeGate = getShotMaxRangeGate(session, shot.weaponSlot, botX, botY);
     send(
       session.socket,
@@ -9695,11 +9976,16 @@ export function handleCombatWeaponFireFrame(
       impactContext,
     );
     const previousInternalValues = [...botInternalValues];
-    const damageResult = applyDamageToSection(
+    const damageResult = applyWeaponDamage(
+      weaponSpec,
+      shotDamage,
+      hitSection,
+      shot.weaponSlot,
+      shot.targetAttach,
+      shot.angleSeedA,
+      shot.angleSeedB,
       botArmorValues,
       botInternalValues,
-      hitSection,
-      shotDamage,
       botHeadArmor,
     );
     const postDamageUpdates = collectPostDamageStateUpdates(
@@ -9707,7 +9993,7 @@ export function handleCombatWeaponFireFrame(
       botCriticalStateBytes,
       previousInternalValues,
       botInternalValues,
-      hitSection.internalIndex === 7 && damageResult.updates.some(update => update.damageCode === 0x27),
+      damageResult.headInternalDamaged,
     );
     botHeadArmor = damageResult.headArmor;
     const allUpdates = [...damageResult.updates, ...postDamageUpdates.updates];
@@ -9733,7 +10019,7 @@ export function handleCombatWeaponFireFrame(
 
     totalDamageUpdates += allUpdates.length;
     shotSummaries.push(
-      `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${hitSection.label}:${shot.targetSlot}/${shot.targetAttach}:chance=${Math.round(hitRoll.chance * 100)}:roll=${Math.round(hitRoll.roll * 100)}:cross=${Math.round(hitRoll.crossingFactor * 100)}:bot=${botX}/${botY}:headArmor=${botHeadArmor}:updates=${allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join('/') || 'none'}${getModel13AttachProbeSuffix(botMechId, shot.targetAttach, impactContext)}`,
+      `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${summarizeHitSections(damageResult.hitSections)}:${shot.targetSlot}/${shot.targetAttach}:chance=${Math.round(hitRoll.chance * 100)}:roll=${Math.round(hitRoll.roll * 100)}:cross=${Math.round(hitRoll.crossingFactor * 100)}:bot=${botX}/${botY}:headArmor=${botHeadArmor}:updates=${allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join('/') || 'none'}${getModel13AttachProbeSuffix(botMechId, shot.targetAttach, impactContext)}`,
     );
   }
 
@@ -9918,29 +10204,7 @@ export function handleCombatActionFrame(
     const legVel = session.combatTorsoYaw ?? 0;
     const speedMag = session.combatSpeedMag ?? 0;
 
-    connLog.info('[world/combat] cmd-12 jump action=6 altitude=0 (landing sync)');
-    if (session.combatSuppressLocalCmd65WhileDowned && session.combatLocalDowned) {
-      connLog.info('[world/combat] cmd-12 jump action=6 suppressing local Cmd65 landing echo while local downed verifier is active');
-    } else {
-      send(
-        session.socket,
-        buildCmd65PositionSyncPacket(
-          {
-            slot:     0,
-            x,
-            y,
-            z:        0,
-            facing:   getCombatCmd65Facing(session),
-            throttle,
-            legVel,
-            speedMag,
-          },
-          nextSeq(session),
-        ),
-        capture,
-        'CMD65_JUMP_LAND',
-      );
-    }
+    connLog.info('[world/combat] cmd-12 jump action=6 altitude=0 (client-owned local landing; remote mirror only)');
     mirrorCombatRemotePosition(players, session, 'CMD65_COMBAT_JUMP_LAND');
     maybeLogCollisionProbeCandidate(players, session, connLog, 'CMD65_JUMP_LAND');
     return;

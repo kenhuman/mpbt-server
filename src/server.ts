@@ -40,16 +40,22 @@ import { loadMechs } from './data/mechs.js';
 import { buildMechExamineText } from './data/mech-stats.js';
 import { PlayerRegistry, ClientSession } from './state/players.js';
 import { launchRegistry } from './state/launch.js';
+import { replaceSessionForReconnect } from './state/session-replacement.js';
 import { startWorldServer } from './server-world.js';
 import { Logger } from './util/logger.js';
 import { CaptureLogger } from './util/capture.js';
 import { verifyOrRegister } from './db/accounts.js';
 import { findCharacter, createCharacter, ALLEGIANCES } from './db/characters.js';
-import { ARIES_KEEPALIVE_INTERVAL_MS, SOCKET_IDLE_TIMEOUT_MS } from './config.js';
+import {
+  ARIES_KEEPALIVE_INTERVAL_MS,
+  SOCKET_IDLE_TIMEOUT_MS,
+  MPBT_LOG_LEVEL,
+  MPBT_CAPTURE_ENABLED,
+} from './config.js';
 
 // ── Global state ──────────────────────────────────────────────────────────────
 
-const log = new Logger('server', 'debug', path.join('logs', 'server.log'));
+const log = new Logger('server', MPBT_LOG_LEVEL, path.join('logs', 'server.log'));
 const players = new PlayerRegistry();
 
 // Advertised host sent in REDIRECT packets.
@@ -194,7 +200,16 @@ function handleConnection(socket: net.Socket): void {
   });
 
   socket.on('close', () => {
-    connLog.info('Client disconnected (phase=%s, bytes=%d)', session.phase, session.bytesReceived);
+    if (session.replacedBySessionId) {
+      connLog.info(
+        'Client disconnected (phase=%s, bytes=%d, replacedBy=%s)',
+        session.phase,
+        session.bytesReceived,
+        session.replacedBySessionId.slice(0, 8),
+      );
+    } else {
+      connLog.info('Client disconnected (phase=%s, bytes=%d)', session.phase, session.bytesReceived);
+    }
     players.remove(session.id);
     if (keepaliveTimer !== undefined) {
       clearInterval(keepaliveTimer);
@@ -203,6 +218,7 @@ function handleConnection(socket: net.Socket): void {
   });
 
   // ── TCP keep-alive ──────────────────────────────────────────────────────────
+  socket.setNoDelay(true);
   socket.setKeepAlive(true, 15_000);
   if (SOCKET_IDLE_TIMEOUT_MS > 0) {
     socket.setTimeout(SOCKET_IDLE_TIMEOUT_MS);
@@ -279,19 +295,19 @@ function handleLogin(
     }
 
     const accountId = authResult.account.id;
+    session.accountId = accountId;
     const existingSession = players.findActiveSessionByAccountId(accountId, session.id);
     if (existingSession) {
-      connLog.warn(
-        '[login] rejected duplicate session for accountId=%d (existingSession=%s phase=%s)',
+      connLog.info(
+        '[login] replacing existing session for accountId=%d (existingSession=%s phase=%s -> replacement=%s)',
         accountId,
         existingSession.id.slice(0, 8),
         existingSession.phase,
+        session.id.slice(0, 8),
       );
-      session.socket.destroy();
-      return;
+      replaceSessionForReconnect(existingSession, session.id);
     }
 
-    session.accountId = accountId;
     session.phase = 'lobby';
 
     if (authResult.created) {
@@ -410,7 +426,7 @@ function handleGameData(
   }
 
   const cmdIdx = payload[2] - 0x21;
-  connLog.info('[game] client seq=%d cmd=%d phase=%s', seq, cmdIdx, session.phase);
+  connLog.debug('[game] client seq=%d cmd=%d phase=%s', seq, cmdIdx, session.phase);
 
   if (cmdIdx === 3 && session.phase === 'lobby') {
     // cmd 3 = client-ready signal.
@@ -707,7 +723,11 @@ server.listen(ARIES_PORT, '0.0.0.0', () => {
   log.info('  Hostname: %s', os.hostname());
   log.info('  Protocol: ARIES binary (12-byte header, confirmed by RE)');
   log.info('    play.pcgi server=127.0.0.1:%d', addr.port);
-  log.info('  Captures → captures/    Logs → logs/server.log');
+  log.info('  Log level: %s → logs/server.log', MPBT_LOG_LEVEL.toUpperCase());
+  log.info(
+    '  Packet captures: %s',
+    MPBT_CAPTURE_ENABLED ? 'enabled → captures/' : 'disabled (set MPBT_CAPTURE=1 to enable)',
+  );
   log.info('═══════════════════════════════════════════════════════');
 });
 

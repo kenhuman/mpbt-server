@@ -19,10 +19,10 @@ export const BOT_INITIAL_HEALTH = 100;
  */
 export const COMBAT_WORLD_UNITS_PER_METER = 100;
 
-/** Initial shared remote-actor stand-off distance in combat world units (1000m north). */
-export const BOT_SPAWN_DISTANCE = 1_000 * COMBAT_WORLD_UNITS_PER_METER;
+/** Initial shared remote-actor stand-off distance in combat world units (3000m north). */
+export const BOT_SPAWN_DISTANCE = 3_000 * COMBAT_WORLD_UNITS_PER_METER;
 
-/** Initial single-player AI-bot stand-off distance in combat world units (1000m north). */
+/** Initial single-player AI-bot stand-off distance in combat world units (3000m north). */
 export const BOT_AI_SPAWN_DISTANCE = BOT_SPAWN_DISTANCE;
 
 /**

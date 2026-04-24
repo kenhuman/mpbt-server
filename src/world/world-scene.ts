@@ -886,6 +886,7 @@ export function sendPersonnelRecord(
     getDisplayName(target),
     page,
   );
+  const startedAt = Date.now();
   Promise.all([listAllDuelResults(), listCharacters()])
     .then(([results, characters]) => {
       if (session.socket.destroyed || !session.socket.writable) return;
@@ -907,6 +908,12 @@ export function sendPersonnelRecord(
         capture,
         page <= 1 ? 'CMD14_PERSONNEL_P1' : 'CMD14_PERSONNEL_P2',
       );
+      connLog.debug(
+        '[world] Cmd14 personnel record ready in %d ms (results=%d characters=%d)',
+        Date.now() - startedAt,
+        results.length,
+        characters.length,
+      );
     })
     .catch((err: unknown) => {
       const detail = err instanceof Error ? err.message : String(err);
@@ -924,6 +931,10 @@ export function sendPersonnelRecord(
         ),
         capture,
         page <= 1 ? 'CMD14_PERSONNEL_P1' : 'CMD14_PERSONNEL_P2',
+      );
+      connLog.debug(
+        '[world] Cmd14 personnel record fallback sent in %d ms',
+        Date.now() - startedAt,
       );
     });
 }

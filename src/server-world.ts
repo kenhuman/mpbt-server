@@ -54,6 +54,7 @@ import {
 } from './protocol/world.js';
 import { PlayerRegistry, ClientSession } from './state/players.js';
 import { launchRegistry } from './state/launch.js';
+import { replaceSessionForReconnect } from './state/session-replacement.js';
 import { worldResumeRegistry } from './state/world-resume.js';
 import {
   countSavedUnreadMessages,
@@ -200,23 +201,23 @@ async function handleWorldLogin(
   }
 
   if (launch.accountId !== undefined) {
+    session.accountId = launch.accountId;
     const existingSession = players.findActiveSessionByAccountId(launch.accountId, session.id);
     if (existingSession) {
-      connLog.warn(
-        '[world-login] rejected duplicate session for accountId=%d (existingSession=%s phase=%s)',
+      connLog.info(
+        '[world-login] replacing existing session for accountId=%d (existingSession=%s phase=%s -> replacement=%s)',
         launch.accountId,
         existingSession.id.slice(0, 8),
         existingSession.phase,
+        session.id.slice(0, 8),
       );
-      session.socket.destroy();
-      return;
+      replaceSessionForReconnect(existingSession, session.id);
     }
   }
 
-  const accountResume = worldResumeRegistry.consume(launch.accountId, session.username);
+  const accountResume = worldResumeRegistry.consume(session.accountId, session.username);
   const restoredRoomId = accountResume?.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
 
-  session.accountId       = launch.accountId;
   session.displayName     = accountResume?.displayName ?? launch.displayName;
   session.allegiance      = accountResume?.allegiance ?? launch.allegiance;
   session.cbills          = accountResume?.cbills ?? launch.cbills;
@@ -324,7 +325,7 @@ function handleWorldGameData(
   }
 
   const cmdIdx = payload[2] - 0x21;
-  connLog.info('[world] client seq=%d cmd=%d', seq, cmdIdx);
+  connLog.debug('[world] client seq=%d cmd=%d', seq, cmdIdx);
 
   if (cmdIdx === 3) {
     if (session.worldInitialized) {
@@ -1098,14 +1099,25 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
   });
 
   socket.on('close', () => {
-    connLog.info(
-      '[world] client disconnected (phase=%s, bytes=%d)',
-      session.phase, session.bytesReceived,
-    );
+    if (session.replacedBySessionId) {
+      connLog.info(
+        '[world] client disconnected (phase=%s, bytes=%d, replacedBy=%s)',
+        session.phase,
+        session.bytesReceived,
+        session.replacedBySessionId.slice(0, 8),
+      );
+    } else {
+      connLog.info(
+        '[world] client disconnected (phase=%s, bytes=%d)',
+        session.phase, session.bytesReceived,
+      );
+    }
     savePendingIncomingComstarPrompt(session, connLog, 'disconnect');
     handleArenaCombatDisconnect(players, session, connLog);
     clearSessionDuelState(players, session, connLog, 'player disconnected');
-    worldResumeRegistry.save(session);
+    if (!session.skipWorldResumeSave) {
+      worldResumeRegistry.save(session);
+    }
     if (session.worldInitialized) {
       notifyRoomDeparture(players, session, connLog);
     }
@@ -1160,6 +1172,7 @@ function handleWorldConnection(socket: net.Socket, players: PlayerRegistry, log:
     capture.close();
   });
 
+  socket.setNoDelay(true);
   socket.setKeepAlive(true, 15_000);
   if (SOCKET_IDLE_TIMEOUT_MS > 0) {
     socket.setTimeout(SOCKET_IDLE_TIMEOUT_MS);

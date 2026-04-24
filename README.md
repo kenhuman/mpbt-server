@@ -281,7 +281,12 @@ npm start --prefix mpbt-server
 start "" "C:\MPBT\MPBTWIN.EXE" "C:\MPBT\play.pcgi"
 ```
 
-Packet captures are written to `mpbt-server/captures/` and logs to `mpbt-server/logs/` for each session.
+Logs are written to `mpbt-server/logs/` for each session.
+
+Per-session packet captures are now opt-in so normal playtesting does not pay the
+hex-dump disk-I/O cost on every packet. Set `MPBT_CAPTURE=1` when you want fresh
+wire captures in `mpbt-server/captures/`, and set `MPBT_LOG_LEVEL=debug` when you
+also want the verbose per-packet debug trace back in `logs/server.log`.
 
 ## Reverse Engineering Notes
 

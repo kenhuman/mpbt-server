@@ -17,14 +17,19 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { hexDump } from '../protocol/aries.js';
+import { MPBT_CAPTURE_ENABLED } from '../config.js';
 
 const CAPTURE_DIR = path.join(process.cwd(), 'captures');
 
 export class CaptureLogger {
-  private stream: fs.WriteStream;
+  private stream: fs.WriteStream | null = null;
   private packetIndex = 0;
 
   constructor(sessionId: string) {
+    if (!MPBT_CAPTURE_ENABLED) {
+      return;
+    }
+
     fs.mkdirSync(CAPTURE_DIR, { recursive: true });
     const filename = `${Date.now()}_${sessionId}.txt`;
     this.stream = fs.createWriteStream(path.join(CAPTURE_DIR, filename), {
@@ -39,6 +44,7 @@ export class CaptureLogger {
   }
 
   logRecv(payload: Buffer, streamOffset: number): void {
+    if (!this.stream) return;
     const header =
       `=== RECV #${this.packetIndex++} offset=${streamOffset} len=${payload.length} ` +
       `time=${new Date().toISOString()} ===\n`;
@@ -46,6 +52,7 @@ export class CaptureLogger {
   }
 
   logSend(payload: Buffer, label?: string): void {
+    if (!this.stream) return;
     const labelSuffix = label ? ` label=${label}` : '';
     const header =
       `=== SEND #${this.packetIndex++}${labelSuffix} len=${payload.length} ` +
@@ -54,6 +61,7 @@ export class CaptureLogger {
   }
 
   close(): void {
+    if (!this.stream) return;
     this.stream.write(`# Session ended: ${new Date().toISOString()}\n`);
     this.stream.end();
   }

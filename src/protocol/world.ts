@@ -478,28 +478,10 @@ export function buildCmd58SetScrollListIdPacket(listId: number, seq = 0): Buffer
   return buildGamePacket(58, encodeB85_1(listId), false, seq);
 }
 
-// ── Cmd 46 — Rich Info Panel ──────────────────────────────────────────────────
-// Strong current RE fit for richer Solaris ranking/personnel detail.
-//
-// Wire args:
-//   [type4: id]
-//   [type3: battles to date]
-//   [type4: legacy/unused]
-//   [type4: legacy/unused]
-//   [Frame_ReadArg × 6: detail lines]
-//
-// Current best-fit assumption: same payload layout as Cmd14, but routed to the
-// richer info-panel handler family (`World_HandleInfoPanelPacket_v123`).
-
-export interface Cmd46InfoPanelOptions extends Cmd14PersonnelRecordOptions {}
-
-/** Build a Cmd46 rich info-panel packet. */
-export function buildCmd46InfoPanelPacket(
-  opts: Cmd46InfoPanelOptions,
-  seq = 0,
-): Buffer {
-  return buildGamePacket(46, buildCmd14Args(opts), false, seq);
-}
+// v1.29 migration warning:
+//   v1.23's Cmd46 rich info-panel was repurposed to
+//   World_Cmd46_ClearWorldUiChildren_v129. This server targets v1.29 and
+//   intentionally does not expose the old Cmd46 detail builder.
 
 // ── Cmd 17 — Scene-Action Response Family / Duel Terms ──────────────────────
 // CONFIRMED subtype 3 handler: World_HandleCmd5SceneActionSubtype3_v123 @ 0x0041e5b0.
