@@ -130,10 +130,10 @@ export const BOT_AI_RANGE_FIT_LONG_WEIGHT = 0.45;
 export const BOT_AI_RANGE_ADVANTAGE_BONUS_METERS = 45;
 
 /** Preferred-range compression used when the bot needs to force a closer fight. */
-export const BOT_AI_RANGE_PRESSURE_BONUS_METERS = 35;
+export const BOT_AI_RANGE_PRESSURE_BONUS_METERS = 25;
 
 /** Damaged opponents invite a stronger closing push from short-range loadouts. */
-export const BOT_AI_FINISHER_PUSH_HEALTH_THRESHOLD = 32;
+export const BOT_AI_FINISHER_PUSH_HEALTH_THRESHOLD = 24;
 
 /** Heat model: approximate one full heat-sink cycle every few seconds, not every tick. */
 export const BOT_AI_HEAT_DISSIPATION_WINDOW_MS = 3_000;
@@ -148,14 +148,14 @@ export const BOT_AI_TIC_SAFE_OVERHEAT_RISK = 0.55;
 export const BOT_AI_TIC_FINISHER_OVERHEAT_RISK = 0.82;
 
 /** Baseline single-shot hit chance before range / motion modifiers. */
-export const BOT_TO_HIT_BASE_CHANCE = 0.74;
+export const BOT_TO_HIT_BASE_CHANCE = 0.69;
 
 /** Clamp so the prototype still allows both misses and strong close-range hits. */
 export const BOT_TO_HIT_MIN_CHANCE = 0.18;
-export const BOT_TO_HIT_MAX_CHANCE = 0.92;
+export const BOT_TO_HIT_MAX_CHANCE = 0.88;
 
 /** Close-range shots are noticeably easier than medium / long-range fire. */
-export const BOT_TO_HIT_SHORT_RANGE_BONUS = 0.15;
+export const BOT_TO_HIT_SHORT_RANGE_BONUS = 0.12;
 export const BOT_TO_HIT_MEDIUM_RANGE_BONUS = 0.05;
 export const BOT_TO_HIT_LONG_RANGE_MAX_PENALTY = 0.22;
 

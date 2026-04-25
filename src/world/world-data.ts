@@ -57,6 +57,7 @@ export const ARENA_READY_ROOM_MENU_ID   = 0x3F7;
 export const ARENA_READY_ROOM_MAX_PARTICIPANTS = 8;
 export const PERSONNEL_MORE_ID          = 0x95;
 export const SOLARIS_TRAVEL_CONTEXT_ID  = 0xC6;
+export const SOLARIS_TRAM_ROOM_ID       = 9000;
 // World_HandleSceneWindowInput_v123 hard-sends cmd-5 action 4 from the fixed
 // lower-left scene icon, so keep that opcode reserved for ComStar access and
 // use a separate server-defined action id for the top-row Travel button.
@@ -189,6 +190,7 @@ try {
   solarisRooms = SOLARIS_FALLBACK_ROOMS;
 }
 
+const RETAIL_SOLARIS_ROOM_IDS = new Set<number>(solarisRooms.map(room => room.roomId));
 export const SOLARIS_ROOM_BY_ID = new Map<number, WorldRoom>(
   solarisRooms.map(room => [room.roomId, room]),
 );
@@ -196,10 +198,12 @@ export const SOLARIS_ROOM_BY_ID = new Map<number, WorldRoom>(
 // ── World map (navigation graph from world-map.json) ─────────────────────────
 
 export let worldMapByRoomId = new Map<number, WorldMapRoom>();
+const sceneRoomAnchorCache = new Map<number, number>();
 try {
   const worldMap = loadWorldMap();
   if (worldMap) {
     worldMapByRoomId = new Map(worldMap.rooms.map(r => [r.roomId, r]));
+    sceneRoomAnchorCache.clear();
     process.stderr.write(`[world] loaded world-map.json (${worldMap.rooms.length} rooms)\n`);
   } else {
     process.stderr.write('[world] WARNING: world-map.json not found — using provisional linear topology\n');
@@ -215,16 +219,32 @@ try {
 // for intermediate rooms rather than falling back to DEFAULT_MAP_ROOM_ID.
 let _nextSynthSceneIndex = SOLARIS_ROOM_BY_ID.size;
 for (const [id, mapRoom] of worldMapByRoomId) {
-  if (!SOLARIS_ROOM_BY_ID.has(id)) {
-    SOLARIS_ROOM_BY_ID.set(id, {
-      roomId:      id,
-      name:        mapRoom.name ?? `Room ${id}`,
-      flags:       0,
-      centreX:     0,
-      centreY:     0,
-      sceneIndex:  _nextSynthSceneIndex++,
-      description: '',
-    });
+  const existingRoom = SOLARIS_ROOM_BY_ID.get(id);
+  if (existingRoom) {
+    if (!existingRoom.description && mapRoom.description) {
+      existingRoom.description = mapRoom.description;
+    }
+    continue;
+  }
+
+  SOLARIS_ROOM_BY_ID.set(id, {
+    roomId:      id,
+    name:        mapRoom.name ?? `Room ${id}`,
+    flags:       0,
+    centreX:     0,
+    centreY:     0,
+    sceneIndex:  _nextSynthSceneIndex++,
+    description: mapRoom.description ?? '',
+  });
+}
+
+for (const fallbackRoom of SOLARIS_FALLBACK_ROOMS) {
+  if (fallbackRoom.description) {
+    continue;
+  }
+  const mapRoom = worldMapByRoomId.get(fallbackRoom.roomId);
+  if (mapRoom?.description) {
+    fallbackRoom.description = mapRoom.description;
   }
 }
 
@@ -234,12 +254,223 @@ export function getSolarisRoomInfo(roomId: number): WorldRoom {
   return SOLARIS_ROOM_BY_ID.get(roomId) ?? SOLARIS_ROOM_BY_ID.get(DEFAULT_MAP_ROOM_ID)!;
 }
 
+export function isRetailSolarisRoomId(roomId: number): boolean {
+  return RETAIL_SOLARIS_ROOM_IDS.has(roomId);
+}
+
+const SECTOR_SCENE_ROOM_BY_KEY: Record<string, number> = {
+  international: 1,
+  kobe:          2,
+  silesia:       3,
+  montenegro:    4,
+  cathay:        5,
+  blackhills:    6,
+};
+
+function normalizeSectorSceneKey(sector: string | undefined): string {
+  return (sector ?? '').toLowerCase().replace(/[^a-z]/g, '');
+}
+
+function getSectorSceneFallbackRoomId(mapRoom: WorldMapRoom | undefined): number | undefined {
+  const sectorRoomId = SECTOR_SCENE_ROOM_BY_KEY[normalizeSectorSceneKey(mapRoom?.sector)];
+  return sectorRoomId !== undefined && isRetailSolarisRoomId(sectorRoomId) ? sectorRoomId : undefined;
+}
+
+function isCompatibleSceneAnchor(
+  logicalRoom: WorldMapRoom | undefined,
+  anchorRoom: WorldMapRoom | undefined,
+): boolean {
+  if (!logicalRoom || !anchorRoom) {
+    return true;
+  }
+
+  switch (logicalRoom.type) {
+    case 'bar':
+      return anchorRoom.type === 'bar';
+    case 'arena':
+      return anchorRoom.type === 'arena';
+    case 'terminal':
+      return anchorRoom.type === 'terminal'
+          || anchorRoom.type === 'street'
+          || anchorRoom.type === 'sector'
+          || anchorRoom.type === 'hub';
+    case 'street':
+      return anchorRoom.type === 'street'
+          || anchorRoom.type === 'sector'
+          || anchorRoom.type === 'hub';
+    case 'sector':
+      return anchorRoom.type === 'sector' || anchorRoom.type === 'hub';
+    case 'hub':
+      return anchorRoom.type === 'hub' || anchorRoom.type === 'sector';
+    case 'tram':
+      return anchorRoom.type === 'tram'
+          || anchorRoom.type === 'hub'
+          || anchorRoom.type === 'sector'
+          || anchorRoom.type === 'street'
+          || anchorRoom.type === 'path';
+    default:
+      return anchorRoom.type !== 'bar';
+  }
+}
+
+const TRAM_SLOT_BY_ROOM_ID = new Map<number, number>([
+  [1,   1], // International Sector → south
+  [2,   1], // Kobe Sector          → south
+  [3,   1], // Silesia Sector       → south
+  [4,   0], // Montenegro Sector    → north
+  [5,   1], // Cathay Sector        → south
+  [6,   1], // Black Hills Sector   → south
+]);
+
+function isBlockedInterSectorRoadExit(
+  sourceRoom: WorldMapRoom | undefined,
+  targetRoom: WorldMapRoom | undefined,
+): boolean {
+  if (!sourceRoom || !targetRoom) {
+    return false;
+  }
+  if (targetRoom.type === 'tram') {
+    return false;
+  }
+  return sourceRoom.sector.length > 0
+      && targetRoom.sector.length > 0
+      && sourceRoom.sector !== targetRoom.sector;
+}
+
+function maybeInjectTramExit(
+  roomId: number,
+  mapRoom: WorldMapRoom | undefined,
+  slottedExits: (number | null)[],
+): (number | null)[] {
+  if (!mapRoom || mapRoom.type !== 'sector') {
+    return slottedExits;
+  }
+  if (slottedExits.some(exitRoomId => exitRoomId !== null && worldMapByRoomId.get(exitRoomId)?.type === 'tram')) {
+    return slottedExits;
+  }
+
+  const preferredSlot = TRAM_SLOT_BY_ROOM_ID.get(roomId);
+  if (preferredSlot === undefined) {
+    return slottedExits;
+  }
+
+  const order = [preferredSlot, 1, 0, 2, 3].filter((slot, index, arr) => arr.indexOf(slot) === index);
+  for (const slot of order) {
+    if (slottedExits[slot] === null) {
+      slottedExits[slot] = SOLARIS_TRAM_ROOM_ID;
+      break;
+    }
+  }
+  return slottedExits;
+}
+
+export function getSolarisRoomSlottedExits(roomId: number): (number | null)[] {
+  const mapRoom = worldMapByRoomId.get(roomId);
+  if (mapRoom) {
+    const slottedExits: (number | null)[] = [
+      mapRoom.exits.north,
+      mapRoom.exits.south,
+      mapRoom.exits.east,
+      mapRoom.exits.west,
+    ];
+
+    for (let slot = 0; slot < slottedExits.length; slot++) {
+      const targetRoomId = slottedExits[slot];
+      if (targetRoomId === null) continue;
+      if (isBlockedInterSectorRoadExit(mapRoom, worldMapByRoomId.get(targetRoomId))) {
+        slottedExits[slot] = null;
+      }
+    }
+
+    return maybeInjectTramExit(roomId, mapRoom, slottedExits);
+  }
+
+  const exits = getSolarisRoomExits(roomId);
+  return [
+    exits[0] ?? null,
+    exits[1] ?? null,
+    exits[2] ?? null,
+    exits[3] ?? null,
+  ];
+}
+
+export function getSolarisSceneRoomId(roomId: number): number {
+  if (isRetailSolarisRoomId(roomId)) {
+    return roomId;
+  }
+
+  const cached = sceneRoomAnchorCache.get(roomId);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const mapRoom = worldMapByRoomId.get(roomId);
+  const explicitAnchor = mapRoom?.sceneRoomId;
+  if (explicitAnchor !== undefined && isRetailSolarisRoomId(explicitAnchor)) {
+    sceneRoomAnchorCache.set(roomId, explicitAnchor);
+    return explicitAnchor;
+  }
+
+  const visited = new Set<number>([roomId]);
+  const queue: number[] = [];
+
+  if (mapRoom) {
+    for (const nextRoomId of getSolarisRoomSlottedExits(roomId)) {
+      if (nextRoomId !== null && !visited.has(nextRoomId)) {
+        visited.add(nextRoomId);
+        queue.push(nextRoomId);
+      }
+    }
+  }
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (isRetailSolarisRoomId(current) && isCompatibleSceneAnchor(mapRoom, worldMapByRoomId.get(current))) {
+      sceneRoomAnchorCache.set(roomId, current);
+      return current;
+    }
+
+    const currentMapRoom = worldMapByRoomId.get(current);
+    if (!currentMapRoom) {
+      continue;
+    }
+
+    for (const nextRoomId of getSolarisRoomSlottedExits(current)) {
+      if (nextRoomId !== null && !visited.has(nextRoomId)) {
+        visited.add(nextRoomId);
+        queue.push(nextRoomId);
+      }
+    }
+  }
+
+  const sectorFallback = getSectorSceneFallbackRoomId(mapRoom);
+  if (sectorFallback !== undefined) {
+    sceneRoomAnchorCache.set(roomId, sectorFallback);
+    return sectorFallback;
+  }
+
+  sceneRoomAnchorCache.set(roomId, DEFAULT_MAP_ROOM_ID);
+  return DEFAULT_MAP_ROOM_ID;
+}
+
 export function getSolarisSceneIndex(roomId: number): number {
   return getSolarisRoomInfo(roomId).sceneIndex;
 }
 
 export function getSolarisRoomName(roomId: number): string {
   return getSolarisRoomInfo(roomId).name;
+}
+
+export function getSolarisDistrictName(roomId: number): string {
+  const mapRoom = worldMapByRoomId.get(roomId);
+  const sectorRoomId = SECTOR_SCENE_ROOM_BY_KEY[normalizeSectorSceneKey(mapRoom?.sector)];
+  if (sectorRoomId !== undefined && isRetailSolarisRoomId(sectorRoomId)) {
+    return getSolarisRoomName(sectorRoomId);
+  }
+  if (mapRoom?.type === 'sector') {
+    return getSolarisRoomName(roomId);
+  }
+  return getSolarisRoomName(getSolarisSceneRoomId(roomId));
 }
 
 export function usesClientMapDescription(roomId: number): boolean {
@@ -279,9 +510,8 @@ export function uniqueRoomIds(roomIds: number[]): number[] {
  */
 export function getSolarisRoomExits(roomId: number): number[] {
   // Use world-map.json if loaded.
-  const mapRoom = worldMapByRoomId.get(roomId);
-  if (mapRoom) {
-    const { north, south, east, west } = mapRoom.exits;
+  if (worldMapByRoomId.has(roomId)) {
+    const [north, south, east, west] = getSolarisRoomSlottedExits(roomId);
     // Slot order: 0=N 1=S 2=E 3=W.  Skip nulls (no exit in that direction).
     return [north, south, east, west].filter((id): id is number => id !== null);
   }
@@ -305,12 +535,14 @@ export function getSolarisRoomExits(roomId: number): number[] {
 
 /**
  * Return the Cmd4 location icon ID (mechId) for a room.
- * Uses the icon field from world-map.json if present; falls back to sceneIndex.
+ * Uses the icon field from world-map.json if present; otherwise falls back to
+ * the room's retail scene anchor so client-facing icon IDs never depend on
+ * invented synthetic scene slots.
  */
 export function getSolarisRoomIcon(roomId: number): number {
   const mapRoom = worldMapByRoomId.get(roomId);
   if (mapRoom?.icon !== null && mapRoom?.icon !== undefined) return mapRoom.icon;
-  return getSolarisSceneIndex(roomId);
+  return getSolarisSceneIndex(getSolarisSceneRoomId(roomId));
 }
 
 // ── Mech picker constants ─────────────────────────────────────────────────────
@@ -529,12 +761,9 @@ export function setSessionRoomPosition(
   session: { worldMapRoomId?: number; worldX?: number; worldY?: number; worldZ?: number },
   roomId: number,
 ): void {
-  // Always assign the caller's roomId directly so that generated rooms
-  // (IDs ≥ 1000, in world-map.json but not in SOLARIS_ROOM_BY_ID) are
-  // correctly tracked.  getSolarisRoomInfo may fall back to DEFAULT_MAP_ROOM_ID
-  // when roomId is unknown; centreX/Y from the fallback are acceptable
-  // placeholder coords, but worldMapRoomId must be the real room.
-  const room = getSolarisRoomInfo(roomId);
+  // Preserve the logical room id for routing while anchoring coordinates to a
+  // retail Solaris room so reconnect/UI state never depends on invented scene slots.
+  const room = getSolarisRoomInfo(getSolarisSceneRoomId(roomId));
   session.worldMapRoomId = roomId;
   session.worldX         = room.centreX;
   session.worldY         = room.centreY;

@@ -92,6 +92,7 @@ import {
   SOLARIS_TRAVEL_CONTEXT_ID,
   getSolarisSceneHeaderDetail,
   getSolarisRoomName,
+  getSolarisSceneRoomId,
   setSessionRoomPosition,
   worldMapByRoomId,
 } from './world/world-data.js';
@@ -108,6 +109,7 @@ import {
   sendPersonnelRecord,
   buildSceneInitForSession,
   sendSceneRefresh,
+  sendWorldUiRestore,
   sendAllRosterList,
   sendArenaSideMenu,
   sendArenaStatusList,
@@ -124,8 +126,8 @@ import {
   handleMatchResultsSelection,
   handleNewsCategorySelection,
   handleNewsgridArticleSelection,
-  handleTierRankingChooserSelection,
-  handleClassRankingChooserSelection,
+  handleTierRankingMenuSelection,
+  handleClassRankingMenuSelection,
   handleRankingResultsSelection,
   handleRoomMenuSelection,
   handleMapTravelReply,
@@ -155,6 +157,7 @@ import {
   handleArenaReadyToggle,
   handleArenaReadyRoomSelection,
   handleArenaSideSelection,
+  completePendingWorldReadySceneRefresh,
   flushPendingDuelSettlementNotice,
 } from './world/world-handlers.js';
 
@@ -279,7 +282,8 @@ async function handleWorldLogin(
 //   cmd  1 — PingAck  (client acknowledging a server ping request)
 //   cmd  2 — PingRequest (client requesting ack from server — echo reply needed)
 //   cmd  3 — client capabilities / ready signal (initial trigger; also sent on reconnect)
-//   cmd 29 — control frame (retail v1.29 uses subtype 2 for mouse replies on Cmd7 menus)
+//   cmd 29 — control frame (retail v1.29 uses subtype 2 for world-menu replies on
+//            later client UI surfaces, including Cmd7 compatibility menus)
 
 function dispatchWorldMenuSelection(
   players: PlayerRegistry,
@@ -289,6 +293,10 @@ function dispatchWorldMenuSelection(
   connLog: Logger,
   capture: CaptureLogger,
 ): boolean {
+  // Keep world menu routing transport-neutral. The v1.29 client can submit the
+  // same logical listId/selection pair through plain cmd-7 or through world
+  // cmd-29 subtype 2, so the remaining late-client Cmd57 gap is the outbound
+  // menu packet surface rather than this selection dispatcher.
   if (handleMechPickerCmd7(players, session, listId, selection, connLog, capture)) {
     return true;
   }
@@ -302,6 +310,12 @@ function dispatchWorldMenuSelection(
 
   if (listId === 3) {
     handleRoomMenuSelection(players, session, selection, connLog, capture);
+    return true;
+  }
+
+  if (listId === ALL_ROSTER_LIST_ID && selection === 0) {
+    connLog.info('[world] all-roster cancel -> restoring world UI');
+    sendWorldUiRestore(players, session, connLog, capture, 'all-roster cancel');
     return true;
   }
 
@@ -388,12 +402,12 @@ function dispatchWorldMenuSelection(
   }
 
   if (listId === TIER_RANKING_CHOOSER_LIST_ID) {
-    handleTierRankingChooserSelection(session, selection, connLog, capture);
+    handleTierRankingMenuSelection(session, selection, connLog, capture);
     return true;
   }
 
   if (listId === CLASS_RANKING_CHOOSER_LIST_ID) {
-    handleClassRankingChooserSelection(session, selection, connLog, capture);
+    handleClassRankingMenuSelection(session, selection, connLog, capture);
     return true;
   }
 
@@ -482,9 +496,13 @@ function handleWorldGameData(
     // Cmd-3: client capabilities / ready signal (RPS mode).
     // Called by FUN_0040d3c0 immediately after the world-MMW welcome is received.
     // Respond with the world initialization sequence exactly once.
+    if (session.pendingWorldReadySceneRefresh) {
+      completePendingWorldReadySceneRefresh(players, session, connLog, capture, 'client-ready');
+      return;
+    }
+    session.worldInitialized = true;
     connLog.info('[world] cmd-3 (client-ready) → sending world init sequence');
     sendWorldInitSequence(players, session, connLog, capture);
-    session.worldInitialized = true;
     notifyRoomArrival(players, session, connLog);
 
     // Notify about unread ComStar messages that are waiting in the Postgres-backed inbox.
@@ -968,7 +986,11 @@ function handleWorldGameData(
       return;
     }
 
-    connLog.info('[world] cmd-7 menu reply: listId=%d selection=%d', parsed.listId, parsed.selection);
+    connLog.info(
+      '[world] world menu reply (cmd-7): listId=%d selection=%d',
+      parsed.listId,
+      parsed.selection,
+    );
     if (!dispatchWorldMenuSelection(
       players,
       session,
@@ -1035,9 +1057,11 @@ function sendWorldInitSequence(
   // Cmd4 — SceneInit: create the world scene, chat window, scene action
   // buttons, and up to four adjacent location icons.
   const roomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
+  const sceneRoomId = getSolarisSceneRoomId(roomId);
   connLog.info(
-    '[world] sending Cmd4 SceneInit (room=%d header="%s" detail="%s")',
+    '[world] sending Cmd4 SceneInit (logicalRoom=%d sceneRoom=%d header="%s" detail="%s")',
     roomId,
+    sceneRoomId,
     getSolarisRoomName(roomId),
     getSolarisSceneHeaderDetail(roomId),
   );

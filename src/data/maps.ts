@@ -240,20 +240,26 @@ export function loadSolarisRooms(filePath?: string): WorldRoom[] | null {
  * Room type tags used in world-map.json.
  * bar | arena | hub | terminal | bank | street | sector | path
  */
-export type RoomType = 'bar' | 'arena' | 'hub' | 'terminal' | 'bank' | 'street' | 'sector' | 'path';
+export type RoomType = 'bar' | 'arena' | 'hub' | 'terminal' | 'bank' | 'street' | 'sector' | 'path' | 'tram';
 
 /** One entry from world-map.json, representing navigation data for a single room. */
 export interface WorldMapRoom {
   roomId: number;
   /** Human-readable room name (_name or name field from the JSON). */
   name?: string;
+  /**
+   * Optional retail Solaris room id to use when a synthetic room needs a
+   * client-safe scene anchor. When omitted, the server may infer one from the
+   * graph at runtime.
+   */
+  sceneRoomId?: number;
   /** Room-description text for the lower world scene header line, when known. */
   description?: string;
   sector: string;
   type: RoomType;
   /**
    * Location icon ID sent in Cmd4 mechId field.
-   * null = not yet known; server falls back to scene-slot index.
+   * null = not yet known; server falls back to the room's retail scene anchor.
    */
   icon: number | null;
   /**
@@ -301,6 +307,9 @@ export function loadWorldMap(filePath?: string): WorldMap | null {
       name:   typeof r['_name'] === 'string' ? r['_name'] as string
               : typeof r['name']  === 'string' ? r['name']  as string
               : undefined,
+      sceneRoomId: typeof r['_sceneRoomId'] === 'number' ? r['_sceneRoomId'] as number
+                 : typeof r['sceneRoomId']  === 'number' ? r['sceneRoomId']  as number
+                 : undefined,
       description: typeof r['description'] === 'string' ? r['description'] as string : undefined,
       sector: String(r['sector'] ?? ''),
       type:   String(r['type']   ?? 'street') as RoomType,

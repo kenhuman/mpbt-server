@@ -28,7 +28,7 @@
         "north": null,
         "south": 2011,
         "west": null,
-        "east": 2005
+        "east": null
       },
       "_gridCol": 7,
       "_gridRow": 6,
@@ -120,7 +120,7 @@
       "icon": 26,
       "exits": {
         "north": 2094,
-        "south": 2009,
+        "south": null,
         "west": null,
         "east": null
       },
@@ -226,9 +226,9 @@
       "sector": "kobe",
       "exits": {
         "north": null,
-        "south": 2043,
+        "south": null,
         "west": 2090,
-        "east": 2092
+        "east": null
       },
       "_gridCol": 14,
       "_gridRow": 7,
@@ -242,7 +242,7 @@
       "exits": {
         "north": null,
         "south": 2042,
-        "west": 2091,
+        "west": null,
         "east": 2093
       },
       "_gridCol": 15,
@@ -285,7 +285,7 @@
       "type": "street",
       "sector": "kobe",
       "exits": {
-        "north": 149,
+        "north": null,
         "south": 2010,
         "west": null,
         "east": 2008
@@ -379,7 +379,7 @@
       "exits": {
         "north": 148,
         "south": 2006,
-        "west": 151,
+        "west": null,
         "east": 2046
       },
       "_gridCol": 10,
@@ -425,7 +425,7 @@
         "north": 2090,
         "south": null,
         "west": 2045,
-        "east": 2043
+        "east": null
       },
       "_gridCol": 13,
       "_gridRow": 8,
@@ -437,9 +437,9 @@
       "type": "street",
       "sector": "montenegro",
       "exits": {
-        "north": 2091,
+        "north": null,
         "south": null,
-        "west": 2044,
+        "west": null,
         "east": 2042
       },
       "_gridCol": 14,
@@ -718,7 +718,7 @@
         "north": null,
         "south": null,
         "west": 2073,
-        "east": 2075
+        "east": null
       },
       "_gridCol": 13,
       "_gridRow": 10,
@@ -732,7 +732,7 @@
       "exits": {
         "north": null,
         "south": null,
-        "west": 2074,
+        "west": null,
         "east": null
       },
       "_gridCol": 14,
@@ -778,7 +778,7 @@
       "sector": "montenegro",
       "exits": {
         "north": 2051,
-        "south": 2053,
+        "south": null,
         "west": null,
         "east": null
       },
@@ -793,7 +793,7 @@
       "sector": "kobe",
       "exits": {
         "north": 2086,
-        "south": 170,
+        "south": null,
         "west": null,
         "east": null
       },
@@ -837,7 +837,7 @@
       "type": "street",
       "sector": "silesia",
       "exits": {
-        "north": 2052,
+        "north": null,
         "south": 2054,
         "west": null,
         "east": null
@@ -872,7 +872,7 @@
         "north": null,
         "south": 2148,
         "west": null,
-        "east": 2146
+        "east": null
       },
       "_gridCol": 6,
       "_gridRow": 12,
@@ -886,8 +886,8 @@
       "exits": {
         "north": null,
         "south": null,
-        "west": 2147,
-        "east": 170
+        "west": null,
+        "east": null
       },
       "_gridCol": 7,
       "_gridRow": 12,
@@ -902,9 +902,9 @@
       "sector": "blackhills",
       "icon": 1,
       "exits": {
-        "north": 2087,
+        "north": null,
         "south": null,
-        "west": 2146,
+        "west": null,
         "east": null
       },
       "_gridCol": 8,
@@ -932,7 +932,7 @@
       "sector": "montenegro",
       "exits": {
         "north": 2133,
-        "south": 165,
+        "south": null,
         "west": null,
         "east": null
       },
@@ -947,7 +947,7 @@
       "sector": "silesia",
       "exits": {
         "north": 2053,
-        "south": 2055,
+        "south": null,
         "west": null,
         "east": null
       },
@@ -964,7 +964,7 @@
         "north": null,
         "south": 160,
         "west": null,
-        "east": 2111
+        "east": null
       },
       "_gridCol": 20,
       "_gridRow": 12,
@@ -994,7 +994,7 @@
         "north": 2078,
         "south": null,
         "west": null,
-        "east": 2080
+        "east": null
       },
       "_gridCol": 10,
       "_gridRow": 13,
@@ -1008,7 +1008,7 @@
       "exits": {
         "north": null,
         "south": 2123,
-        "west": 2079,
+        "west": null,
         "east": 2081
       },
       "_gridCol": 11,
@@ -1024,7 +1024,7 @@
         "north": null,
         "south": null,
         "west": 2080,
-        "east": 2082
+        "east": null
       },
       "_gridCol": 12,
       "_gridRow": 13,
@@ -1038,7 +1038,7 @@
       "exits": {
         "north": null,
         "south": null,
-        "west": 2081,
+        "west": null,
         "east": 2083
       },
       "_gridCol": 13,
@@ -1054,7 +1054,7 @@
         "north": null,
         "south": 2120,
         "west": 2082,
-        "east": null
+        "east": 2084
       },
       "_gridCol": 14,
       "_gridRow": 13,
@@ -1068,7 +1068,7 @@
       "exits": {
         "north": null,
         "south": null,
-        "west": 165,
+        "west": 2083,
         "east": null
       },
       "_gridCol": 15,
@@ -1084,10 +1084,10 @@
       "sector": "cathay",
       "icon": 51,
       "exits": {
-        "north": 2134,
+        "north": null,
         "south": 2116,
         "west": null,
-        "east": 2084
+        "east": null
       },
       "_gridCol": 16,
       "_gridRow": 13,
@@ -1098,8 +1098,8 @@
       "type": "street",
       "sector": "montenegro",
       "exits": {
-        "north": 2054,
-        "south": 2114,
+        "north": null,
+        "south": null,
         "west": 2056,
         "east": null
       },
@@ -1115,7 +1115,7 @@
       "exits": {
         "north": null,
         "south": 2110,
-        "west": 2112,
+        "west": null,
         "east": 2105
       },
       "_gridCol": 20,
@@ -1206,7 +1206,7 @@
       "sector": "silesia",
       "exits": {
         "north": 2080,
-        "south": 167,
+        "south": null,
         "west": null,
         "east": 2122
       },
@@ -1221,8 +1221,8 @@
       "sector": "montenegro",
       "exits": {
         "north": 2083,
-        "south": 2136,
-        "west": 2121,
+        "south": null,
+        "west": null,
         "east": 2119
       },
       "_gridCol": 14,
@@ -1237,7 +1237,7 @@
       "exits": {
         "north": 165,
         "south": 2117,
-        "west": 2119,
+        "west": null,
         "east": 2115
       },
       "_gridCol": 16,
@@ -1265,7 +1265,7 @@
       "type": "street",
       "sector": "cathay",
       "exits": {
-        "north": 2055,
+        "north": null,
         "south": null,
         "west": 2115,
         "east": 2113
@@ -1283,7 +1283,7 @@
         "north": null,
         "south": null,
         "west": 2114,
-        "east": 2110
+        "east": null
       },
       "_gridCol": 19,
       "_gridRow": 14,
@@ -1297,7 +1297,7 @@
       "exits": {
         "north": 2111,
         "south": null,
-        "west": 2113,
+        "west": null,
         "east": 155
       },
       "_gridCol": 20,
@@ -1347,7 +1347,7 @@
         "north": null,
         "south": 2142,
         "west": null,
-        "east": 2140
+        "east": null
       },
       "_gridCol": 8,
       "_gridRow": 15,
@@ -1361,7 +1361,7 @@
       "exits": {
         "north": null,
         "south": null,
-        "west": 2141,
+        "west": null,
         "east": 2139
       },
       "_gridCol": 9,
@@ -1377,7 +1377,7 @@
         "north": null,
         "south": null,
         "west": 2140,
-        "east": 167
+        "east": null
       },
       "_gridCol": 10,
       "_gridRow": 15,
@@ -1392,10 +1392,10 @@
       "sector": "blackhills",
       "icon": 32,
       "exits": {
-        "north": 2123,
-        "south": 2039,
-        "west": 2139,
-        "east": 2138
+        "north": null,
+        "south": null,
+        "west": null,
+        "east": null
       },
       "_gridCol": 11,
       "_gridRow": 15,
@@ -1408,7 +1408,7 @@
       "exits": {
         "north": null,
         "south": null,
-        "west": 167,
+        "west": null,
         "east": 2137
       },
       "_gridCol": 12,
@@ -1421,10 +1421,10 @@
       "type": "street",
       "sector": "silesia",
       "exits": {
-        "north": null,
+        "north": 2121,
         "south": null,
         "west": 2138,
-        "east": 2136
+        "east": null
       },
       "_gridCol": 13,
       "_gridRow": 15,
@@ -1436,9 +1436,9 @@
       "type": "street",
       "sector": "cathay",
       "exits": {
-        "north": 2120,
+        "north": null,
         "south": null,
-        "west": 2137,
+        "west": null,
         "east": 2135
       },
       "_gridCol": 14,
@@ -1543,7 +1543,7 @@
       "type": "street",
       "sector": "silesia",
       "exits": {
-        "north": 167,
+        "north": null,
         "south": 2038,
         "west": null,
         "east": null
@@ -1638,7 +1638,7 @@
         "north": null,
         "south": null,
         "west": 2038,
-        "east": 2101
+        "east": null
       },
       "_gridCol": 12,
       "_gridRow": 17,
@@ -1652,7 +1652,7 @@
       "exits": {
         "north": null,
         "south": null,
-        "west": 2102,
+        "west": null,
         "east": 2100
       },
       "_gridCol": 13,
@@ -1730,7 +1730,7 @@
         "north": null,
         "south": null,
         "west": 2098,
-        "east": 2096
+        "east": null
       },
       "_gridCol": 18,
       "_gridRow": 17,
@@ -1744,7 +1744,7 @@
       "exits": {
         "north": null,
         "south": null,
-        "west": 2097,
+        "west": null,
         "east": 2095
       },
       "_gridCol": 19,
@@ -1882,7 +1882,7 @@
       "sector": "blackhills",
       "exits": {
         "north": 168,
-        "south": 2070,
+        "south": null,
         "west": null,
         "east": null
       },
@@ -1912,7 +1912,7 @@
       "sector": "silesia",
       "exits": {
         "north": 2037,
-        "south": 2035,
+        "south": null,
         "west": null,
         "east": null
       },
@@ -1958,7 +1958,7 @@
       "type": "street",
       "sector": "international",
       "exits": {
-        "north": 2071,
+        "north": null,
         "south": 2066,
         "west": null,
         "east": null
@@ -1988,10 +1988,10 @@
       "type": "street",
       "sector": "blackhills",
       "exits": {
-        "north": 2036,
+        "north": null,
         "south": null,
         "west": null,
-        "east": 2034
+        "east": null
       },
       "_gridCol": 11,
       "_gridRow": 20,
@@ -2005,7 +2005,7 @@
       "exits": {
         "north": null,
         "south": null,
-        "west": 2035,
+        "west": null,
         "east": 2033
       },
       "_gridCol": 12,
@@ -2081,7 +2081,7 @@
         "north": null,
         "south": null,
         "west": 2016,
-        "east": 2014
+        "east": null
       },
       "_gridCol": 17,
       "_gridRow": 20,
@@ -2095,7 +2095,7 @@
       "exits": {
         "north": null,
         "south": null,
-        "west": 2015,
+        "west": null,
         "east": 2013
       },
       "_gridCol": 18,
@@ -2235,7 +2235,7 @@
         "north": 2070,
         "south": null,
         "west": 146,
-        "east": 2065
+        "east": null
       },
       "_gridCol": 5,
       "_gridRow": 21,
@@ -2249,7 +2249,7 @@
       "exits": {
         "north": null,
         "south": null,
-        "west": 2066,
+        "west": null,
         "east": 2064
       },
       "_gridCol": 6,
@@ -2325,7 +2325,7 @@
       "sector": "silesia",
       "exits": {
         "north": 2012,
-        "south": 2030,
+        "south": null,
         "west": null,
         "east": null
       },
@@ -2386,7 +2386,7 @@
       "type": "street",
       "sector": "cathay",
       "exits": {
-        "north": 2062,
+        "north": null,
         "south": null,
         "west": 5,
         "east": 2058
@@ -2461,10 +2461,10 @@
       "type": "street",
       "sector": "cathay",
       "exits": {
-        "north": 2029,
-        "south": 2031,
+        "north": null,
+        "south": null,
         "west": 2061,
-        "east": 2109
+        "east": null
       },
       "_gridCol": 20,
       "_gridRow": 22,
@@ -2478,7 +2478,7 @@
       "exits": {
         "north": null,
         "south": null,
-        "west": 2030,
+        "west": null,
         "east": 2108
       },
       "_gridCol": 21,
@@ -2569,7 +2569,7 @@
       "sector": "cathay",
       "exits": {
         "north": 163,
-        "south": 2057,
+        "south": null,
         "west": null,
         "east": null
       },
@@ -2598,7 +2598,7 @@
       "type": "street",
       "sector": "silesia",
       "exits": {
-        "north": 2030,
+        "north": null,
         "south": 156,
         "west": null,
         "east": null
@@ -2648,7 +2648,7 @@
         "north": 2128,
         "south": null,
         "west": null,
-        "east": 2126
+        "east": null
       },
       "_gridCol": 16,
       "_gridRow": 24,
@@ -2662,7 +2662,7 @@
       "exits": {
         "north": null,
         "south": null,
-        "west": 2127,
+        "west": null,
         "east": 2125
       },
       "_gridCol": 17,
@@ -2755,7 +2755,7 @@
       "exits": {
         "north": null,
         "south": null,
-        "east": 2116,
+        "east": null,
         "west": 2120
       },
       "_gridCol": 15,
@@ -2768,8 +2768,8 @@
       "sector": "silesia",
       "exits": {
         "north": null,
-        "south": null,
-        "east": 2120,
+        "south": 2137,
+        "east": null,
         "west": 2122
       },
       "_gridCol": 13,
@@ -2789,9 +2789,26 @@
       "_gridCol": 12,
       "_gridRow": 14,
       "_name": "Road"
+    },
+    {
+      "roomId": 9000,
+      "_name": "Tram Station",
+      "description": "Click on the Tram icon for a subway map of Solaris City. The map shows sectors in white and districts in color. From the map, click on a district name and then on \"Travel\" to travel to that district.",
+      "type": "tram",
+      "sector": "international",
+      "icon": 0,
+      "exits": {
+        "north": null,
+        "south": null,
+        "west": null,
+        "east": null
+      },
+      "_gridCol": 4,
+      "_gridRow": 22
     }
   ],
   "_schema": {
+    "type": "bar | arena | hub | terminal | bank | street | sector | path | tram",
     "description": "Optional lower scene-header text, mirrored from SOLARIS.MAP for stock rooms.",
     "clientMapDescription": "Optional boolean. When true, the client should use the room's description in the map/scene header context for stock rooms."
   }

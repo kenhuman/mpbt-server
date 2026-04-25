@@ -1311,14 +1311,30 @@ page opener itself:
         `Cmd44` service menu described above.
     - **Arenas / ready rooms / battlegrounds** are real room/category concepts.
       - Manual: arenas, ready rooms, sanctioned arenas, and battleground entry are explicit.
+      - `docs\qwikstrt.txt` further tightens the retail player flow:
+        players move through the world shell to an arena icon, click the arena,
+        then click its **door icon** to pick a ready room; empty rooms are used
+        for droid fights while occupied rooms are used for player-vs-player
+        fights.
       - Client/server RE: arena scenes get special scene options like
         `Fight`, `Mech`, and `Duel Terms`.
     - **Tram / monorail travel** is real, but currently looks more like a
       **travel interaction/system** than a distinct packet family or proven universal
       room enum.
       - Manual: tram/monorail is the access path to arena districts.
+      - `docs\qwikstrt.txt` also states the player first checks the center world
+        icon's `ALL -> Show All Players` list for district activity, then clicks
+        the **Tram** icon, chooses a district, and clicks **TRAVEL**.
       - Client RE: tram uses the same `cmd5 actionType 4 -> Cmd43` Solaris travel-map
         flow as ordinary Solaris travel; no tram-specific world command was found.
+    - **The lower-left Solaris world shell** is a documented retail UI surface.
+      - `docs\qwikstrt.txt` describes a block of **nine icons** in the lower left:
+        four corner function icons plus five cross-shaped location icons.
+      - The center location icon shows the current location; the four surrounding
+        icons move to nearby locations north/south/east/west.
+      - This is consistent with the current emulator direction that Solaris world
+        movement is a stock scene-shell/navigation experience rather than a
+        freeform room list.
     - **Global ComStar access** is also a real gameplay concept, separate from
       physically being inside a bar or facility.
       - Manual (`BT-MAN.txt` 398-423): players can send ComStar messages by clicking
@@ -3567,9 +3583,75 @@ Confirmed call sites:
       - sets actor `+0xdc |= 0x10` (temporary recovery/input blocker)
       - installs animation **state `8`** with callback `0043b3d0` via `FUN_00432950(...)`
     - `Combat_AnimCallback_ClearActorRecoveryBlock_v123` (`0043b3d0`) only clears actor `+0xdc bit 0x10`; no packet handler clears that bit directly
+    - v1.29 spot-check follow-up on 2026-04-24 confirms the same moved helper chain in
+      `MPBTv129re`:
+      - `0x004292d0` = `Combat_SetActorAnimationState_v129`
+      - `0x00436640` = `Combat_StartFallDownAnim_SetRecoveryBlock_v129`
+      - `0x00436570` = `Combat_AnimCallback_ClearActorRecoveryBlock_v129`
+      - `0x004091c0` = `Combat_ArmDeferredCollapseWhileAirborne_v129`
+      - `0x00407ff0` = `Combat_ProcessLocalMechContact_v129`
+      - `0x00419f50` = `Combat_UpdateLocalMovementHudAndAnimation_v129`
+      - `0x00428d50` = `Combat_FindAnimationStateDefinitionById_v129`
+      - `0x00428990` = `Combat_BuildActorAnimationPose_v129`
+      - `0x00428e10` = `Combat_BuildAnimationNodePoseRecursive_v129`
+      - `0x00428d80` = `Combat_UpdateAnimationControllerProgress_v129`
+      - `0x00429810` = `Combat_AdvanceAnimationControllerState_v129`
+      - the moved state-8 helper still clears actor airborne bits, sets
+        `+0xdc bit 0x10`, and installs state `8` with the clear-bit callback
+      - the moved callback remains tiny and only clears actor `+0xdc bit 0x10`
+      - `Combat_ArmDeferredCollapseWhileAirborne_v129` is the shared airborne
+        helper that, when support is broken and local airborne flag `0x80` is
+        set, adds the vertical impulse term and arms deferred collapse by
+        setting actor `+0xdc bit 0x08`
+      - `Combat_UpdateLocalMovementHudAndAnimation_v129` updates the local
+        movement HUD and ordinary stand/walk animation controller state, but it
+        only does so when the local mech is not airborne, not downed, and not
+        recovery-blocked (`+0xdc bit 0x10` clear)
+      - the controller-side callback flow is now explicit in the live `v1.29`
+        project:
+        - `Combat_BuildActorAnimationPose_v129` drives per-frame pose rebuild
+          from the controller
+        - `Combat_UpdateAnimationControllerProgress_v129` advances progress by
+          `(playbackRate * dt) / 6000`
+        - once progress runs past the state's duration, it calls
+          `Combat_AdvanceAnimationControllerState_v129`
+        - if no queued state remains, that controller helper fires the stored
+          callback pointer and clears it
+    - Fresh 2026-04-24 low-jet jump follow-up in `MPBTv129re`:
+      - `Mech_InitRuntimeStateFromRecord_v129` (`0x004157a0`) is the
+        actor-runtime init helper that copies the mech's jump-jet count from
+        mech-data offset `+0x38` into actor field `+0x486`
+      - `Combat_ProcessLocalMovementAndJumpInput_v129` (`0x0044d230`) and
+        `Combat_TickLocalActorControlLoop_v129` (`0x00410f60`) are now named
+        as the local wrapper/control loop around the jump-input path
+      - `Combat_JumpJetInputTick_v129` directly checks actor `+0x486` and only
+        rejects jump start when the count is zero
+      - no recovered branch in the live v1.29 jump-init path requires `>= 4`
+        jump jets
+      - practical read: the late-version `<4`-jets fix is already visible in
+        the recovered runtime/init path; the remaining unknown is where the old
+        pre-fix bug lived, not whether v1.29 still enforces a four-jet minimum
+    - Additional 2026-04-24 offline diff against the retail `v1.23` exe
+      tightened that again after the Ghidra bridge dropped:
+      - the `v1.23` actor-runtime init still copies mech-data `+0x38` into
+        actor `+0x486` (offline match around `0x004339df` / `0x004339ef`)
+      - the main recovered `v1.23` jump-motion/fuel helpers around
+        `0x0042c610` and `0x0042c830` both test actor `+0x486` for **positive**
+        remaining jump fuel / jet count and never require `>= 4`
+      - the nearby helper around `0x0042bf8b` simply decrements actor `+0x486`
+        when it is positive, again with no recovered four-jet minimum
+      - practical read: the old `<4`-jets issue does not appear to live in the
+        active `v1.23` combat runtime path either; the remaining candidate
+        space is now earlier-than-`v1.23` code or a non-runtime path such as
+        UI/config/mech-data interpretation
     - the stored callback is not invoked from `Cmd70` handling at all; it is invoked by the local animation controller:
       - `FUN_00432400` advances the controller clock using controller field `+0x0c` as the playback-rate scalar
       - when the current state's duration rolls over, `FUN_00432400` calls `FUN_00432e90`
+    - practical consequence after the v1.29 helper naming pass:
+      - the missing visible-pose piece is now even more clearly on the local
+        controller side: until the callback clears `+0xdc bit 0x10`, the
+        ordinary local movement/animation refresh helper will not resume its
+        normal stand/walk controller updates
       - `FUN_00432e90` is the routine that finally calls controller callback field `+0x24`
     - local render/update flow proves the controller keeps ticking every frame:
       - `FUN_00438e90` -> `FUN_00438cf0` -> `FUN_00432010` -> `FUN_00432400`
@@ -3933,7 +4015,7 @@ Confirmed call sites:
           - `02:31:20.587Z` fall-side `Cmd73` probe `43/43`
           - `02:31:39.537Z` inbound `cmd-12 jump action=6`
           - `02:31:46.537Z` recovery `cmd12/action0` ack, immediately followed by recovery-side `Cmd73 -> Cmd70/0`
-        - user-observed result: with the 60 FPS cap active, the client finally showed the expected visible fall and F12 stand-up timing, matching late-1990s retail behavior closely enough to call the cadence issue solved for this path
+        - user-observed result: with the 60 FPS cap active, the client finally showed the expected visible fall and F12 stand-up timing, matching late-1990s retail behavior closely enough to call the **visible fall delay solved** for this path
         - practical read:
           - the current server-side ownership path (`Cmd70/8`, no-local-echo while downed, default `cmd12/action0 -> Cmd70/0`, and the verifier-only `legdefercmd73` probe) is already sufficient to support a retail-like live run when the client is paced correctly
           - the dominant blocker was therefore the unpaced modern runtime / display cadence, not another missing fall/recovery packet semantic inside `mpbt-server`
@@ -4363,6 +4445,14 @@ Manual re-read plus follow-up static client RE tightened the current arena-room 
   teammates, and players may not all enter the arena while on the same side.
 - `STATUS` is documented as listing **every player in the arena ready room** together
   with each player's side and whether that player has picked a BattleMech.
+- `docs\qwikstrt.txt` adds a retail quick-start flow on top of that:
+  - the player reaches the ready-room chooser by clicking an arena's **door icon**
+  - empty ready rooms are presented as the path to battle droid opponents
+  - ready rooms with players listed are the path to battle other players
+  - after each battle, the player is returned to the arena ready room
+- The same quick-start also explicitly binds the ready-room `MECH` control to
+  `F2`, which matches the special arena/ready-room control family already
+  surfaced in client RE.
 
 **What this does and does not prove**
 
@@ -5197,6 +5287,12 @@ documentation resolves the tram's protocol mechanism.
 - The `SOLARIS.HLP` "Destination Database" index lists all 26 venue rooms *and* all 6
   sector common areas (rooms 1–6) as tram destinations — the tram gives access to the
   full Solaris city grid, not just a subset of sector hubs
+- `docs\qwikstrt.txt` confirms the retail player-facing flow:
+  1. Open the center world icon's `ALL` list and choose `Show All Players`
+  2. Read player activity by **district** in the third column
+  3. Click the **Tram** icon
+  4. Choose the destination district
+  5. Click **TRAVEL**
 
 **Wire protocol (confirmed by static RE of `MPBTWIN.EXE` v1.23):**
 
@@ -5245,6 +5341,53 @@ session context (which room the player is in) — the client wire format is the 
 **Conclusion:** No separate tram implementation is needed in the server.  The existing
 `sendSolarisTravelMap` path (Cmd43, `contextId = 0xc6`) already covers all tram
 destinations.  Issue #70 is resolved.
+
+**2026-04-24 `mpbt-server` Solaris world-map audit snapshot:**
+
+- The current server already keeps the **retail-shaped Cmd43 wire format**:
+  `src/protocol/world.ts` still builds `[contextId][currentRoomId + 1][26 counters]`,
+  matching the recovered v1.23 map-open packet.
+- The largest remaining drift is **not** the browser packet itself, but the
+  authoritative world model behind it:
+  - `src/world/world-data.ts` extends `SOLARIS_ROOM_BY_ID` with synthetic
+    `world-map.json` rooms so the server can route through invented street/path
+    nodes and still anchor UI state back onto retail scene ids.
+  - `getSolarisSceneRoomId(...)` therefore maps many logical rooms back to a
+    nearby retail `SOLARIS.MAP` room before sending `Cmd4`/`Cmd43`.
+  - `getSolarisRoomSlottedExits(...)` injects a dedicated tram room
+    (`SOLARIS_TRAM_ROOM_ID = 2002`) and also blocks direct inter-sector road exits.
+- `src/world/world-handlers.ts` still drives ordinary Solaris movement through the
+  provisional `world-map.json` graph:
+  - `handleLocationAction(...)` resolves `cmd23` compass clicks through the
+    synthetic slotted-exit model.
+  - clicking a tram-adjacent location opens `sendSolarisTravelMap(...)`, but the
+    scene graph itself still depends on custom room ids and server-authored links
+    that are not retail-proven.
+- Retail evidence from `BT-MAN.txt` + the client RE still points to a narrower
+  authoritative travel model:
+  - the tram is an **access behavior/context**, not a separate packet family or a
+    confirmed standalone room id
+  - the Solaris browser destinations are the **26 venue rooms (146–171)** plus the
+    **6 sector rooms (1–6)** already present in `SOLARIS.MAP`
+- Practical implication for the late-1990s-retail todo: `mpbt-server` no longer
+  needs a new tram protocol, but it still needs the provisional street/tram graph
+  audited and reduced until ordinary Solaris routing is expressed in terms that
+  match the recovered retail room set and browser layout instead of invented
+  `world-map.json` transit nodes.
+- Implementation follow-up on 2026-04-25:
+  - `world-map.json` now preserves a connected street/road graph inside each of
+    the six retail zones while removing all direct cross-zone street exits
+  - the authoritative zones are Black Hills, Cathay, International Zone, Kobe,
+    Montenegro, and Silesia; each zone is internally reachable, but travel
+    between zones is only exposed through the tram / Solaris map flow
+  - the tram helper now uses server-only room `9000`, avoiding collision with
+    generated road room `2002`
+  - invariant check after the change: 183 total rooms, zero missing exits, zero
+    cross-zone road exits, and full per-zone reachability for all six zones
+  - the retail travel/browser data from the screenshots and extracted v1.29
+    assets (`C:\\MPBT\\Solaris_Bitmap\\Solaris - Bitmap\\...\\main.png`) is now
+    the reference for preserving in-zone arenas, bars, and road/street links
+    while keeping tram-only inter-zone movement
 
 ---
 
@@ -5789,11 +5932,11 @@ world/Solaris UI routing is not.**
 
 - Baseline binaries compared:
   - `v1.23`: `C:\MPBT\Mpbtwin.exe` (`FileVersion 1.23`, `621,568` bytes)
-  - `v1.29`: `C:\MPBT-v1.29\mpbtwin.exe` (`FileVersion 1.29`, `629,248` bytes)
+  - `v1.29`: `C:\MPBT\mpbtwin.exe` (`FileVersion 1.29`, `629,248` bytes)
   - `v1.23` `mpbtwin.exe` SHA-256: `DDB766C5F5092EF814ABC5E2D5331E86E3076832CF67A45881CD04A30F15FC5A`
   - `v1.29` `mpbtwin.exe` SHA-256: `F9ACDA6290F820D0BD632E791CAB1CB8324A7D4145FA8E163BAEC0BC30196D68`
 - `COMMEG32.DLL` is byte-identical between the local retail `v1.23` install and
-  `C:\MPBT-v1.29`.
+  the current `C:\MPBT` v1.29 tree.
   - SHA-256: `683A2424B5C57BF6B07E7429087797FA2EEFD3EB408A064C03CEB34B25AAE82A`
 - `INITAR.DLL` is also byte-identical between those installs.
   - SHA-256: `7BD4C51D4C45091A62B8493EB02B05EB45D8B7D68CE5EB946EEC08E718345640`
@@ -5822,10 +5965,235 @@ world/Solaris UI routing is not.**
 - The recovered `v1.29` `Cmd65` body still reads the same
   `3 / 3 / 2 / 1 / 1 / 1 / 1` type pattern and still uses the same motion /
   heading constants seen in `v1.23`.
+- Fresh Ghidra confirmation on 2026-04-24 tightens that claim:
+  - `Combat_Cmd65_UpdateActorPosition_v129` is now decompiled cleanly in the
+    current v1.29 program and still updates the same actor runtime block rooted
+    at `actorBase = DAT_004f5778 + actorIndex * 0x49c`.
+  - The decoded fields still map to:
+    - `type3 x`
+    - `type3 y`
+    - `type2 z`
+    - `type1 heading`
+    - `type1 pitch`
+    - `type1 roll`
+    - `type1 speedLikeField`
+  - The heading/pitch/roll transforms remain the same retail fixed-point forms:
+    - heading: `(raw * 0x5b + -0x4e3f6) * 2`
+    - pitch: `(0xe1c - raw) * 0xb6`
+    - roll: `(raw * 0x5b + -0x503f4) * 2`
+    - speed-like field: `raw - 0xe1c`
+  - Crucially for fall / recovery timing analysis, the v1.29 `Cmd65` handler
+    still contains the same controller-rate gate seen in the older client:
+    - it writes the decoded speed-like field to actor `+0x372` and `+0x6e`
+    - when the actor is not in blocked/downed/jump state and has a live
+      animation controller at `+0x222`, it either:
+      - forces controller `+0x0c = 0x12c0`, or
+      - for controller state id `1`, derives a dynamic playback rate from the
+        decoded speed and the mech walk-speed field
+    - if recoverable support is not intact, it still zeros the local throttle /
+      rate accumulators after the same check.
+- Practical read: the later client did **not** replace the motion packet with a
+  new timing model. Any glacial fall/recovery behavior still seen under v1.29 is
+  more likely to come from server-side sequencing / local state gating than from
+  a new `Cmd65` wire interpretation.
+- Follow-up correction from live validation: in the current local windowed test
+  environment, the "glacial" visible fall/recovery duration was **not** caused
+  by `Cmd65` or another protocol delta after all. Capping the v1.29 client to
+  **60 FPS** restored the expected retail-feeling fall/recovery timing and
+  **solved the visible fall delay**. That makes the earlier slow-motion symptom
+  an environment/render cadence issue, not evidence of a different server
+  packet contract.
+- Separate 2026-04-24 Ghidra confirmation: result handoff is also still
+  recognizably retail-shaped in `v1.29`.
+  - `Combat_Cmd63_ResultSceneInit_v129` decompiles at `0x00404BC0`.
+  - It still tears down active combat presentation, loads the result scene from
+  `scenes.dat`, sets the post-combat mode/state globals, rebuilds fonts/UI,
+  and arms the same 10-second local timer before disconnect cleanup.
+  - Practical implication: the older `Cmd75 -> Cmd63 -> local timed disconnect`
+  match-end model remains the right server-side shape for v1.29 as well.
+- Fresh 2026-04-24 Ghidra confirmation: the live fall/collapse packet itself is
+  also still recognizably retail-shaped in `v1.29`.
+  - `Combat_Cmd70_ActorAnimState_v129` decompiles at `0x0042B000`.
+  - Recovered subcommands still match the older functional split:
+    - `0`: stand / late collapse-to-destruction tail advance, with controller
+      rate forced back to `0x12c0` before dispatch
+    - `1`: direct fall helper, also rate-forced to `0x12c0`
+    - `4`: airborne/jump helper; sets actor `+0x476 bit 0x80` for non-local actors
+    - `6`: landing resolution; if deferred-collapse bit `+0xdc bit 0x08` was
+      set, it zeros movement, sets `+0x35e = 1`, rate-forces the controller,
+      and enters the grounded collapse helper
+    - `8`: collapse start / deferred collapse; either latches `+0xdc bit 0x08`
+      when airborne, or immediately zeros movement, sets `+0x35e = 1`, forces
+      controller rate `0x12c0`, and enters the same grounded collapse helper
+  - Practical implication: the `v1.23` retail read still carries forward for
+    server work. `Cmd70` remains the primary live fall/landing/collapse driver
+    in v1.29, and there is still no evidence here for a redesigned "new" downed
+    sequence that would require a different server-side packet shape.
+- Fresh 2026-04-24 Ghidra confirmation: the later client's actor rate/bias
+  packet is now pinned cleanly as well.
+  - `Combat_Cmd73_UpdateActorRateFields_v129` decompiles at `0x0042AC20`.
+  - Its body is still the same narrow three-byte form seen in the older client:
+    - actor slot byte
+    - rate field A byte
+    - rate field B byte
+  - The slot byte is still remapped through the local actor-slot table at
+    `DAT_0047E110`.
+  - Under the same combat-live gate used by neighboring handlers, it writes:
+    - actor `+0x2fa = (rateAByte - 0x2a) * 0x38e`
+    - actor `+0x2fe = (rateBByte - 0x2a) * 0x38e`
+  - For the live `43/43` probe already captured on the wire, that formula gives
+    `910/910`, exactly matching the earlier debugger snapshots.
+  - It also sets `_DAT_0047E16C = 1` after the write, preserving the same
+    "actor-rate fields updated this tick" style side effect inferred in older
+    work.
+- Practical read: `v1.29` did **not** replace `Cmd73` with a broader animation
+  controller or timing packet. The handler still only seeds two per-actor
+  fields, so the later client remains structurally consistent with the earlier
+  conclusion: `Cmd73` is real and decodes cleanly, but by itself it is not
+  evidence of a redesigned fall/recovery contract.
+- Fresh 2026-04-24 whole-binary operand sweep against `C:\MPBT\mpbtwin129.exe`
+  (via local `objdump`) materially tightens that question.
+  - Searches for `0x2fa`, `0x2fe`, and `0x0047E16C` in the full disassembly
+    found only these meaningful `Cmd73`-related sites:
+    - `Combat_Cmd64_AddActor_v129` zeroes actor `+0x2fa/+0x2fe` on actor spawn
+    - `Combat_Cmd73_UpdateActorRateFields_v129` writes actor `+0x2fa/+0x2fe`
+      and sets `_DAT_0047E16C = 1`
+    - `Combat_Cmd68_SpawnWeaponEffect_v129` clears `_DAT_0047E16C = 0`
+    - `Combat_Cmd69_ImpactEffectAtCoord_v129` clears `_DAT_0047E16C = 0`
+    - the combat slot/reset path around `0x00429B50` also zeros
+      `_DAT_0047E16C` while resetting actor-slot tables
+  - No obvious read-site for actor `+0x2fa/+0x2fe` was recovered in that full
+    text-section scan, and no obvious read/branch on `_DAT_0047E16C` surfaced
+    either.
+- Practical read: in the current v1.29 retail binary, `Cmd73` state is now
+  backed by strong evidence for **producer/init/clear** behavior, but still no
+  recovered **consumer** in ordinary text-section code. That substantially
+  weakens `Cmd73` as a primary gameplay/fall-timing lever in the later client.
+- Next narrowed RE question for v1.29 combat is therefore no longer "where is
+  `Cmd73`?" and not even primarily "who consumes it?" The better next target is
+  to move sideways to other live v1.29 deltas that can still affect faithful
+  server behavior, especially anti-hacking / guard surfaces introduced in
+  `v1.28+` and any sanctioned-battle or low-jump-jet branches that changed the
+  game-visible contract.
 - Practical implication: existing `mpbt-server` combat packet work should be
   treated as **largely portable** to `v1.29`, with follow-up attention aimed
   more at feature deltas (anti-hacking, Team Sanctioned Battles, low-jet jump,
   sound/event fixes) than at a wholesale combat-protocol rewrite.
+
+#### Early anti-hack / runtime-guard pass
+
+- Fresh 2026-04-24 `v1.29` string and import sweep found explicit registry-key
+  strings for:
+  - `Software\\Kesmai\\MultiPlayer Battletech Solaris\\NoGameCPUCheck`
+  - `Software\\Kesmai\\MultiPlayer Battletech Solaris\\NoSpeechCPUCheck`
+- However, the follow-up whole-binary disassembly scan and registry-import walk
+  did **not** recover an ordinary text-section reference to those exact string
+  addresses.
+  - The startup/registry call clusters recovered so far (`0x0041189F`,
+    `0x00414F1C`, `0x004150CD`, `0x004151CD`, plus later config helpers around
+    `0x0043D730` / `0x0044CEC0` / `0x0044CF00`) currently resolve to the older
+    generic config/override path rooted at:
+    - `Software\\Kesmai\\MultiPlayer Battletech Solaris`
+    - value name `Override`
+    - the `Config` subkey save/load helpers
+  - Raw `.text` scans for the exact `NoGameCPUCheck` / `NoSpeechCPUCheck`
+    string addresses also came back empty in the current binary.
+- Practical read: those CPU-check strings are definitely present in the retail
+  `v1.29` client, but in the currently recovered static surface they look
+  **unreferenced or at least not directly referenced by normal text-section
+  code**. Treat them as a known lead, not yet as an active confirmed guard path.
+- Better next static target after this dead-end is the `v1.27+` low-jump-jet
+  branch or Team Sanctioned Battle deltas, where a protocol- or gameplay-visible
+  carry-forward difference is more likely to be recoverable from ordinary code.
+
+#### Low-jump-jet carry-forward (`v1.27+`) — early v1.29 pass
+
+- Fresh 2026-04-24 Ghidra confirmation: the local v1.29 jump-start path is
+  still explicit and still uses **actual jump-jet count**, not a hardcoded
+  "must have 4 jets" gate.
+  - `Combat_JumpJetInputTick_v129` decompiles in the current program at the
+    `0x00416680` region.
+  - It is still one of the live callers of `Combat_SendCmd12Action_v129`, and
+    its jump-start branch still sends `cmd12/action 4`.
+  - The start gate remains materially retail-like:
+    - refuse if combat is globally blocked (`DAT_0047CBC0 & 0x20`)
+    - refuse if the local short jump tick throttle has not elapsed
+    - refuse if `*(ushort *)(param_2 + 0xf8 + 0x38) == DAT_004f6c14`
+    - refuse if local actor `+0x486 == DAT_004f6c14`
+    - refuse unless posture/state `+0x35a` is in the expected ground-ready band
+    - require jump fuel `actor +0x472 > 0x32`
+    - require local jump flags `(+0x476 & 3) == 0`
+    - require not already downed (`+0x35e == DAT_004f6c14`)
+  - On success it still:
+    - sends `cmd12/action 4`
+    - arms the local 500 ms jump-start timer at actor `+0x47a`
+    - sets local jump flags `actor +0x476 |= 3`
+    - starts the local airborne/jump animation through `FUN_00436580(...)`
+- Fresh 2026-04-24 runtime-init confirmation: the old jump-jet-count field path
+  still survives in v1.29.
+  - `FUN_004157A0` (actor-runtime init from loaded mech data / terrain state)
+    explicitly copies:
+    - mech/loaded-state `+0x38` -> actor runtime `+0x486`
+  - The same initializer also seeds:
+    - actor `+0x472 = 0x78` (local jump-fuel / recharge bucket)
+    - actor `+0x476 = 0`
+    - actor `+0x47a = 0`
+- Fresh 2026-04-24 damage-state confirmation: `FUN_0040F7D0` still contains a
+  specific branch for damage class `0x18` that decrements actor `+0x486` when
+  positive, which matches the older "jump-jet damage reduces live jump
+  capability" interpretation rather than a fixed 4-jet table.
+- Practical read: the later client still carries forward the older model where
+  local jump capability depends on the mech/runtime jump-jet count field, and
+  the recovered jump-start gate only checks for **non-zero capability**, not a
+  minimum of 4 jets. That is directionally consistent with the published v1.27
+  release note about fixing jump behavior for mechs with fewer than 4 jets.
+- Practical server implication: for v1.29 migration work, keep treating jump
+  start as client-owned after `cmd12/action 4`, and do **not** invent a
+  server-side minimum-jet rule beyond the mech/runtime field the retail client
+  already honors.
+
+#### Ranking/results submit carry-forward (`v1.29`) — sanctioned-results pass
+
+- Fresh 2026-04-24 Ghidra confirmation: the ordinary world list-submit family
+  still survives intact in `v1.29`.
+  - `World_SendMenuSelection_v129` decompiles at `0x0042F990`.
+  - Its wire shape is still the plain single-pick form:
+    - `startCmd('\a')`
+    - `type1 listId`
+    - `type4 selection`
+  - `FUN_0042FA00` still emits outbound `cmd10` as:
+    - `startCmd('\n')`
+    - `type1 listId`
+    - `type4 bitmaskPlusOne`
+  - `FUN_0042FAE0` still emits outbound `cmd16` as:
+    - `startCmd('\x10')`
+    - `type1 listId`
+    - `type1 count`
+    - repeated `(selector, value)` pairs
+- Fresh 2026-04-24 Ghidra confirmation: the paged scroll-list shell input loop
+  also survives intact in `v1.29`.
+  - `FUN_0042F140` is the active key handler for the shared scroll-list shell.
+  - `ESC` closes the shell and sends raw outbound `cmd27`.
+  - `Space`, when the shell mode is not `3`, sends raw outbound `cmd28`,
+    clears the shared row store rooted at `DAT_004F6440`, and rearms the shell
+    for the next page.
+  - `Enter` still reads the latched `listId` from `window[0x512]`; when that
+    value is nonzero it sends `Cmd7(listId, itemId + 1)` through
+    `World_SendMenuSelection_v129`, and when it is zero it still diverts into
+    the local inquiry submenu instead of sending a wire request.
+  - Up/down navigation still walks the sparse row table in `DAT_004F6440`
+    rather than using a separate ranking-specific buffer.
+- Practical read: the later `v1.27+` Team Sanctioned Battles support did
+  **not** obviously replace the public ranking/results request path with a new
+  client submit contract. The stronger current `v1.29` model is still:
+  - chooser/keyed-menu surface
+  - optional paged result shell using preserved scroll-list semantics
+  - ordinary `Cmd7` single-pick selection plus `cmd28` page advance
+- Server implication: sanctioned tier/class rankings and Solaris match results
+  are still best modeled as ordinary list-id / item-id flows unless capture
+  from the retail service proves a separate Team Sanctioned-specific opcode
+  family. This materially strengthens the earlier `Cmd45` / `Cmd58`-style
+  ranking-results hypothesis instead of weakening it.
 
 #### World/Solaris-side migration read
 
@@ -5867,18 +6235,555 @@ The highest-risk `v1.23` carry-forward mistakes are now known:
   - Current live name/classification is `World_Cmd41_NameMechScoreMatrix_v129`.
   - Best current read is a round-robin / match-results matrix surface with
     `NAME / MECH / SCORE` columns plus per-opponent score cells and row totals.
+- Fresh 2026-04-24 Ghidra confirmation now tightens that `Cmd41` classification
+  materially.
+  - `World_Cmd41_NameMechScoreMatrix_v129` starts at `0x00442A00`
+    (`0x00442A50` lies inside the same body).
+  - Its packet shape is:
+    - `type1 rowCount`
+    - for each row:
+      - pilot/handle string
+      - mech string
+      - base score `type2`
+      - `rowCount` additional `type2` matrix cells
+  - The renderer prints:
+    - left `NAME`
+    - center `MECH`
+    - one score cell per opponent/column
+    - a final row-total column
+  - Practical read: this is not a plain tier/class ranking list. It is much
+    closer to a round-robin or match-results score matrix, which makes it a
+    stronger candidate for sanctioned-results display than for SCentEx tier
+    rankings.
 
 - `Cmd44` and `Cmd46` are genuine repurposings in `v1.29`, not simple moved
   equivalents of the older world UI:
   - `Cmd44 -> World_Cmd44_SetLocationDistanceScale_v129`
   - `Cmd46 -> World_Cmd46_ClearWorldUiChildren_v129`
 
+- Fresh 2026-04-24 Ghidra confirmation fills in more of the location-browser /
+  map family in the current v1.29 program:
+  - `Cmd40 -> World_Cmd40_LocationBrowser_v129` at `0x00432540`
+    - still belongs to the shared world location/scene browser family rather
+      than the old v1.23 Inner Sphere map-only interpretation
+    - reads:
+      - `type1 browserMode`
+      - `type2/4 browser parameter` via `FUN_00430220(1)` and `FUN_00430220(4)`
+    - resolves the selected location against the live room table at
+      `DAT_0047EE14`, seeds browser selection/index globals
+      (`DAT_0048F598`, `DAT_0048F558`, anchor coords at `DAT_0048F560/564`),
+      selects title/footer strings, clears active world UI children, then
+      rebuilds the shared browser window through `FUN_00432450()`
+  - `Cmd43 -> World_Cmd43_GroupedLocationBrowser_v129` at `0x00432800`
+    - is the grouped/aggregated mode of that same shared browser family
+    - reads:
+      - `type1 contextId`
+      - `type1 currentLocationPlusOne`
+      - then 26 one-byte group counters, written into the loaded location table
+    - aggregates totals across same-group records in `DAT_0047EE14`, resolves
+      the current selection, then rebuilds the same browser UI through
+      `FUN_00432450()`
+    - `contextId == 0xC6` is still the special Solaris travel-mode branch that
+      installs the travel-specific header/button strings; other contexts do not
+      take that label path
+  - `Cmd49 -> World_Cmd49_MapConnectorOverlay_v129` at `0x004332B0`
+    - still reads one packed `type3` overlay value
+    - decodes two 1-based location indices plus a style/color nibble
+    - draws the connector onto the active browser/map surface using the
+      location coordinates already loaded in `DAT_0047EE14`
+  - `Cmd58 -> World_Cmd58_SetScrollListId_v129` at `0x0042F5A0`
+    - is confirmed as a tiny companion helper, not a visible UI surface
+    - it reads one type1 list id through `FUN_0042FB80()` and stores it in
+      `DAT_0047E698` for later use by the scroll-list shell
+- Fresh 2026-04-24 Ghidra + raw-disassembly confirmation now pins the actual
+  v1.29 scroll-shell builder itself.
+  - `World_Cmd45_ScrollListShell_v129` starts at the `0x0042F5B0` region
+    (the current Ghidra decompile can be recovered by decompiling inside the
+    same body at `0x0042F630`).
+  - Its packet shape is:
+    - `type1 mode`
+    - one long body string via `FUN_0042E780(...)`
+  - It stores the body text at `DAT_004F5780` and normalizes backslashes
+    (`'\\'`) to newlines before rendering.
+  - On first open, it clears the shared row store at `DAT_004F6440`, allocates
+    a type-6 window via `FUN_004413B0(6)`, and wires the shell callbacks:
+    - row/highlight callback at `0x0042F530`
+    - input handler `FUN_0042F140`
+    - companion handler at `0x0042F110`
+  - It then copies the latched list id from `DAT_0047E698` into window
+    `+0x1448`, confirming the preserved `Cmd58 -> Cmd45` contract in the later
+    client.
+  - Footer / mode handling remains materially consistent with the older client:
+    - modes `0/1`: plain shell, no paging footer
+    - modes `2/4`: Space + ESC footer controls
+    - mode `3`: Space-only footer
+  - `FUN_0042F140` remains the active shell input loop:
+    - `Enter` submits `Cmd7(listId, itemId + 1)` when the latched list id is
+      nonzero
+    - `Enter` diverts into the local inquiry submenu when the latched list id
+      is zero
+    - `Space` sends raw outbound `cmd28` and clears the row store for next-page
+      loading when the mode allows paging
+    - `ESC` sends raw outbound `cmd27`
+- Practical read: the v1.29 scroll-shell family is now fully pinned at the
+  shell/builder level. The remaining open question is no longer where `Cmd45`
+  lives or how it submits; it is only which command(s) or inline body grammar
+  populate `DAT_004F6440` rows for ranking/results pages in the later client.
+- Fresh 2026-04-24 Ghidra confirmation narrows that last question sharply:
+  v1.29 still contains an inline row-feed parser that writes directly into the
+  `Cmd45` shared row store.
+  - `FUN_0041E860` is a generic rich-text / control-sequence renderer used by
+    world-side windows.
+  - Inside its `'||'` control-sequence branch, it computes the active row from
+    the destination window state and then updates the same shared row store
+    used by the `Cmd45` shell:
+    - `'||#.....'` / `'||%.....'` forms parse a short numeric token through
+      `FUN_0042E1E0(...)` and store the resulting item id in
+      `DAT_004F6440[row * 9]`
+    - `'||$.....'` copies row text into the paired row-text area rooted at
+      `DAT_004F6444`
+    - `DAT_004F6A5C` is bumped to the highest populated row count
+  - Practical read: the earlier inline-row-feed theory is now supported in the
+    later client too. The remaining unknown is the exact higher-level body
+    syntax the server used for rankings/results pages, not whether a separate
+    hidden feeder opcode exists.
+- Fresh 2026-04-24 capture review closes most of that remaining syntax gap for
+  the emulator path. We now have working `v1.29` `Cmd45` payloads on wire from
+  `mpbt-server` that the retail client accepts.
+  - Captured examples:
+    - `captures/1776339303776_f273ec2f-afb4-4478-802c-0c6f1116808e.txt`
+      (`CMD45_TIER_RANKINGS`)
+    - `captures/1776280964028_47e7751e-b83e-40ec-b973-54c62b122286.txt`
+      (`CMD45_CLASS_RANKINGS`)
+  - The accepted body shape is:
+    - optional title text first
+    - backslash (`'\\'`) separators between segments
+    - then repeated per-row pairs:
+      - `|NN|%TOKEN`
+      - `|NN|$VISIBLE TEXT`
+  - Concrete captured example:
+    - `Tier Rankings - Amateur\|00|%0004V|00|$100175 ...\|01|%0004X|01|$100177 ...`
+  - Practical read:
+    - two-digit row ids (`00`, `01`, ...) are the active row selectors
+    - `%` carries the hidden per-row selection token consumed into the shared
+      item-id store
+    - `$` carries the visible row text
+    - a single `Cmd45` body string can therefore carry title + row ids + row
+      text inline, with `Cmd58` only supplying the shell/list id
+  - What still remains unknown is narrower than before:
+    - this syntax is now emulator-proven against the `v1.29` client
+    - but it is still not a retail packet capture, so the exact original server
+      token choice (for example `%` vs `#`, token width, or whether player ids
+      were always encoded the same way) remains historical inference rather than
+      direct retail proof
+- Practical read: the v1.29 world map/browser layer is not a random drift from
+  v1.23; it is a reorganized but still coherent shared browser family. For
+  `mpbt-server`, the important carry-forward is:
+  - `Cmd43` with context `0xC6` is still the Solaris grouped travel browser
+  - `Cmd49` is still the connector overlay on top of that browser
+  - `Cmd58` still acts as scroll-list state plumbing rather than a standalone
+    user-visible panel
 - `Cmd57` is now the strongest live chooser-family replacement in the `v1.29`
   world UI.
   - `World_Cmd57_HotkeySelectionMenu_v129` builds a keyed menu from a title plus
     repeated `(hotkey,row-text)` style entries.
   - Its input callback sends `World_SendMenuSelection_v129(menu_id,
     selection_index)` on Enter or hotkey match.
+- Fresh 2026-04-24 offline binary confirmation against `C:\MPBT\mpbtwin.exe`
+  now sharpens the submit side too:
+  - `World_SendMenuSelection_v129` (`0x0042F990`) still assembles as:
+    - `push 7`
+    - start/write cmd frame
+    - encode `type1 listId`
+    - encode `type4 selection`
+  - practical read: even if the visible chooser surface is `Cmd57` in `v1.29`,
+    the actual server-facing selection reply is still ordinary `cmd7`
+- Fresh 2026-04-24 raw-disassembly follow-up now bounds that `Cmd57` surface
+  more tightly even though the current Ghidra database has not functionized the
+  exact entry point cleanly.
+  - The active packet-reading cluster starts in the `0x00441992` region and
+    installs menu callbacks into the live world window (`+0x1424`, `+0x142c`,
+    `+0x1430`) before consuming the payload.
+  - The recovered read pattern is consistent with a compact keyed menu rather
+    than a scroll-list shell:
+    - one `type1` menu/list id (stored at `DAT_0048F5F8`)
+    - two additional `type1` control bytes (`DAT_0047FB48`,
+      `DAT_0047FB54`)
+    - when the recovered control flags indicate hotkeys are present, four
+      one-byte hotkey values are read into the per-entry table rooted at
+      `DAT_0048FD68`
+    - four one-byte selection values are then read into the parallel table at
+      `DAT_0048FD78` (stored zero-based after `dec`)
+    - per-entry row strings are read through `FUN_0042E720()` into the string
+      table rooted at `DAT_0048FFE0`
+  - The same cluster then builds a compact dedicated window and renders those
+    row strings directly rather than using the paged scroll-shell row store.
+  - Practical read: this strongly supports the earlier `Cmd57` classification
+    as a true keyed hotkey menu family, separate from both:
+    - the paged `Cmd45` / `Cmd58` scroll-list shell, and
+    - the triple-string `Cmd48` keyed list family.
+  - It also narrows the remaining emulator gap: outbound chooser rendering is
+    the missing late-client piece, while the submit contract already lines up
+    with the existing `cmd7` list-id/item-id path.
+- Additional 2026-04-25 offline disassembly against `C:\MPBT\mpbtwin.exe`
+  narrows the display-side packet structure further:
+  - the active `Cmd57` reader at `0x00441992` reads:
+    - one `type1 menuId`
+    - one `byte flagsA`
+    - one `byte menuSlotOrStyle`
+    - one `type1 auxIdA`
+    - when `flagsA & 0x10`, a block of:
+      - four one-byte values into the table rooted at `DAT_0048FD68`
+      - four `type1` values into the parallel table rooted at `DAT_0048FD78`
+    - one string through `FUN_0042E720()` into the string table rooted at
+      `DAT_0048FFE0`
+    - one additional string through `FUN_0042E780()` / copied into the table
+      rooted at `DAT_0048FD88`
+    - one byte row count into `DAT_004E7400`
+    - repeated `rowCount × (byte rowCode, string rowText)` into the row tables
+      rooted at `DAT_004E7404` and `DAT_0048FA00`
+  - the row-count loop is now the strongest concrete candidate for the visible
+    chooser entries, while the earlier `4 + 4` value block reads more like a
+    separate action/hotkey strip than the main row payload
+  - Additional 2026-04-25 render-consumer tracing sharpens that interpretation:
+    - a fixed-layout dispatcher around `0x004413B0` switches on a small `0..7`
+      selector and chooses one of several preset panel builders
+    - those preset builders consume the state seeded from the early `4 + 4`
+      tables rather than the counted row store
+    - practical read: `menuSlotOrStyle` is now more likely a fixed preset-strip
+      layout/style selector than a row-list property, and the four-entry side
+      tables look like per-slot action metadata for that strip
+    - one initially suspicious consumer around `0x00441090` is actually an
+      input/key dispatcher rather than the row renderer, so it should not be
+      used to infer the `(byte rowCode, string rowText)` display semantics
+  - Additional 2026-04-25 callback tracing now resolves two of those semantics:
+    - `World_Cmd57_*` installs `0x00440590` as the click/selection callback for
+      the visible row controls
+    - that callback maps control ids `0x100..0x105` back to the stored row-table
+      entries in `DAT_004E7404` and passes the recovered value into the same
+      selection-submit helper used by the rest of the menu family
+    - practical read: the counted row block is now best modeled as repeated
+      `(selectionValue,rowText)` pairs, not `(style,rowText)` pairs
+    - the first string (`DAT_0048FFE0`) feeds the main chooser title build,
+      while the second string (`DAT_0048FD88`) is cached per preset slot and
+      combined into the top window text, making it the strongest current
+      candidate for a subtitle / secondary header line
+    - `flagsA & 0x10` now looks like a fresh preset/action-strip payload marker:
+      it gates the four-entry action block and the fresh secondary-header text
+    - `flagsA & 0x20` clears the broader preset cache rooted at `DAT_0048FD60`
+      before the current preset slot is installed, which reads like a
+      reset/reseed flag for the preset-strip state
+  - Additional 2026-04-25 preset/paging follow-up tightens the remaining blocker:
+    - the direct row callback only accepts control ids `0x100..0x105`, so the
+      late client exposes at most **six direct row buttons** through that path
+    - the preset builder then installs up to four additional controls from the
+      `DAT_0048FD78 .. DAT_0048FD84` action table
+    - those extra controls are handled through the neighboring preset callback
+      around `0x0043DA10`, not through the direct row callback
+    - practical read: any `Cmd57` chooser longer than six rows depends on the
+      correct preset-strip/paging state rather than just the counted row body
+    - that is now the concrete reason the server should not blindly migrate the
+      8-row tier chooser yet, even though the counted row payload and submit
+      values are largely understood
+  - Additional 2026-04-25 style follow-up further constrains the second control
+    byte:
+    - the selector dispatched by `0x004413B0` uses the jump table at
+      `0x004417E8` with eight concrete cases:
+      - `0 -> 0x004413C5`
+      - `1 -> 0x00441454`
+      - `2 -> 0x004414C7`
+      - `3 -> 0x00441559`
+      - `4 -> 0x004415CF`
+      - `5 -> 0x00441677`
+      - `6 -> 0x004416EA`
+      - `7 -> 0x00441776`
+    - those cases come in paired create/reuse builders with four distinct
+      geometries:
+      - `0/1`: small `0xFF × 0xDD`
+      - `2/3`: medium `0x180 × 0xDD`
+      - `4/5`: wide `0x280 × 0xDD`
+      - `6/7`: tall `0x280 × 0x1E0`
+    - practical read: the packet's second control byte is now best understood as
+      a real preset layout id (and likely cache-slot selector for the associated
+      subtitle/action-strip state), not a generic stylistic flag
+    - the shared shell builder at `0x00441810` appears to draw a broader static
+      background independently of that selector, so the preset byte is about the
+      chooser-local child layout rather than the whole Cmd57 surface
+    - Additional 2026-04-25 resource-init tracing tightens the preset blocker even
+      further:
+      - the chooser-local preset globals are populated at startup by
+        `0x00438B20+` from named resource keys rather than raw text constants
+    - recovered keys for the `0x4E81A0..0x4E8214` bundle include:
+      - `RADN/RADS/RADE/RADW`
+      - `DSCN/DSCS/DSCE/DSCW`, `DSCA/DSCB/DSCC`
+      - `BOX1`, `MOV1`, `MOV2`, `VFIL`, `TICK`
+      - `FULN/FULS/FULE/FULW`
+      - `RECN/RECS/RECE/RECW`
+      - `SHO0..SHO5`
+    - recovered keys for the adjacent strip/control bundle at
+      `0x4E79F0..0x4E7A34` include:
+      - `BUT1/BUT2`
+      - `CHK1..CHK6`
+      - `OPTN`, `CSTR`, `EXIT`, `CPL1`, `CPL2`
+    - direct file matches under `C:\MPBT\assets\ui` now make those bundles
+      concrete:
+      - `RADN/RADS/RADE/RADW`, `DSCN/DSCS/DSCE/DSCW`, `FULN/FULS/FULE/FULW`,
+        and `RECN/RECS/RECE/RECW` are directional border/frame pieces
+      - `DSCA/DSCB/DSCC` are alternate horizontal frame strips for the same
+        chooser-family shell
+      - `SHO0..SHO5` are large shell/frame sections
+      - `MOV1/MOV2` are interior panel art (tile/icon pad plus framed inset)
+      - `BOX1`, `VFIL`, and `TICK` are reusable bar/fill/capsule strips
+      - `BUT1/BUT2` are explicit button sprites
+      - `CHK1..CHK6` are checkbox/radio/tick markers and narrow tick bars
+      - `OPTN`, `CSTR`, `EXIT`, `CPL1`, and `CPL2` are literal icon/button glyphs
+      - follow-up startup tracing now resolves the exact strip-bundle address
+        order too:
+        - `0x4E79F0` = `BUT1`
+        - `0x4E79F4` = `BUT2`
+        - `0x4E79F8..0x4E7A0C` = `CHK1..CHK6`
+        - `0x4E7A10` = `LAR1`
+        - `0x4E7A14` = `LAR2`
+        - `0x4E7A18` = `RAR1`
+        - `0x4E7A1C` = `RAR2`
+        - `0x4E7A20` = `VMEC`
+        - `0x4E7A24` = `OPTN`
+        - `0x4E7A28` = `CSTR`
+        - `0x4E7A2C` = `EXIT`
+        - `0x4E7A30` = `CPL1`
+        - `0x4E7A34` = `CPL2`
+      - the parser/body builder at `0x00441980` also looks less like an
+        8-way code-branch switch than it first appeared:
+        - the second control byte is stored in `DAT_0047FB54`
+        - that value is then used as an index into a per-style cache block at
+          `0x48FD60+`
+        - when `flagsA & 0x10` is set, the parser refreshes that cache record
+          with:
+          - four strip-slot ids at `0x48FD68..0x48FD78`
+          - a title/subtitle string at `0x48FD88+`
+          - the counted row list at `0x48FA00+`
+        - after that cache work, the active builder path falls through into the
+          same shared shell construction instead of branching to a separate
+          style-specific code body
+      - the four strip action slots (`0x118..0x11B`) now look like runtime
+        icon lookups rather than hard-coded fixed glyphs in this function:
+        - each cached slot id is resolved through the runtime table
+          `0x4E7A90[slotId]`
+        - `0x4E7A90` is BSS/runtime state, but the startup builder is now
+          recovered:
+          - `0x00437464` zeroes `0x54` dwords at `0x4E7A90`
+          - it then formats resource names with `I%3d`, loading ids
+            `0x65..0xB8` (`I101..I184`) from `MW_MPICS.DAT`
+          - practical mapping: packet slot id `N` falls back to icon
+            `I(101 + N)`
+        - matching against `C:\MPBT\assets\icons` now identifies the key special
+          fallback ids directly:
+          - `0x16 -> I123` = `ACADEMY`
+          - `0x17 -> I124` = pink urban street/city scene
+          - `0x21..0x25 -> I134..I138` = the same stock HQ/emblem icon on five
+            different colored backdrops
+        - nearby ids confirm the table is a stock world/location-art family, not
+          a neutral ranking-strip family:
+          - `I120/I121` are landscape scenes
+          - `I122` is a console/terminal panel
+          - `I125` is another city-street scene
+          - `I130` = `STEINER STADIUM`
+          - `I131` = `FACTORY`
+          - `I132` = `JUNGLE`
+          - `I133` = `DAVION ARENA`
+          - `I139` is a green spiral/emblem icon
+        - adjacent startup-loaded icon tables (`SPA1..SPA9`, `LOK1..LOK5`,
+          `SDR1`, `CN91`) are separate families and not the active
+          `0x4E7A90` strip table
+      - the special-range override path is sharper now too:
+        - `0x446A50` returns true for slot ids `0x16..0x17`
+        - `0x446A60` returns true for slot ids `0x21..0x25`
+        - when those ids are used and `DAT_0047FB5C` is nonzero, the builder
+          substitutes that handle instead of the normal `I(101+N)` fallback
+        - `DAT_0047FB5C` itself is refreshed by `0x004467B0`:
+          - it formats a resource name through `%4d` and `U%s` / `u%s`
+          - it resolves that resource through `0x436F40`
+          - the surrounding startup/resource strings point at `UNITS.DAT` and
+            `HUNITS.DAT`, so this override path is tied to stock unit-art
+            resources rather than a generic ranking-navigation strip
+        - older decompilation cross-check (`C:\Users\moose\MPBTWIN.EXE.c`) now
+          tightens that model:
+          - the earlier equivalent cache appears as `DAT_00472CAC`
+          - helper `FUN_00419540()` resolves a resource name by checking
+            `HUNITS.DAT` first and then `UNITS.DAT`
+          - helper `FUN_00419260()` rebuilds that cache from live unit id
+            `DAT_00489F18` by formatting a `U...` / `u...` resource name before
+            calling the same resolver
+          - scene-shell draw helper `FUN_00410EC0()` uses that cached handle only
+            when the slot id lands in the special families; otherwise it falls
+            back to the ordinary `I101..` table
+          - reset helper `FUN_004194B0()` clears the cached override during a
+            world-scene reset path before the shell is rebuilt
+        - practical read: the later `DAT_0047FB5C` value is best understood as
+          cached **scene/unit-art override state**, not ranking-chooser-local
+          preset metadata
+    - some of those resources are then drawn directly by the preset builders
+      (for example the `0x004422A9+` path), which means the strip is not just a
+      set of optional labels layered on top of the counted row body
+    - Additional 2026-04-25 control-dispatch tracing now resolves part of the
+      strip behavior:
+      - the control selector table at `0x00441274` maps visible control ids
+        `0x118..0x11B` to the dedicated strip-action path (`selector = 1`)
+      - that path lands in `0x004468D0`, which subtracts `0x118` to recover
+        strip slot `0..3`
+      - it checks the corresponding low-bit mask in `DAT_0047FB48`
+        (`flagsA & (1 << slot)`) before allowing the action
+      - practical read: the low nibble of `flagsA` is now the best current fit
+        for **which of the four preset-strip action buttons are enabled**
+      - the handler then uses the per-slot metadata in `DAT_0048FD68` /
+        `DAT_0048FD60` to decide which local action path to trigger, so the
+        strip is active control-state, not just decorative art
+    - Additional 2026-04-25 strip-builder tracing tightens that further:
+      - the low-nibble strip state also feeds a broader client-side control
+        builder at `0x004113C0`
+      - recovered per-bit fan-out there is:
+        - bit `0x1` → handler `0x00411610`
+        - bit `0x2` → handler `0x00411DE0`
+        - bit `0x4` → handler `0x004122D0`
+        - bit `0x8` → handler `0x00413560`
+      - `0x00411DE0` is already known elsewhere in the client as a real world
+        command/UI family entry (same address as the existing command 16/19
+        parser family in the command table), which is strong evidence that the
+        Cmd57 strip is reusing substantive stock control flows rather than a
+        lightweight chooser-only shim
+      - practical read: even with the row body and strip-art bundles bounded,
+        the remaining risk is still behavioral — a guessed preset could drop the
+        user into unrelated stock client panels because those strip bits are
+        wired to real handler families
+    - Additional 2026-04-25 special-control follow-up now resolves the two
+      remaining non-slot ids in the `0x00441274` selector table:
+      - `0x121` maps to selector `2`, which jumps to `0x0043FCB0`
+      - `0x131` maps to selector `3`, which jumps to `0x00441234`
+      - neighboring ids still land on selector `4` / `0x0044125A` and remain
+        inert in the current read
+      - `0x121` matches the older `World_HandleSceneWindowInput_v123` note that
+        widget id `0x121` opens the separate room-roster UI
+      - the resolved target confirms that reading directly:
+        - `0x0043FCB0` first calls `0x004413B0(7)` to build a full tall stock
+          panel shell
+        - it then installs a dedicated callback pair (`0x00440300`,
+          `0x0043FC70`) and creates its own child controls `0x120..0x124`
+        - practical read: `0x121` is not a paging affordance for the chooser
+          rows; it opens a separate stock auxiliary panel
+      - `0x131` is materially different:
+        - `0x00441234` just calls `0x004113C0` with the cached globals at
+          `DAT_0047A050` / `DAT_0047A054` and redraws the current shell
+        - the row click callback at `0x00440590` contains the same special-case
+          `0x131` path, which strongly suggests this is a local cached
+          strip-restore / back / refresh control rather than another outbound
+          selection path
+        - the active shared-shell block around `0x004422A9+` now sharpens the
+          visible art correlation too:
+          - it draws `0x4E7A24` (`OPTN`) at the same position as the later
+            clickable special control `0x131`
+          - the same block also draws `0x4E7A28` (`CSTR`) and `0x4E7A2C`
+            (`EXIT`) as part of the surrounding stock strip
+          - practical read: `0x131` is not just an abstract special control id;
+            in the active builder path it is the clickable button over the stock
+            `OPTN` glyph
+      - a direct scan of the active `Cmd57` parser/build region
+        (`0x00441980..0x00442A00`) now narrows where those special controls
+        actually appear:
+        - confirmed creation calls there build the row shell/background
+          (`0x100`), the four strip action slots (`0x118..0x11B`), and the
+          special control `0x131`
+        - no direct `0x121` creation was recovered in that active builder path
+      - practical read: the shared scene-shell handler still knows how to open
+        the separate room-roster panel through `0x121`, but the actual
+        late-client `Cmd57` chooser construction currently looks more likely to
+        surface only `0x131` of the two special ids
+      - that makes the current blocker more concrete still: any guessed ranking
+        preset that reuses this shell is now likely to surface a literal stock
+        `OPTN` button plus adjacent `CSTR` / `EXIT` chrome, and its dynamic
+        action-strip slots can now be shown to fall back to stock location/unit
+        art (`ACADEMY`, city scenes, `STEINER STADIUM`, `DAVION ARENA`, HQ-style
+        emblems, etc.) even if it avoids the riskier room-roster opener on
+        `0x121`
+      - fresh 2026-04-25 live GUI + `cdb.exe` verification now closes an
+        important loop on the emulator side too:
+        - launched the real `MPBTWIN.EXE` with a valid `play.pcgi` for account
+          `Moose`, attached x86 `cdb.exe`, and armed breakpoints at:
+          - `0x00441980` (`Cmd57` parser/build region marker)
+          - `0x004422A9` (shared `OPTN`/`CSTR`/`EXIT` shell region marker)
+          - `0x00440590` (`Cmd57` row/special-control callback)
+        - then navigated the live GUI through the ComStar menu into both
+          **Tier Rankings** and **Class Rankings**
+        - result: none of those `Cmd57` breakpoints fired
+        - matching server logs show why:
+          - `sending compatibility Cmd7 tier ranking chooser`
+          - `sending compatibility Cmd7 class ranking chooser`
+          - `sending Cmd7 paged results menu`
+          - followed only by ordinary inbound `cmd 7` selections/close events
+        - a source sweep now matches the live trace exactly:
+          - `src/world/world-scene.ts` sends those ranking surfaces through
+            `buildMenuDialogPacket(...)`
+          - no actual `Cmd57` packet builder exists anywhere under `src/`
+        - preserved repo artifacts now close the archival lane too:
+          - a direct search across current `captures\` and `logs\` finds **zero**
+            literal `Cmd57` / `CMD57` hits
+          - preserved ranking artifacts do exist, but they are only the later
+            result-shell traffic (`CMD58_SCROLL_LIST_ID` plus `CMD45_*RANKINGS`
+            payloads)
+          - practical read: the current archive can still inform late
+            ranking-result paging/shell behavior, but it does **not** preserve a
+            real late-client ranking chooser packet or its preset bytes/control
+            ids
+        - practical read: current real-GUI ranking validation in this emulator
+          is **Cmd7-only end to end**; `Cmd57` breakpoints will not fire in live
+          runs until the server grows an opt-in/outbound `Cmd57` ranking sender
+          or another source of authentic `Cmd57` ranking traffic is recovered
+      - practical read: any guessed `Cmd57` preset that surfaces `0x121` is now
+        definitely unsafe for ranking choosers, while `0x131` looks
+        comparatively benign but still preset-specific and not yet proven to be
+        the retail ranking surface
+    - practical read: the remaining `Cmd57` risk is now specifically that the
+      late client expects a valid stock art/control bundle for the chosen preset;
+      sending a guessed synthetic chooser could draw the wrong strip or surface
+      unrelated controls even when the row list itself is correct
+  - practical read: the remaining `Cmd57` unknown is now mostly exact naming for
+    a few preset/header control fields, not the visible row body or the
+    selection contract
+- Fresh 2026-04-24 Ghidra confirmation also recovers more of the neighboring
+  late-world list family in `v1.29`.
+  - `World_Cmd37_OpenCompose_v129` is still present at `0x00443FB0`.
+    - It reads a `type4` count-or-target followed by optional additional
+      target ids, then forwards into the local compose builder.
+    - This is still the server wrapper for opening the ComStar compose window,
+      not a ranking/results surface.
+  - `World_Cmd42_BitmaskSelectionList_v129` decompiles at `0x0043F4C0`.
+    - It reads:
+      - `type1 listId`
+      - `type4 initialBitmask`
+      - title string
+      - `type1 rowCount`
+      - one row string per entry
+    - It builds a numbered checkbox / multi-select list and still routes submit
+      through the older `cmd10` bitmask path.
+    - Practical read: `Cmd42` also remains the old multi-select family rather
+      than a sanctioned-results candidate.
+  - `FUN_0043EC10 -> FUN_0043EC50(0)` is now pinned as the v1.29 keyed
+    triple-string list family rather than a one-string chooser.
+    - `FUN_0043EC50` reads:
+      - `type1 listId`
+      - title string
+      - `type1 rowCount`
+      - for each row:
+        - `type4 itemId`
+        - three strings
+    - It renders numbered rows and stores `itemId` values in the standard local
+      selection table for later `Cmd7(listId, itemId + 1)` submit.
+    - Important negative result: this path still matches the old `Cmd48`
+      keyed triple-string list shape, so it is **not** the missing v1.29
+      replacement for the older one-string chooser.
+  - Practical read: the late client still keeps both:
+    - a triple-string keyed-list surface (`Cmd48`-shaped), and
+    - a separate keyed hotkey-menu surface (`Cmd57`-shaped)
+    rather than collapsing them into one generic list handler.
 
 #### Practical server implications
 

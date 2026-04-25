@@ -117,6 +117,18 @@ export interface ClientSession {
   serverSeq: number;
   /** True once the world init sequence has been sent in response to the first world cmd-3. */
   worldInitialized?: boolean;
+  /**
+   * Deferred world scene refresh to send after the client answers a server-side
+   * world welcome escape with cmd-3 again (used when restoring from combat).
+   */
+  pendingWorldReadySceneRefresh?: {
+    message: string;
+    notifyRoomArrival?: boolean;
+    notifyUnreadComstar?: boolean;
+    flushPendingDuelSettlement?: boolean;
+    fallbackTimer?: ReturnType<typeof setTimeout>;
+    onComplete?: () => void;
+  };
   /** True while a server-initiated world keepalive ping is awaiting a type-0x05 response. */
   worldKeepalivePending?: boolean;
   /** True once the combat bootstrap sequence (MMC welcome + Cmd72) has been sent. */

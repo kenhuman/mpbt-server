@@ -21,6 +21,7 @@ import {
   buildCmd10RoomPresenceSyncPacket,
   buildCmd14PersonnelRecordPacket,
   buildCmd43SolarisMapPacket,
+  buildCmd46ClearWorldUiChildrenPacket,
   buildCmd48KeyedTripleStringListPacket,
 } from '../protocol/world.js';
 import {
@@ -57,16 +58,17 @@ import {
   ARENA_STATUS_LIST_ID,
   ARENA_READY_ROOM_MAX_PARTICIPANTS,
   ARENA_SIDE_MENU_ITEMS,
-  SOLARIS_TRAVEL_ACTION_TYPE,
   COMSTAR_ACCESS_ACTION_TYPE,
   FALLBACK_MECH_ID,
   SOLARIS_TRAVEL_CONTEXT_ID,
   GLOBAL_COMSTAR_MENU_ITEMS,
   worldMapByRoomId,
   WORLD_MECH_BY_ID,
-  getSolarisRoomExits,
+  getSolarisRoomSlottedExits,
   getSolarisSceneIndex,
+  getSolarisSceneRoomId,
   getSolarisRoomName,
+  getSolarisDistrictName,
   getSolarisSceneHeaderDetail,
   getSolarisSceneHeaderTitle,
   getSolarisRoomIcon,
@@ -278,7 +280,7 @@ export function buildAllRosterEntries(players: PlayerRegistry) {
       itemId: getComstarId(other),
       col1:   getDisplayName(other),
       col2:   getSolarisRoomName(other.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID),
-      col3:   getPresenceLocation(other),
+      col3:   getSolarisDistrictName(other.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID),
     }));
 }
 
@@ -415,14 +417,19 @@ export function sendSolarisTravelMap(
   connLog: Logger,
   capture: CaptureLogger,
 ): void {
-  const currentRoomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
-  connLog.info('[world] sending Cmd43 Solaris travel map: currentRoomId=%d', currentRoomId);
+  const logicalRoomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
+  const sceneRoomId = getSolarisSceneRoomId(logicalRoomId);
+  connLog.info(
+    '[world] sending Cmd43 Solaris travel map: logicalRoomId=%d sceneRoomId=%d',
+    logicalRoomId,
+    sceneRoomId,
+  );
   send(
     session.socket,
     buildCmd43SolarisMapPacket(
       {
         contextId: SOLARIS_TRAVEL_CONTEXT_ID,
-        currentRoomId,
+        currentRoomId: sceneRoomId,
       },
       nextSeq(session),
     ),
@@ -433,25 +440,19 @@ export function sendSolarisTravelMap(
 
 export function buildSceneInitForSession(session: ClientSession) {
   const roomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
-  const sceneIndex = getSolarisSceneIndex(roomId);
+  const sceneRoomId = getSolarisSceneRoomId(roomId);
+  const sceneIndex = getSolarisSceneIndex(sceneRoomId);
 
   // Build a 4-slot array (N=0, S=1, E=2, W=3) preserving direction positions.
-  // When using world-map.json the exits array already has nulls for empty slots.
-  // When using the fallback, compact exits are back-filled starting at slot 0.
+  // These `type` values are client scene-cache row ids, not travel-map room ids.
+  // Keep generated road/tram exits on their own synthetic scene slots here; if
+  // several visible icons alias back to the current retail scene slot, the
+  // v1.29 local room-roster/modal path can stall until a Windows focus repaint.
+  // The player's current scene slot remains retail-anchored: live launch tests
+  // showed v1.29 can tear down its socket window during startup when a generated
+  // road node is used as the primary scene table row.
   const mapRoom = worldMapByRoomId.get(roomId);
-  let slottedExits: (number | null)[];
-  if (mapRoom) {
-    const { north, south, east, west } = mapRoom.exits;
-    slottedExits = [north, south, east, west];
-  } else {
-    const exits = getSolarisRoomExits(roomId);
-    slottedExits = [
-      exits[0] ?? null,
-      exits[1] ?? null,
-      exits[2] ?? null,
-      exits[3] ?? null,
-    ];
-  }
+  const slottedExits = getSolarisRoomSlottedExits(roomId);
 
   const exitMask = slottedExits.reduce<number>(
     (mask, id, slot) => (id !== null ? mask | (1 << slot) : mask),
@@ -460,7 +461,8 @@ export function buildSceneInitForSession(session: ClientSession) {
 
   // Room-type-aware action buttons.
   // actionType 4 is reserved for the fixed lower-left world icon path.
-  // Top-row Travel therefore uses a separate server-defined action id.
+  // Solaris map access now hangs off tram location icons instead of a top-row
+  // Travel button, so only keep room-local actions here.
   // actionType 5 → "Fight"  (enter combat; handled by cmd-5 dispatch in server-world.ts).
   // actionType 6 → "Mech"/"Mech Bay" (opens the 3-step mech picker).
   // The client hard-codes button 0x100 as a local-only Help slot and only
@@ -473,7 +475,6 @@ export function buildSceneInitForSession(session: ClientSession) {
   const readyRoomLabel = isArena ? getArenaReadyRoomLabelForSession(session) : undefined;
   const arenaOptions: Array<{ type: number; label: string }> = [
     { type: 0, label: 'Help' },
-    { type: SOLARIS_TRAVEL_ACTION_TYPE, label: 'Travel' },
   ];
   if (isArena) {
     arenaOptions.push({ type: 6, label: 'Mech' });
@@ -508,7 +509,10 @@ export function buildSceneInitForSession(session: ClientSession) {
         for (let slot = 0; slot < slottedExits.length; slot++) {
           const exitRoomId = slottedExits[slot];
           if (exitRoomId !== null) {
-            arr[slot] = { type: getSolarisSceneIndex(exitRoomId), mechId: getSolarisRoomIcon(exitRoomId) };
+            arr[slot] = {
+              type: getSolarisSceneIndex(exitRoomId),
+              mechId: getSolarisRoomIcon(exitRoomId),
+            };
           }
         }
         return arr;
@@ -528,6 +532,14 @@ export function sendSceneRefresh(
   capture: CaptureLogger,
   message: string,
 ): void {
+  const logicalRoomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
+  const sceneRoomId = getSolarisSceneRoomId(logicalRoomId);
+  connLog.info(
+    '[world] scene refresh: logicalRoomId=%d sceneRoomId=%d header="%s"',
+    logicalRoomId,
+    sceneRoomId,
+    getSolarisSceneHeaderTitle(logicalRoomId),
+  );
   send(session.socket, buildCmd6CursorBusyPacket(nextSeq(session)), capture, 'CMD6_BUSY');
   send(session.socket, buildSceneInitForSession(session), capture, 'CMD4_SCENE_REFRESH');
 
@@ -549,6 +561,40 @@ export function sendSceneRefresh(
   send(session.socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
 }
 
+export function sendWorldUiRestore(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+  reason: string,
+): void {
+  const logicalRoomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
+  const sceneRoomId = getSolarisSceneRoomId(logicalRoomId);
+  connLog.info(
+    '[world] restoring world UI after %s: logicalRoomId=%d sceneRoomId=%d',
+    reason,
+    logicalRoomId,
+    sceneRoomId,
+  );
+  send(
+    session.socket,
+    buildCmd46ClearWorldUiChildrenPacket(nextSeq(session)),
+    capture,
+    'CMD46_CLEAR_WORLD_UI_CHILDREN',
+  );
+  send(session.socket, buildSceneInitForSession(session), capture, 'CMD4_SCENE_RESTORE');
+
+  const roomPresenceEntries = currentRoomPresenceEntries(players, session);
+  connLog.info('[world] restoring Cmd10 RoomPresenceSync (%d entries)', roomPresenceEntries.length);
+  send(
+    session.socket,
+    buildCmd10RoomPresenceSyncPacket(roomPresenceEntries, nextSeq(session)),
+    capture,
+    'CMD10_ROOM_RESTORE',
+  );
+  send(session.socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
+}
+
 export function sendAllRosterList(
   players: PlayerRegistry,
   session: ClientSession,
@@ -561,7 +607,7 @@ export function sendAllRosterList(
     session.socket,
     buildCmd48KeyedTripleStringListPacket(
       ALL_ROSTER_LIST_ID,
-      'All Personnel Online',
+      'Show All Players',
       entries,
       nextSeq(session),
     ),
@@ -626,7 +672,7 @@ export function sendArenaReadyRoomMenu(
     session.socket,
     buildMenuDialogPacket(
       ARENA_READY_ROOM_MENU_ID,
-      `Choose a ready room in ${getSolarisRoomName(arenaRoomId)}:`,
+      `Select a ready room in ${getSolarisRoomName(arenaRoomId)} (empty=droids, players=PvP):`,
       roomOptions.map(option => option.label),
       nextSeq(session),
     ),
@@ -722,7 +768,16 @@ export function sendTierRankingChooser(
   capture: CaptureLogger,
   title = 'Choose a ranking tier:',
 ): void {
-  connLog.info('[world] sending Cmd7 tier ranking chooser');
+  // v1.29 ranking-result pages now use the later scroll-shell family, but the
+  // exact late-client chooser transport is still under RE. Keep using the
+  // proven Cmd7 compatibility menu until the Cmd57 preset-strip/paging contract
+  // is solid enough to replace it safely. The row-body and submit path are no
+  // longer the blocker: `World_SendMenuSelection_v129` still emits ordinary
+  // cmd-7 single-pick replies, and the recovered Cmd57 row body is a counted
+  // `(selectionValue, rowText)` list. The remaining gap is the preset-strip
+  // state needed to page or expose more than the six directly handled row
+  // controls (`0x100..0x105`) in the late client.
+  connLog.info('[world] sending compatibility Cmd7 tier ranking chooser');
   send(
     session.socket,
     buildMenuDialogPacket(
@@ -741,7 +796,12 @@ export function sendClassRankingChooser(
   connLog: Logger,
   capture: CaptureLogger,
 ): void {
-  connLog.info('[world] sending Cmd7 class ranking chooser');
+  // Same note as the tier chooser above: the unresolved gap is now the Cmd57
+  // preset/header contract rather than the row body or submit path. Current RE
+  // suggests the preset byte selects a stock art/control bundle (not just a
+  // simple row-only style), so even this 4-row chooser is not yet safe to
+  // migrate speculatively.
+  connLog.info('[world] sending compatibility Cmd7 class ranking chooser');
   send(
     session.socket,
     buildMenuDialogPacket(

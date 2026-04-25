@@ -120,7 +120,7 @@ import {
   SOLARIS_ROOM_BY_ID,
   worldCaptures,
   worldMapByRoomId,
-  getSolarisRoomExits,
+  getSolarisRoomSlottedExits,
   getSolarisRoomName,
   setSessionRoomPosition,
   SOLARIS_TRAVEL_ACTION_TYPE,
@@ -146,6 +146,7 @@ import {
   buildComstarDeliveryText,
   getArenaSideLabel,
   getArenaReadyRoomLabel,
+  getArenaReadyRoomLabelForSession,
   sendSceneRefresh,
   sendAllRosterList,
   sendArenaReadyRoomMenu,
@@ -159,6 +160,7 @@ import {
   sendRankingResultsList,
   sendPersonnelRecord,
   sendSolarisTravelMap,
+  sendWorldUiRestore,
   sendMechClassPicker,
   sendMechChassisPicker,
   sendMechVariantPicker,
@@ -379,6 +381,7 @@ const PLAYER_RESULT_DELAY_MS = 750;
 const BOT_RESULT_DELAY_MS = 1500;
 const COMBAT_DROP_DELAY_MS = 4000;
 const RESULT_WORLD_RESTORE_DELAY_MS = 10_500;
+const WORLD_READY_SCENE_REFRESH_FALLBACK_MS = 3_000;
 const REVERSE_MOVEMENT_DISTANCE_TOLERANCE = 1.25;
 const COMSTAR_DIALOG_ID = 6;
 export const COMSTAR_INCOMING_DIALOG_ID = 7;
@@ -656,7 +659,7 @@ function maybeApplyForcedCombatVerificationMode(
   }
 }
 
-function notifyUnreadComstarMessages(
+export function notifyUnreadComstarMessages(
   session: ClientSession,
   connLog: Logger,
   capture: CaptureLogger,
@@ -681,7 +684,101 @@ function notifyUnreadComstarMessages(
     .catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
       connLog.error('[world] failed to query unread ComStar messages: %s', msg);
-  });
+    });
+}
+
+export function completePendingWorldReadySceneRefresh(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger,
+  reason: 'client-ready' | 'timeout',
+): void {
+  const pendingSceneRefresh = session.pendingWorldReadySceneRefresh;
+  if (!pendingSceneRefresh) {
+    return;
+  }
+
+  if (pendingSceneRefresh.fallbackTimer !== undefined) {
+    clearTimeout(pendingSceneRefresh.fallbackTimer);
+    pendingSceneRefresh.fallbackTimer = undefined;
+  }
+
+  session.pendingWorldReadySceneRefresh = undefined;
+  session.worldInitialized = true;
+  connLog.info(
+    '[world] completing deferred world scene refresh (%s)',
+    reason,
+  );
+  sendSceneRefresh(players, session, connLog, capture, pendingSceneRefresh.message);
+  if (pendingSceneRefresh.notifyUnreadComstar) {
+    notifyUnreadComstarMessages(session, connLog, capture);
+  }
+  if (pendingSceneRefresh.flushPendingDuelSettlement) {
+    flushPendingDuelSettlementNotice(session);
+  }
+  if (pendingSceneRefresh.notifyRoomArrival) {
+    notifyRoomArrival(players, session, connLog);
+  }
+  pendingSceneRefresh.onComplete?.();
+}
+
+function deferWorldSceneRefreshAfterWelcome(
+  players: PlayerRegistry,
+  session: ClientSession,
+  connLog: Logger,
+  capture: CaptureLogger | undefined,
+  label: string,
+  message: string,
+  options: {
+    notifyRoomArrival?: boolean;
+    notifyUnreadComstar?: boolean;
+    flushPendingDuelSettlement?: boolean;
+    onComplete?: () => void;
+  } = {},
+): void {
+  const existingPending = session.pendingWorldReadySceneRefresh;
+  if (existingPending?.fallbackTimer !== undefined) {
+    clearTimeout(existingPending.fallbackTimer);
+  }
+
+  session.worldInitialized = false;
+  const pending: NonNullable<ClientSession['pendingWorldReadySceneRefresh']> = {
+    message,
+    notifyRoomArrival: options.notifyRoomArrival,
+    notifyUnreadComstar: options.notifyUnreadComstar,
+    flushPendingDuelSettlement: options.flushPendingDuelSettlement,
+    onComplete: options.onComplete,
+  };
+  session.pendingWorldReadySceneRefresh = pending;
+
+  if (capture) {
+    pending.fallbackTimer = setTimeout(() => {
+      if (session.pendingWorldReadySceneRefresh !== pending) {
+        return;
+      }
+      if (session.socket.destroyed || !session.socket.writable) {
+        session.pendingWorldReadySceneRefresh = undefined;
+        pending.onComplete?.();
+        return;
+      }
+      connLog.warn(
+        '[world] no cmd-3 after deferred welcome within %dms — sending world scene refresh fallback',
+        WORLD_READY_SCENE_REFRESH_FALLBACK_MS,
+      );
+      completePendingWorldReadySceneRefresh(players, session, connLog, capture, 'timeout');
+    }, WORLD_READY_SCENE_REFRESH_FALLBACK_MS);
+    pending.fallbackTimer.unref();
+  } else {
+    connLog.warn('[world] deferred world scene refresh has no capture logger; waiting for client-ready without fallback timer');
+  }
+
+  const welcomePacket = buildWelcomePacket();
+  if (capture) {
+    send(session.socket, welcomePacket, capture, label);
+    return;
+  }
+  sendToWorldSession(session, welcomePacket, label);
 }
 
 function openComstarTargetPrompt(
@@ -930,6 +1027,12 @@ function formatArenaReadyRoomMenuOccupants(participants: ClientSession[]): strin
   return `${names[0]}, ${names[1]} +${names.length - 2} more`;
 }
 
+function getWorldReturnLocationLabel(session: ClientSession): string {
+  const roomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
+  const readyRoomLabel = getArenaReadyRoomLabelForSession(session);
+  return readyRoomLabel ? `${getSolarisRoomName(roomId)} - ${readyRoomLabel}` : getSolarisRoomName(roomId);
+}
+
 function listArenaReadyRoomMenuOptions(
   players: PlayerRegistry,
   session: ClientSession,
@@ -962,11 +1065,12 @@ function listArenaReadyRoomMenuOptions(
 
   return roomIds.map(readyRoomId => {
     const participants = getArenaReadyRoomParticipants(players, arenaRoomId, readyRoomId);
-    const occupantCount = participants.filter(other => other.id !== session.id).length
-      + (participants.some(other => other.id === session.id) ? 1 : 0);
+    const occupancyLabel = participants.length === 0
+      ? 'Empty (droid opponents)'
+      : formatArenaReadyRoomMenuOccupants(participants);
     return {
       readyRoomId,
-      label: `${getArenaReadyRoomLabel(readyRoomId)} (${occupantCount}/${ARENA_READY_ROOM_MAX_PARTICIPANTS}) - ${formatArenaReadyRoomMenuOccupants(participants)}`,
+      label: `${getArenaReadyRoomLabel(readyRoomId)} - ${occupancyLabel}`,
     };
   });
 }
@@ -1061,7 +1165,7 @@ export function handleArenaReadyRoomSelection(
     session,
     connLog,
     capture,
-    `Travel complete: ${getSolarisRoomName(arenaRoomId)} - ${getArenaReadyRoomLabel(readyRoomId)}.`,
+    `Entered ${getSolarisRoomName(arenaRoomId)} - ${getArenaReadyRoomLabel(readyRoomId)}.`,
   );
   notifyRoomArrival(players, session, connLog);
 }
@@ -5334,19 +5438,20 @@ function queueCombatResultTransition(
 
       connLog.info('[world/combat] restoring world mode after result scene (%s)', resultLabel);
       resetCombatState(session);
-      session.worldInitialized = true;
-      send(session.socket, buildWelcomePacket(), capture, 'WORLD_WELCOME_AFTER_RESULT');
-      sendSceneRefresh(
+      deferWorldSceneRefreshAfterWelcome(
         players,
         session,
         connLog,
         capture,
+        'WORLD_WELCOME_AFTER_RESULT',
         resultCode === COMBAT_RESULT_VICTORY
-          ? 'Combat over: victory.'
-          : 'Combat over: defeat.',
+          ? `Combat over: victory. Returned to ${getWorldReturnLocationLabel(session)}.`
+          : `Combat over: defeat. Returned to ${getWorldReturnLocationLabel(session)}.`,
+        {
+          notifyUnreadComstar: true,
+          notifyRoomArrival: true,
+        },
       );
-      notifyUnreadComstarMessages(session, connLog, capture);
-      notifyRoomArrival(players, session, connLog);
     }, RESULT_WORLD_RESTORE_DELAY_MS);
     session.combatWorldRestoreTimer.unref();
   }, delayMs);
@@ -6132,34 +6237,29 @@ function queueArenaParticipantResultTransition(
       }
 
       resetCombatState(participant);
-      participant.worldInitialized = true;
       participant.duelTermsAvailable = false;
       if (participant.combatSessionId === combatSessionId) {
         participant.combatSessionId = undefined;
       }
       participant.combatPeerSessionId = undefined;
-      sendToWorldSession(
+      const participantCapture = worldCaptures.get(participant.id);
+      deferWorldSceneRefreshAfterWelcome(
+        players,
         participant,
-        buildWelcomePacket(),
+        connLog,
+        participantCapture,
         resultCode === COMBAT_RESULT_VICTORY
           ? 'WORLD_WELCOME_AFTER_ARENA_VICTORY'
           : 'WORLD_WELCOME_AFTER_ARENA_LOSS',
+        resultCode === COMBAT_RESULT_VICTORY
+          ? `Arena combat over: victory. Returned to ${getWorldReturnLocationLabel(participant)}.`
+          : `Arena combat over: defeat. Returned to ${getWorldReturnLocationLabel(participant)}.`,
+        {
+          notifyUnreadComstar: participantCapture !== undefined,
+          notifyRoomArrival: true,
+          onComplete: () => maybeFinalizeArenaCombatSession(players, combatSessionId, connLog),
+        },
       );
-      const participantCapture = worldCaptures.get(participant.id);
-      if (participantCapture) {
-        sendSceneRefresh(
-          players,
-          participant,
-          connLog,
-          participantCapture,
-          resultCode === COMBAT_RESULT_VICTORY
-            ? 'Arena combat over: victory.'
-            : 'Arena combat over: defeat.',
-        );
-        notifyUnreadComstarMessages(participant, connLog, participantCapture);
-      }
-      notifyRoomArrival(players, participant, connLog);
-      maybeFinalizeArenaCombatSession(players, combatSessionId, connLog);
     }, RESULT_WORLD_RESTORE_DELAY_MS);
     participant.combatWorldRestoreTimer.unref();
   }, delayMs);
@@ -6415,31 +6515,26 @@ function queueDuelCombatResultTransition(
         }
 
         resetCombatState(participant);
-        participant.worldInitialized = true;
         participant.duelTermsAvailable = false;
         participant.combatSessionId = undefined;
         participant.combatPeerSessionId = undefined;
-        sendToWorldSession(
-          participant,
-          buildWelcomePacket(),
-          `WORLD_WELCOME_AFTER_DUEL_${resultLabel.toUpperCase()}`,
-        );
         const participantCapture = worldCaptures.get(participant.id);
-        if (participantCapture) {
-          sendSceneRefresh(
-            players,
-            participant,
-            connLog,
-            participantCapture,
-            resultCode === COMBAT_RESULT_VICTORY
-              ? `Duel over: victory vs ${getDisplayName(opponent)}.`
-              : `Duel over: defeat vs ${getDisplayName(opponent)}.`,
-          );
-          notifyUnreadComstarMessages(participant, connLog, participantCapture);
-        }
-        flushPendingDuelSettlementNotice(participant);
-        notifyRoomArrival(players, participant, connLog);
-        maybeFinalizeDuelCombatSession(players, combatSessionId, participants, connLog);
+        deferWorldSceneRefreshAfterWelcome(
+          players,
+          participant,
+          connLog,
+          participantCapture,
+          `WORLD_WELCOME_AFTER_DUEL_${resultLabel.toUpperCase()}`,
+          resultCode === COMBAT_RESULT_VICTORY
+            ? `Duel over: victory vs ${getDisplayName(opponent)}. Returned to ${getWorldReturnLocationLabel(participant)}.`
+            : `Duel over: defeat vs ${getDisplayName(opponent)}. Returned to ${getWorldReturnLocationLabel(participant)}.`,
+          {
+            notifyUnreadComstar: participantCapture !== undefined,
+            flushPendingDuelSettlement: true,
+            notifyRoomArrival: true,
+            onComplete: () => maybeFinalizeDuelCombatSession(players, combatSessionId, participants, connLog),
+          },
+        );
       }, RESULT_WORLD_RESTORE_DELAY_MS);
       participant.combatWorldRestoreTimer.unref();
     }, delayMs);
@@ -7727,7 +7822,7 @@ export function handleNewsgridArticleSelection(
     });
 }
 
-export function handleTierRankingChooserSelection(
+export function handleTierRankingMenuSelection(
   session: ClientSession,
   selection: number,
   connLog: Logger,
@@ -7746,7 +7841,7 @@ export function handleTierRankingChooserSelection(
   showTierRankingList(session, tierKey, tierLabel, connLog, capture);
 }
 
-export function handleClassRankingChooserSelection(
+export function handleClassRankingMenuSelection(
   session: ClientSession,
   selection: number,
   connLog: Logger,
@@ -7982,23 +8077,43 @@ export function handleRoomMenuSelection(
     const booth = nextAvailableBooth(players, session.roomId, session.id);
     connLog.info('[world] room menu: new booth requested -> booth %d', booth);
     updateRoomPresenceStatus(players, session, 5 + booth, connLog);
+    sendWorldUiRestore(players, session, connLog, capture, 'room-menu new booth');
     return;
   }
 
   if (selection === 2) {
     connLog.info('[world] room menu: stand requested');
     updateRoomPresenceStatus(players, session, 5, connLog);
+    sendWorldUiRestore(players, session, connLog, capture, 'room-menu stand');
     return;
   }
 
   const booth = selection - 2;
   if (booth < 1 || booth > 7) {
-    connLog.warn('[world] room menu: unsupported booth selection=%d', selection);
+    connLog.info('[world] room menu: cancel/unsupported selection=%d -> restoring world UI', selection);
+    sendWorldUiRestore(players, session, connLog, capture, 'room-menu cancel');
+    return;
+  }
+
+  const occupied = players.inRoom(session.roomId).some(other =>
+    other.id !== session.id &&
+    other.phase === 'world' &&
+    other.worldInitialized &&
+    !other.socket.destroyed &&
+    getPresenceStatus(other) === 5 + booth,
+  );
+  if (!occupied) {
+    connLog.info(
+      '[world] room menu: booth %d selection has no occupant -> treating as cancel and restoring world UI',
+      booth,
+    );
+    sendWorldUiRestore(players, session, connLog, capture, 'room-menu empty booth/cancel');
     return;
   }
 
   connLog.info('[world] room menu: join booth %d', booth);
   updateRoomPresenceStatus(players, session, 5 + booth, connLog);
+  sendWorldUiRestore(players, session, connLog, capture, 'room-menu join booth');
 }
 
 // ── Combat entry ──────────────────────────────────────────────────────────────
@@ -8543,20 +8658,19 @@ export function clearSessionDuelState(
       peer.duelTermsAvailable = false;
       if (combatSession.state === 'active' && peer.phase === 'combat') {
         resetCombatState(peer);
-        peer.worldInitialized = true;
-        sendToWorldSession(peer, buildWelcomePacket(), 'WORLD_WELCOME_AFTER_DUEL_ABORT');
         const peerCapture = worldCaptures.get(peer.id);
-        if (peerCapture) {
-          sendSceneRefresh(
-            players,
-            peer,
-            connLog,
-            peerCapture,
-            `Duel with ${getDisplayName(session)} aborted: ${reason}.`,
-          );
-          notifyUnreadComstarMessages(peer, connLog, peerCapture);
-        }
-        notifyRoomArrival(players, peer, connLog);
+        deferWorldSceneRefreshAfterWelcome(
+          players,
+          peer,
+          connLog,
+          peerCapture,
+          'WORLD_WELCOME_AFTER_DUEL_ABORT',
+          `Duel with ${getDisplayName(session)} aborted: ${reason}.`,
+          {
+            notifyUnreadComstar: peerCapture !== undefined,
+            notifyRoomArrival: true,
+          },
+        );
       } else if (peer.phase === 'world' && peer.worldInitialized && !peer.socket.destroyed) {
         if (!refreshWorldSceneIfPossible(
           players,
@@ -9068,20 +9182,10 @@ export function handleLocationAction(
 ): void {
   const currentRoomId = session.worldMapRoomId ?? DEFAULT_MAP_ROOM_ID;
 
-  // Resolve exit by compass slot (0=N 1=S 2=E 3=W).  Must use slotted exits
-  // (nulls preserved) so slot indices match the buttons sent to the client.
-  // getSolarisRoomExits() returns a compact filtered array — do NOT use it here.
-  const mapRoom = worldMapByRoomId.get(currentRoomId);
-  let targetRoomId: number | undefined;
-  if (mapRoom) {
-    const slotted: (number | null)[] = [
-      mapRoom.exits.north, mapRoom.exits.south, mapRoom.exits.east, mapRoom.exits.west,
-    ];
-    targetRoomId = slotted[slot] ?? undefined;
-  } else {
-    // Fallback linear topology densely fills all slots, so compact is fine.
-    targetRoomId = getSolarisRoomExits(currentRoomId)[slot];
-  }
+  // Resolve exit by compass slot (0=N 1=S 2=E 3=W).  Must use the shared slotted
+  // exit helper so slot indices stay aligned with Cmd4 and inter-sector/tram
+  // rules are enforced consistently in both render and click paths.
+  const targetRoomId = getSolarisRoomSlottedExits(currentRoomId)[slot] ?? undefined;
 
   if (targetRoomId === undefined) {
     connLog.warn('[world] cmd-23 location action has no exit: room=%d slot=%d cached=%s', currentRoomId, slot, targetCached);
@@ -9101,6 +9205,12 @@ export function handleLocationAction(
     targetCached,
     targetRoomId,
   );
+
+  if (worldMapByRoomId.get(targetRoomId)?.type === 'tram') {
+    connLog.info('[world] cmd-23 tram icon: room=%d slot=%d -> opening Solaris map', currentRoomId, slot);
+    sendSolarisTravelMap(session, connLog, capture);
+    return;
+  }
 
   if (worldMapByRoomId.get(targetRoomId)?.type === 'arena') {
     openArenaReadyRoomMenu(players, session, targetRoomId, connLog, capture);
