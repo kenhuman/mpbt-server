@@ -903,7 +903,7 @@
       "icon": 1,
       "exits": {
         "north": null,
-        "south": null,
+        "south": 2141,
         "west": null,
         "east": null
       },
@@ -1341,18 +1341,18 @@
     },
     {
       "roomId": 2141,
-      "type": "street",
+      "type": "terminal",
       "sector": "blackhills",
       "exits": {
-        "north": null,
+        "north": 170,
         "south": 2142,
         "west": null,
-        "east": null
+        "east": 167
       },
       "_gridCol": 8,
       "_gridRow": 15,
-      "icon": 54,
-      "_name": "Road"
+      "icon": 17,
+      "_name": "Public Data Terminal"
     },
     {
       "roomId": 2140,
@@ -1394,8 +1394,8 @@
       "exits": {
         "north": null,
         "south": null,
-        "west": null,
-        "east": null
+        "west": 2141,
+        "east": 2138
       },
       "_gridCol": 11,
       "_gridRow": 15,
@@ -1404,12 +1404,12 @@
     {
       "roomId": 2138,
       "type": "street",
-      "sector": "silesia",
+      "sector": "blackhills",
       "exits": {
         "north": null,
         "south": null,
-        "west": null,
-        "east": 2137
+        "west": 167,
+        "east": null
       },
       "_gridCol": 12,
       "_gridRow": 15,
@@ -1423,7 +1423,7 @@
       "exits": {
         "north": 2121,
         "south": null,
-        "west": 2138,
+        "west": null,
         "east": null
       },
       "_gridCol": 13,
@@ -1809,7 +1809,7 @@
         "north": 2144,
         "south": null,
         "west": 168,
-        "east": null
+        "east": 2069
       },
       "_gridCol": 6,
       "_gridRow": 18,
@@ -1823,7 +1823,7 @@
       "exits": {
         "north": 169,
         "south": 2068,
-        "west": null,
+        "west": 2143,
         "east": null
       },
       "_gridCol": 8,

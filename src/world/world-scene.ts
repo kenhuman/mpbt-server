@@ -61,6 +61,7 @@ import {
   COMSTAR_ACCESS_ACTION_TYPE,
   FALLBACK_MECH_ID,
   SOLARIS_TRAVEL_CONTEXT_ID,
+  SOLARIS_TRAVEL_ACTION_TYPE,
   GLOBAL_COMSTAR_MENU_ITEMS,
   worldMapByRoomId,
   WORLD_MECH_BY_ID,
@@ -461,8 +462,8 @@ export function buildSceneInitForSession(session: ClientSession) {
 
   // Room-type-aware action buttons.
   // actionType 4 is reserved for the fixed lower-left world icon path.
-  // Solaris map access now hangs off tram location icons instead of a top-row
-  // Travel button, so only keep room-local actions here.
+  // Solaris map access primarily hangs off tram location icons, but keep a
+  // top-row Travel fallback so players can recover if they get stuck.
   // actionType 5 → "Fight"  (enter combat; handled by cmd-5 dispatch in server-world.ts).
   // actionType 6 → "Mech"/"Mech Bay" (opens the 3-step mech picker).
   // The client hard-codes button 0x100 as a local-only Help slot and only
@@ -475,6 +476,7 @@ export function buildSceneInitForSession(session: ClientSession) {
   const readyRoomLabel = isArena ? getArenaReadyRoomLabelForSession(session) : undefined;
   const arenaOptions: Array<{ type: number; label: string }> = [
     { type: 0, label: 'Help' },
+    { type: SOLARIS_TRAVEL_ACTION_TYPE, label: 'Travel' },
   ];
   if (isArena) {
     arenaOptions.push({ type: 6, label: 'Mech' });
