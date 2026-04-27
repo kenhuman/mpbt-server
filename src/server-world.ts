@@ -159,10 +159,12 @@ import {
   handleArenaSideSelection,
   completePendingWorldReadySceneRefresh,
   flushPendingDuelSettlementNotice,
+  sendWorldCommandHelp,
 } from './world/world-handlers.js';
 
 const _pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
 const WELCOME_TEXT = `Welcome to the game world.  (Server v${_pkg.version})`;
+const COMMAND_HINT_TEXT = "Commands are available in chat. Type /help for command syntax.";
 
 // ── Login handler ─────────────────────────────────────────────────────────────
 
@@ -229,6 +231,10 @@ async function handleWorldLogin(
   session.selectedMechSlot = accountResume?.selectedMechSlot ?? launch.mechSlot;
   session.worldArenaSide   = accountResume?.worldArenaSide;
   session.worldArenaReadyRoomId = accountResume?.worldArenaReadyRoomId;
+  session.combatBotOpponentCount = accountResume?.combatBotOpponentCount;
+  session.combatBotLoadoutIds = accountResume?.combatBotLoadoutIds ? [...accountResume.combatBotLoadoutIds] : undefined;
+  session.combatBotSides = accountResume?.combatBotSides ? [...accountResume.combatBotSides] : undefined;
+  session.combatBotDifficultyLevel = accountResume?.combatBotDifficultyLevel;
   session.pendingDuelSettlementNotice = accountResume?.pendingDuelSettlementNotice;
   if (session.accountId !== undefined) {
     session.worldRosterId = 100000 + session.accountId;
@@ -587,6 +593,10 @@ function handleWorldGameData(
       return;
     }
     if (session.phase === 'combat') {
+      if (textCmd === '/help') {
+        sendWorldCommandHelp(session, capture);
+        return;
+      }
       if (handleBotMechTextCommand(session, parsed.text, connLog, capture, { suppressBroadcast: true })) {
         return;
       }
@@ -1081,6 +1091,7 @@ function sendWorldInitSequence(
   // Cmd3 — TextBroadcast: welcome message. g_chatReady is set to 1 by Cmd4, so
   // this is the earliest point at which Cmd3 will be displayed by the client.
   send(socket, buildCmd3BroadcastPacket(WELCOME_TEXT, nextSeq(session)), capture, 'CMD3_WELCOME');
+  send(socket, buildCmd3BroadcastPacket(COMMAND_HINT_TEXT, nextSeq(session)), capture, 'CMD3_HELP_HINT');
 
   // Cmd5 — CursorNormal: restore the arrow cursor.
   send(socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');

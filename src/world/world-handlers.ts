@@ -68,7 +68,7 @@ import {
   MOTION_DIV,
   MOTION_NEUTRAL,
 } from '../protocol/combat.js';
-import { PlayerRegistry, ClientSession, type CombatSession, type DuelCombatSession } from '../state/players.js';
+import { PlayerRegistry, ClientSession, type CombatSession, type DuelCombatSession, type SoloCombatBotActorState } from '../state/players.js';
 import { worldResumeRegistry } from '../state/world-resume.js';
 import {
   countSavedUnreadMessages,
@@ -180,6 +180,7 @@ import {
   BOT_AI_SPAWN_DISTANCE,
   BOT_FALLBACK_WEAPON_DAMAGE,
   COMBAT_WORLD_UNITS_PER_METER,
+  COMBAT_TEAMMATE_SPAWN_SPACING,
   JUMP_JET_DEFAULT_APEX_METERS,
   JUMP_JET_ASCENT_STEPS,
   JUMP_JET_TICK_MS,
@@ -209,18 +210,14 @@ import {
   BOT_AI_RANGE_FIT_MEDIUM_WEIGHT,
   BOT_AI_RANGE_FIT_LONG_WEIGHT,
   BOT_AI_RANGE_ADVANTAGE_BONUS_METERS,
-  BOT_AI_RANGE_PRESSURE_BONUS_METERS,
-  BOT_AI_FINISHER_PUSH_HEALTH_THRESHOLD,
+  DEFAULT_BOT_DIFFICULTY_LEVEL,
   BOT_AI_HEAT_DISSIPATION_WINDOW_MS,
   BOT_AI_TIC_ALPHA_HEAT_RATIO,
   BOT_AI_TIC_SUSTAIN_HEAT_RATIO,
   BOT_AI_TIC_POKE_HEAT_RATIO,
   BOT_AI_TIC_SAFE_OVERHEAT_RISK,
   BOT_AI_TIC_FINISHER_OVERHEAT_RISK,
-  BOT_TO_HIT_BASE_CHANCE,
   BOT_TO_HIT_MIN_CHANCE,
-  BOT_TO_HIT_MAX_CHANCE,
-  BOT_TO_HIT_SHORT_RANGE_BONUS,
   BOT_TO_HIT_MEDIUM_RANGE_BONUS,
   BOT_TO_HIT_LONG_RANGE_MAX_PENALTY,
   BOT_TO_HIT_ATTACKER_SPEED_MAX_PENALTY,
@@ -230,6 +227,9 @@ import {
   BOT_TO_HIT_TARGET_JUMP_PENALTY,
   BOT_MISS_OFFSET_MIN_METERS,
   BOT_MISS_OFFSET_MAX_METERS,
+  clampBotDifficultyLevel,
+  getBotDifficultyProfile,
+  type BotDifficultyProfile,
   VERIFY_DELAY_MS,
   VERIFY_SWEEP_STEP_MS,
   VERIFY_DAMAGE_CODES,
@@ -248,14 +248,13 @@ function regenJumpFuelIfGrounded(
 }
 
 function regenBotJumpFuelIfGrounded(
-  session: ClientSession,
+  bot: SoloCombatBotActorState,
   amount: number,
 ): void {
-  if (session.combatBotJumpActive) return;
-  if ((session.combatBotZ ?? 0) > 0) return;
-  const fuel = session.combatBotJumpFuel ?? JUMP_JET_FUEL_MAX;
-  if (fuel >= JUMP_JET_FUEL_MAX) return;
-  session.combatBotJumpFuel = Math.min(JUMP_JET_FUEL_MAX, fuel + amount);
+  if (bot.jumpActive) return;
+  if (bot.z > 0) return;
+  if (bot.jumpFuel >= JUMP_JET_FUEL_MAX) return;
+  bot.jumpFuel = Math.min(JUMP_JET_FUEL_MAX, bot.jumpFuel + amount);
 }
 
 function mechSupportsJumpJets(mechId: number | undefined): boolean {
@@ -993,6 +992,17 @@ function getSharedArenaSide(
   return side;
 }
 
+const COMBAT_REMOTE_ACTOR_TYPE_DEFAULT = 0;
+const COMBAT_REMOTE_ACTOR_TYPE_FORCE_VISIBLE = 1;
+
+function getCombatRemoteActorTypeByte(forceVisible: boolean): number {
+  // v1.29 RE: non-zero actorTypeByte makes Combat_MainLoop force actor flag 0x20
+  // instead of relying on LOS/occlusion, which keeps teammates rendered and on radar.
+  return forceVisible
+    ? COMBAT_REMOTE_ACTOR_TYPE_FORCE_VISIBLE
+    : COMBAT_REMOTE_ACTOR_TYPE_DEFAULT;
+}
+
 function getLiveArenaRoomParticipants(players: PlayerRegistry, roomId: string): ClientSession[] {
   return players.inRoom(roomId).filter(other =>
     other.phase === 'world'
@@ -1165,7 +1175,7 @@ export function handleArenaReadyRoomSelection(
     session,
     connLog,
     capture,
-    `Entered ${getSolarisRoomName(arenaRoomId)} - ${getArenaReadyRoomLabel(readyRoomId)}.`,
+    `Entered ${getSolarisRoomName(arenaRoomId)} - ${getArenaReadyRoomLabel(readyRoomId)}. Type /help to see available commands.`,
   );
   notifyRoomArrival(players, session, connLog);
 }
@@ -1378,6 +1388,24 @@ function getCombatSourceSlotForViewer(
   return getCombatRemoteSlotForViewer(combatSession, viewer, source) ?? 0;
 }
 
+function buildCombatTeamClusterPositions<T>(
+  items: readonly T[],
+  baseX: number,
+  baseY: number,
+  tangentX: number,
+  tangentY: number,
+): Array<{ item: T; x: number; y: number }> {
+  const centerOffset = (items.length - 1) / 2;
+  return items.map((item, index) => {
+    const lateralOffset = (index - centerOffset) * COMBAT_TEAMMATE_SPAWN_SPACING;
+    return {
+      item,
+      x: Math.round(baseX + (tangentX * lateralOffset)),
+      y: Math.round(baseY + (tangentY * lateralOffset)),
+    };
+  });
+}
+
 function getArenaCombatSpawnPoints(participants: ClientSession[]): Array<{ x: number; y: number }> {
   if (participants.length <= 1) {
     return [{ x: 0, y: 0 }];
@@ -1396,7 +1424,6 @@ function getArenaCombatSpawnPoints(participants: ClientSession[]): Array<{ x: nu
   const groupedSides = [...groups.entries()]
     .sort(([sideA], [sideB]) => sideA - sideB);
   const radius = BOT_SPAWN_DISTANCE;
-  const teammateSpacing = Math.round(BOT_SPAWN_DISTANCE * 0.18);
   const spawnByParticipantId = new Map<string, { x: number; y: number }>();
 
   for (let groupIndex = 0; groupIndex < groupedSides.length; groupIndex += 1) {
@@ -1406,14 +1433,10 @@ function getArenaCombatSpawnPoints(participants: ClientSession[]): Array<{ x: nu
     const baseY = Math.cos(angle) * radius;
     const tangentX = Math.cos(angle);
     const tangentY = -Math.sin(angle);
-    const centerOffset = (groupParticipants.length - 1) / 2;
-
-    for (let memberIndex = 0; memberIndex < groupParticipants.length; memberIndex += 1) {
-      const participant = groupParticipants[memberIndex];
-      const lateralOffset = (memberIndex - centerOffset) * teammateSpacing;
-      spawnByParticipantId.set(participant.id, {
-        x: Math.round(baseX + (tangentX * lateralOffset)),
-        y: Math.round(baseY + (tangentY * lateralOffset)),
+    for (const position of buildCombatTeamClusterPositions(groupParticipants, baseX, baseY, tangentX, tangentY)) {
+      spawnByParticipantId.set(position.item.id, {
+        x: position.x,
+        y: position.y,
       });
     }
   }
@@ -3093,7 +3116,11 @@ function getCombatRangeBandForDistance(
   return 'long';
 }
 
-function estimateCombatToHit(input: CombatToHitRollInput): CombatToHitEstimate {
+function estimateCombatToHit(
+  input: CombatToHitRollInput,
+  difficultyProfile?: BotDifficultyProfile,
+): CombatToHitEstimate {
+  const profile = difficultyProfile ?? getBotDifficultyProfile(DEFAULT_BOT_DIFFICULTY_LEVEL);
   const { shortRangeCap, mediumRangeCap, longRangeCap } = getCombatRangeCaps(input.weaponSpec, input.maxRangeMeters);
   const rangeBand = getCombatRangeBandForDistance(input.weaponSpec, input.distanceMeters, input.maxRangeMeters);
   const attackerSpeedRatio = getSpeedRatio(input.attackerSpeedMag, input.attackerMaxSpeedMag);
@@ -3126,7 +3153,7 @@ function estimateCombatToHit(input: CombatToHitRollInput): CombatToHitEstimate {
 
   let rangeModifier = 0;
   if (rangeBand === 'short') {
-    rangeModifier = BOT_TO_HIT_SHORT_RANGE_BONUS;
+    rangeModifier = profile.toHitShortRangeBonus;
   } else if (rangeBand === 'medium') {
     rangeModifier = BOT_TO_HIT_MEDIUM_RANGE_BONUS;
   } else if (longRangeCap !== undefined && longRangeCap > mediumRangeCap) {
@@ -3140,7 +3167,7 @@ function estimateCombatToHit(input: CombatToHitRollInput): CombatToHitEstimate {
 
   return {
     chance: clampNumber(
-      BOT_TO_HIT_BASE_CHANCE
+      profile.toHitBaseChance
         + rangeModifier
         - (attackerSpeedRatio * BOT_TO_HIT_ATTACKER_SPEED_MAX_PENALTY)
         - (targetSpeedRatio * BOT_TO_HIT_TARGET_SPEED_MAX_PENALTY)
@@ -3148,15 +3175,18 @@ function estimateCombatToHit(input: CombatToHitRollInput): CombatToHitEstimate {
         - (input.attackerAirborne ? BOT_TO_HIT_ATTACKER_JUMP_PENALTY : 0)
         - (input.targetAirborne ? BOT_TO_HIT_TARGET_JUMP_PENALTY : 0),
       BOT_TO_HIT_MIN_CHANCE,
-      BOT_TO_HIT_MAX_CHANCE,
+      profile.toHitMaxChance,
     ),
     rangeBand,
     crossingFactor,
   };
 }
 
-function resolveCombatToHitRoll(input: CombatToHitRollInput): CombatToHitRoll {
-  const estimate = estimateCombatToHit(input);
+function resolveCombatToHitRoll(
+  input: CombatToHitRollInput,
+  difficultyProfile?: BotDifficultyProfile,
+): CombatToHitRoll {
+  const estimate = estimateCombatToHit(input, difficultyProfile);
   const roll = Math.random();
   return {
     hit: roll <= estimate.chance,
@@ -3197,9 +3227,9 @@ function getMissImpactPoint(
   };
 }
 
-function setBotMoveVector(session: ClientSession, moveVectorX: number, moveVectorY: number): void {
-  session.combatBotMoveVectorX = moveVectorX;
-  session.combatBotMoveVectorY = moveVectorY;
+function setBotMoveVector(bot: SoloCombatBotActorState, moveVectorX: number, moveVectorY: number): void {
+  bot.moveVectorX = moveVectorX;
+  bot.moveVectorY = moveVectorY;
 }
 
 function setPlayerMoveVector(session: ClientSession, moveVectorX: number, moveVectorY: number): void {
@@ -3233,8 +3263,8 @@ interface BotTicPreset {
   overheatRisk: number;
 }
 
-function getBotHeatSinkCount(session: ClientSession): number {
-  return Math.max(1, getMechEntryForId(getBotMechId(session))?.heatSinks ?? 10);
+function getBotHeatSinkCount(bot: SoloCombatBotActorState): number {
+  return Math.max(1, getMechEntryForId(bot.mechId)?.heatSinks ?? 10);
 }
 
 function getBotHeatCapacity(heatSinks: number): number {
@@ -3251,13 +3281,13 @@ function estimateBotOverheatRisk(currentHeat: number, addedHeat: number, heatSin
   );
 }
 
-function coolBotHeat(session: ClientSession, heatSinks: number): void {
-  const currentHeat = session.combatBotHeat ?? 0;
+function coolBotHeat(bot: SoloCombatBotActorState, heatSinks: number): void {
+  const currentHeat = bot.heat;
   const cooledHeat = Math.max(
     0,
     currentHeat - ((heatSinks * BOT_AI_TICK_MS) / BOT_AI_HEAT_DISSIPATION_WINDOW_MS),
   );
-  session.combatBotHeat = cooledHeat;
+  bot.heat = cooledHeat;
 }
 
 function buildBotTicPresetFromCandidates(
@@ -3344,6 +3374,7 @@ function chooseBotTicPreset(
   playerHealth: number,
   currentHeat: number,
   heatSinks: number,
+  difficultyProfile: BotDifficultyProfile,
 ): BotTicPreset | undefined {
   const alpha = presets.A;
   const sustain = presets.B;
@@ -3356,7 +3387,7 @@ function chooseBotTicPreset(
   const heatRatio = currentHeat / heatCapacity;
 
   if (
-    playerHealth <= BOT_AI_FINISHER_PUSH_HEALTH_THRESHOLD
+    playerHealth <= difficultyProfile.finisherPushHealthThreshold
     && alpha.shots.length > 0
     && alpha.overheatRisk <= BOT_AI_TIC_FINISHER_OVERHEAT_RISK
     && alpha.totalExpectedDamage >= Math.max(5, sustain.totalExpectedDamage * 0.85)
@@ -3542,11 +3573,11 @@ function markWeaponSlotFired(
 }
 
 function getBotWeaponAmmoGate(
-  session: ClientSession,
+  bot: SoloCombatBotActorState,
   weaponSlot: number,
   consume: boolean,
 ): { allowed: boolean; remainingAmmo?: number; ammoBinIndex?: number; damageCode?: number; weaponName?: string } {
-  const botMechId = session.combatBotMechId ?? session.selectedMechId ?? FALLBACK_MECH_ID;
+  const botMechId = bot.mechId;
   const mechEntry = getMechEntryForId(botMechId);
   const weaponName = getWeaponNameForMechSlot(botMechId, weaponSlot);
   const weaponTypeId = getWeaponTypeIdForMechSlot(botMechId, weaponSlot);
@@ -3568,8 +3599,8 @@ function getBotWeaponAmmoGate(
   }
 
   const ammoStateValues = consume
-    ? getOrCreateAmmoStateValues(session.combatBotAmmoStateValues, mechEntry.ammoBinTypeIds)
-    : (session.combatBotAmmoStateValues ?? getInitialCombatAmmoStateValues(mechEntry.ammoBinTypeIds));
+    ? getOrCreateAmmoStateValues(bot.ammoStateValues, mechEntry.ammoBinTypeIds)
+    : (bot.ammoStateValues.length > 0 ? bot.ammoStateValues : getInitialCombatAmmoStateValues(mechEntry.ammoBinTypeIds));
   const ammoBinIndex = matchingAmmoBinIndexes.find(index => (ammoStateValues[index] ?? 0) > 0);
   if (ammoBinIndex === undefined) {
     return { allowed: false, weaponName };
@@ -3578,7 +3609,7 @@ function getBotWeaponAmmoGate(
   const remainingAmmo = Math.max(0, (ammoStateValues[ammoBinIndex] ?? 0) - 1);
   if (consume) {
     ammoStateValues[ammoBinIndex] = remainingAmmo;
-    session.combatBotAmmoStateValues = ammoStateValues;
+    bot.ammoStateValues = ammoStateValues;
   }
   return {
     allowed: true,
@@ -3590,21 +3621,21 @@ function getBotWeaponAmmoGate(
 }
 
 function peekBotWeaponAmmo(
-  session: ClientSession,
+  bot: SoloCombatBotActorState,
   weaponSlot: number,
 ): { allowed: boolean; remainingAmmo?: number; ammoBinIndex?: number; damageCode?: number; weaponName?: string } {
-  return getBotWeaponAmmoGate(session, weaponSlot, false);
+  return getBotWeaponAmmoGate(bot, weaponSlot, false);
 }
 
 function consumeBotWeaponAmmo(
-  session: ClientSession,
+  bot: SoloCombatBotActorState,
   weaponSlot: number,
 ): { allowed: boolean; remainingAmmo?: number; ammoBinIndex?: number; damageCode?: number; weaponName?: string } {
-  return getBotWeaponAmmoGate(session, weaponSlot, true);
+  return getBotWeaponAmmoGate(bot, weaponSlot, true);
 }
 
 function markBotWeaponSlotFired(
-  session: ClientSession,
+  bot: SoloCombatBotActorState,
   weaponSlot: number,
   cooldownMs: number | undefined,
   now: number,
@@ -3612,10 +3643,7 @@ function markBotWeaponSlotFired(
   if (cooldownMs === undefined || cooldownMs <= 0) {
     return;
   }
-  if (!session.combatBotWeaponReadyAtBySlot) {
-    session.combatBotWeaponReadyAtBySlot = [];
-  }
-  session.combatBotWeaponReadyAtBySlot[weaponSlot] = now + cooldownMs;
+  bot.weaponReadyAtBySlot[weaponSlot] = now + cooldownMs;
 }
 
 function clearPendingCombatAction0Followup(session: ClientSession): void {
@@ -3735,12 +3763,12 @@ function applyDamageToSection(
 }
 
 function chooseRetaliationHitSection(
-  session: ClientSession,
+  session: { combatRetaliationCursor?: number } | undefined,
   armorValues: readonly number[],
   internalValues: readonly number[],
   headArmor: number,
 ): CombatAttachmentHitSection {
-  const start = session.combatRetaliationCursor ?? 0;
+  const start = session?.combatRetaliationCursor ?? 0;
   for (let offset = 0; offset < LOCAL_RETALIATION_SECTIONS.length; offset++) {
     const idx = (start + offset) % LOCAL_RETALIATION_SECTIONS.length;
     const section = LOCAL_RETALIATION_SECTIONS[idx];
@@ -3750,14 +3778,18 @@ function chooseRetaliationHitSection(
         : section.internalIndex === 7 ? headArmor : 0) > 0
       || (internalValues[section.internalIndex] ?? 0) > 0
     ) {
-      session.combatRetaliationCursor = (idx + 1) % LOCAL_RETALIATION_SECTIONS.length;
+      if (session) {
+        session.combatRetaliationCursor = (idx + 1) % LOCAL_RETALIATION_SECTIONS.length;
+      }
       return section;
     }
   }
   const fallback = LOCAL_RETALIATION_SECTIONS[start % LOCAL_RETALIATION_SECTIONS.length]
     ?? LOCAL_RETALIATION_SECTIONS[0];
-  session.combatRetaliationCursor = ((start % LOCAL_RETALIATION_SECTIONS.length) + 1)
-    % LOCAL_RETALIATION_SECTIONS.length;
+  if (session) {
+    session.combatRetaliationCursor = ((start % LOCAL_RETALIATION_SECTIONS.length) + 1)
+      % LOCAL_RETALIATION_SECTIONS.length;
+  }
   return fallback;
 }
 
@@ -4060,27 +4092,471 @@ function getBotMechId(session: ClientSession): number {
   return session.combatBotMechId ?? session.selectedMechId ?? FALLBACK_MECH_ID;
 }
 
+const MAX_SINGLE_PLAYER_BOT_OPPONENTS = 7;
+const MIN_SOLO_COMBAT_SIDE = 1;
+const MAX_SOLO_COMBAT_SIDE = 8;
+
+function clampBotOpponentCount(count: number | undefined): number {
+  return Math.max(1, Math.min(MAX_SINGLE_PLAYER_BOT_OPPONENTS, Math.trunc(count ?? 1)));
+}
+
+function clampSoloCombatSide(side: number | undefined, fallback = MIN_SOLO_COMBAT_SIDE): number {
+  if (side === undefined || !Number.isFinite(side)) {
+    return fallback;
+  }
+  return Math.max(MIN_SOLO_COMBAT_SIDE, Math.min(MAX_SOLO_COMBAT_SIDE, Math.trunc(side)));
+}
+
+function getConfiguredSoloCombatPlayerSide(session: ClientSession): number {
+  return clampSoloCombatSide(session.worldArenaSide, MIN_SOLO_COMBAT_SIDE);
+}
+
+function getConfiguredSoloCombatDefaultEnemySide(session: ClientSession): number {
+  const playerSide = getConfiguredSoloCombatPlayerSide(session);
+  return playerSide === MIN_SOLO_COMBAT_SIDE ? 2 : MIN_SOLO_COMBAT_SIDE;
+}
+
+function getConfiguredBotOpponentCount(session: ClientSession): number {
+  return clampBotOpponentCount(session.combatBotOpponentCount);
+}
+
+function getConfiguredBotDifficultyLevel(session: ClientSession): number {
+  return clampBotDifficultyLevel(session.combatBotDifficultyLevel ?? DEFAULT_BOT_DIFFICULTY_LEVEL);
+}
+
+function getConfiguredBotDifficultyProfile(session: ClientSession): BotDifficultyProfile {
+  return getBotDifficultyProfile(getConfiguredBotDifficultyLevel(session));
+}
+
+function getConfiguredBotLoadoutId(
+  session: ClientSession,
+  botIndex: number,
+): number {
+  const index = Math.max(0, Math.min(MAX_SINGLE_PLAYER_BOT_OPPONENTS - 1, botIndex));
+  const configured = session.combatBotLoadoutIds?.[index];
+  if (configured !== undefined) {
+    return configured;
+  }
+  const primary = session.combatBotLoadoutIds?.[0] ?? session.combatBotMechId;
+  return primary ?? session.selectedMechId ?? FALLBACK_MECH_ID;
+}
+
+function getConfiguredBotLoadoutLabel(
+  session: ClientSession,
+  botIndex: number,
+): string {
+  const mechId = getConfiguredBotLoadoutId(session, botIndex);
+  const mechEntry = WORLD_MECH_BY_ID.get(mechId);
+  return mechEntry
+    ? `${mechEntry.typeString} (id=${mechId})`
+    : `Mech ${mechId}`;
+}
+
+function setConfiguredBotLoadoutId(
+  session: ClientSession,
+  botIndex: number,
+  mechId: number,
+): void {
+  const index = Math.max(0, Math.min(MAX_SINGLE_PLAYER_BOT_OPPONENTS - 1, botIndex));
+  const loadoutIds = [...(session.combatBotLoadoutIds ?? [])];
+  loadoutIds[index] = mechId;
+  if (index === 0) {
+    session.combatBotMechId = mechId;
+    loadoutIds[0] = mechId;
+  }
+  session.combatBotLoadoutIds = loadoutIds;
+  session.combatBotOpponentCount = Math.max(getConfiguredBotOpponentCount(session), index + 1);
+}
+
+function getConfiguredBotSide(
+  session: ClientSession,
+  botIndex: number,
+  verificationMode?: ClientSession['combatVerificationMode'],
+): number {
+  if (verificationMode) {
+    return getConfiguredSoloCombatDefaultEnemySide(session);
+  }
+  const index = Math.max(0, Math.min(MAX_SINGLE_PLAYER_BOT_OPPONENTS - 1, botIndex));
+  const configured = session.combatBotSides?.[index];
+  return clampSoloCombatSide(configured, getConfiguredSoloCombatDefaultEnemySide(session));
+}
+
+function setConfiguredBotSide(
+  session: ClientSession,
+  botIndex: number,
+  side: number,
+): void {
+  const index = Math.max(0, Math.min(MAX_SINGLE_PLAYER_BOT_OPPONENTS - 1, botIndex));
+  const sides = [...(session.combatBotSides ?? [])];
+  sides[index] = clampSoloCombatSide(side, getConfiguredSoloCombatDefaultEnemySide(session));
+  session.combatBotSides = sides;
+  session.combatBotOpponentCount = Math.max(getConfiguredBotOpponentCount(session), index + 1);
+}
+
+function getConfiguredBotSideSummaryLabel(
+  session: ClientSession,
+  botIndex: number,
+  verificationMode?: ClientSession['combatVerificationMode'],
+): string {
+  const botSide = getConfiguredBotSide(session, botIndex, verificationMode);
+  return botSide === getConfiguredSoloCombatPlayerSide(session)
+    ? `${getArenaSideLabel(botSide)} (player team)`
+    : getArenaSideLabel(botSide);
+}
+
+function hasConfiguredSoloCombatHostileBots(
+  session: ClientSession,
+  verificationMode?: ClientSession['combatVerificationMode'],
+): boolean {
+  const playerSide = getConfiguredSoloCombatPlayerSide(session);
+  const botCount = getConfiguredSoloCombatBotCount(session, verificationMode);
+  for (let index = 0; index < botCount; index += 1) {
+    if (getConfiguredBotSide(session, index, verificationMode) !== playerSide) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function buildBotConfigurationSummary(session: ClientSession): string {
+  const count = getConfiguredBotOpponentCount(session);
+  const difficultyLevel = getConfiguredBotDifficultyLevel(session);
+  const playerSide = getConfiguredSoloCombatPlayerSide(session);
+  const loadouts = Array.from({ length: count }, (_, index) =>
+    `#${index + 1} ${getConfiguredBotSideSummaryLabel(session, index)} ${getConfiguredBotLoadoutLabel(session, index)}`,
+  );
+  return `Bot roster: ${count}. Player side: ${getArenaSideLabel(playerSide)}. Difficulty: ${difficultyLevel}/5. Slots: ${loadouts.join('; ')}`;
+}
+
+function getConfiguredSoloCombatBotCount(
+  session: ClientSession,
+  verificationMode: ClientSession['combatVerificationMode'],
+): number {
+  return verificationMode ? 1 : getConfiguredBotOpponentCount(session);
+}
+
+function getSoloCombatBotSlotLabel(
+  slot: number,
+  side: number,
+  playerSide: number,
+): string {
+  const prefix = side === playerSide ? 'Ally' : 'Opponent';
+  return slot === 1 ? prefix : `${prefix} ${slot}`;
+}
+
+function buildSoloCombatBotClusterSpawnPoints(
+  indexes: number[],
+  centerAngle: number,
+  radiusUnits: number,
+): Array<{ index: number; x: number; y: number }> {
+  if (indexes.length === 0) {
+    return [];
+  }
+  const baseX = Math.cos(centerAngle) * radiusUnits;
+  const baseY = Math.sin(centerAngle) * radiusUnits;
+  const tangentX = -Math.sin(centerAngle);
+  const tangentY = Math.cos(centerAngle);
+  return buildCombatTeamClusterPositions(indexes, baseX, baseY, tangentX, tangentY).map(position => ({
+    index: position.item,
+    x: position.x,
+    y: position.y,
+  }));
+}
+
+function getSoloCombatSpawnLayout(
+  botSides: number[],
+  playerSide: number,
+): { playerSpawn: { x: number; y: number }; botSpawnPoints: Array<{ x: number; y: number }> } {
+  const allyIndexes: number[] = [];
+  const hostileIndexes: number[] = [];
+  for (let index = 0; index < botSides.length; index += 1) {
+    if (botSides[index] === playerSide) {
+      allyIndexes.push(index);
+    } else {
+      hostileIndexes.push(index);
+    }
+  }
+
+  const spawnPoints = Array.from({ length: botSides.length }, () => ({ x: 0, y: BOT_AI_SPAWN_DISTANCE }));
+  let playerSpawn = { x: 0, y: 0 };
+  const allyFormation = [...allyIndexes];
+  allyFormation.splice(Math.floor(allyIndexes.length / 2), 0, -1);
+  for (const position of buildCombatTeamClusterPositions(allyFormation, 0, 0, 1, 0)) {
+    if (position.item === -1) {
+      playerSpawn = { x: position.x, y: position.y };
+      continue;
+    }
+    spawnPoints[position.item] = { x: position.x, y: position.y };
+  }
+  for (const point of buildSoloCombatBotClusterSpawnPoints(hostileIndexes, Math.PI / 2, BOT_AI_SPAWN_DISTANCE)) {
+    spawnPoints[point.index] = { x: point.x, y: point.y };
+  }
+  return { playerSpawn, botSpawnPoints: spawnPoints };
+}
+
+function getSoloCombatBots(session: ClientSession): SoloCombatBotActorState[] {
+  return session.combatBotActors ?? [];
+}
+
+function getActiveSoloCombatBots(session: ClientSession): SoloCombatBotActorState[] {
+  return getSoloCombatBots(session).filter(bot => bot.health > 0);
+}
+
+function getActiveHostileSoloCombatBots(session: ClientSession): SoloCombatBotActorState[] {
+  const playerSide = getConfiguredSoloCombatPlayerSide(session);
+  return getActiveSoloCombatBots(session).filter(bot => bot.side !== playerSide);
+}
+
+function getSoloCombatBotBySlot(
+  session: ClientSession,
+  slot: number,
+): SoloCombatBotActorState | undefined {
+  return getSoloCombatBots(session).find(bot => bot.slot === slot);
+}
+
+interface SoloCombatBotTargetState {
+  kind: 'player' | 'bot';
+  slot: number;
+  side: number;
+  mechId: number;
+  x: number;
+  y: number;
+  z: number;
+  facing: number;
+  speedMag: number;
+  maxSpeedMag?: number;
+  airborne: boolean;
+  moveVectorX: number;
+  moveVectorY: number;
+  health: number;
+  internalValues: readonly number[];
+  bot?: SoloCombatBotActorState;
+}
+
+function getPreferredSoloCombatTarget(
+  session: ClientSession,
+  attacker: SoloCombatBotActorState,
+): SoloCombatBotTargetState | undefined {
+  const candidates: SoloCombatBotTargetState[] = [];
+  const playerSide = getConfiguredSoloCombatPlayerSide(session);
+  const playerInternalValues = session.combatPlayerInternalValues ?? DEFAULT_BOT_INTERNAL_VALUES;
+  const playerHealth = session.playerHealth ?? getCombatDurability(
+    session.combatPlayerArmorValues ?? DEFAULT_BOT_ARMOR_VALUES,
+    playerInternalValues,
+  ) + (session.combatPlayerHeadArmor ?? HEAD_ARMOR_VALUE);
+  if (playerSide !== attacker.side && playerHealth > 0 && !isActorDestroyed(playerInternalValues)) {
+    candidates.push({
+      kind: 'player',
+      slot: 0,
+      side: playerSide,
+      mechId: session.selectedMechId ?? FALLBACK_MECH_ID,
+      x: session.combatX ?? 0,
+      y: session.combatY ?? 0,
+      z: session.combatJumpAltitude ?? 0,
+      facing: getCombatCmd65Facing(session),
+      speedMag: session.combatSpeedMag ?? 0,
+      maxSpeedMag: session.combatMaxSpeedMag,
+      airborne: (session.combatJumpAltitude ?? 0) > 0,
+      moveVectorX: session.combatMoveVectorX ?? 0,
+      moveVectorY: session.combatMoveVectorY ?? 0,
+      health: playerHealth,
+      internalValues: playerInternalValues,
+    });
+  }
+
+  for (const bot of getActiveSoloCombatBots(session)) {
+    if (bot.slot === attacker.slot || bot.side === attacker.side || bot.health <= 0) {
+      continue;
+    }
+    candidates.push({
+      kind: 'bot',
+      slot: bot.slot,
+      side: bot.side,
+      mechId: bot.mechId,
+      x: bot.x,
+      y: bot.y,
+      z: bot.z,
+      facing: bot.facing,
+      speedMag: bot.speedMag,
+      maxSpeedMag: getMechEntryForId(bot.mechId)?.maxSpeedMag,
+      airborne: bot.jumpActive === true || bot.z > 0,
+      moveVectorX: bot.moveVectorX,
+      moveVectorY: bot.moveVectorY,
+      health: bot.health,
+      internalValues: bot.internalValues,
+      bot,
+    });
+  }
+
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  candidates.sort((a, b) => {
+    const distanceDiff = Math.hypot(attacker.x - a.x, attacker.y - a.y) - Math.hypot(attacker.x - b.x, attacker.y - b.y);
+    if (Math.abs(distanceDiff) > 0.5) {
+      return distanceDiff;
+    }
+    const healthDiff = a.health - b.health;
+    if (healthDiff !== 0) {
+      return healthDiff;
+    }
+    return a.slot - b.slot;
+  });
+  return candidates[0];
+}
+
+function clearLegacySoloCombatBotState(session: ClientSession): void {
+  session.botHealth = undefined;
+  session.combatBotArmorValues = undefined;
+  session.combatBotInternalValues = undefined;
+  session.combatBotHeadArmor = undefined;
+  session.combatBotCriticalStateBytes = undefined;
+  session.combatBotX = undefined;
+  session.combatBotY = undefined;
+  session.combatBotZ = undefined;
+  session.combatBotFacing = undefined;
+  session.combatBotSpeedMag = undefined;
+  session.combatBotLastMoveAt = undefined;
+  session.combatBotLastAimLimitLogAt = undefined;
+  session.combatBotMoveVectorX = undefined;
+  session.combatBotMoveVectorY = undefined;
+  session.combatBotWeaponReadyAtBySlot = undefined;
+  session.combatBotAmmoStateValues = undefined;
+  session.combatBotHeat = undefined;
+  session.combatBotJumpActive = undefined;
+  session.combatBotJumpFuel = undefined;
+  session.combatBotJumpStartedAt = undefined;
+  session.combatBotJumpDurationMs = undefined;
+  session.combatBotJumpStartFuel = undefined;
+  session.combatBotJumpApexUnits = undefined;
+  session.combatBotJumpStartX = undefined;
+  session.combatBotJumpStartY = undefined;
+  session.combatBotJumpTargetX = undefined;
+  session.combatBotJumpTargetY = undefined;
+  session.combatBotLastJumpAt = undefined;
+}
+
+function syncLegacySoloCombatBotState(session: ClientSession): void {
+  const bots = getSoloCombatBots(session);
+  if (bots.length === 0) {
+    clearLegacySoloCombatBotState(session);
+    return;
+  }
+
+  const primaryBot = bots[0];
+  session.botHealth = bots.reduce((sum, bot) => sum + Math.max(0, bot.health), 0);
+  session.combatBotArmorValues = [...primaryBot.armorValues];
+  session.combatBotInternalValues = [...primaryBot.internalValues];
+  session.combatBotHeadArmor = primaryBot.headArmor;
+  session.combatBotCriticalStateBytes = [...primaryBot.criticalStateBytes];
+  session.combatBotX = primaryBot.x;
+  session.combatBotY = primaryBot.y;
+  session.combatBotZ = primaryBot.z;
+  session.combatBotFacing = primaryBot.facing;
+  session.combatBotSpeedMag = primaryBot.speedMag;
+  session.combatBotLastMoveAt = primaryBot.lastMoveAt;
+  session.combatBotLastAimLimitLogAt = primaryBot.lastAimLimitLogAt;
+  session.combatBotMoveVectorX = primaryBot.moveVectorX;
+  session.combatBotMoveVectorY = primaryBot.moveVectorY;
+  session.combatBotWeaponReadyAtBySlot = [...primaryBot.weaponReadyAtBySlot];
+  session.combatBotAmmoStateValues = [...primaryBot.ammoStateValues];
+  session.combatBotHeat = primaryBot.heat;
+  session.combatBotJumpActive = primaryBot.jumpActive;
+  session.combatBotJumpFuel = primaryBot.jumpFuel;
+  session.combatBotJumpStartedAt = primaryBot.jumpStartedAt;
+  session.combatBotJumpDurationMs = primaryBot.jumpDurationMs;
+  session.combatBotJumpStartFuel = primaryBot.jumpStartFuel;
+  session.combatBotJumpApexUnits = primaryBot.jumpApexUnits;
+  session.combatBotJumpStartX = primaryBot.jumpStartX;
+  session.combatBotJumpStartY = primaryBot.jumpStartY;
+  session.combatBotJumpTargetX = primaryBot.jumpTargetX;
+  session.combatBotJumpTargetY = primaryBot.jumpTargetY;
+  session.combatBotLastJumpAt = primaryBot.lastJumpAt;
+}
+
+function clearSoloCombatBotDeathTimers(session: ClientSession): void {
+  for (const bot of getSoloCombatBots(session)) {
+    if (bot.deathTimer !== undefined) {
+      clearTimeout(bot.deathTimer);
+      bot.deathTimer = undefined;
+    }
+  }
+}
+
+function createSoloCombatBotActor(
+  session: ClientSession,
+  slot: number,
+  mechId: number,
+  side: number,
+  spawnX: number,
+  spawnY: number,
+): SoloCombatBotActorState {
+  const mechEntry = WORLD_MECH_BY_ID.get(mechId);
+  const armorValues = [...(mechEntry?.armorLikeMaxValues ?? DEFAULT_BOT_ARMOR_VALUES)];
+  const internalValues = mechEntry !== undefined
+    ? mechInternalStateBytes(mechEntry.tonnage)
+    : [...DEFAULT_BOT_INTERNAL_VALUES];
+  const headArmor = HEAD_ARMOR_VALUE;
+  const playerX = session.combatX ?? 0;
+  const playerY = session.combatY ?? 0;
+  const playerSide = getConfiguredSoloCombatPlayerSide(session);
+  const initialFacingTargetY = side === playerSide
+    ? playerY + BOT_AI_SPAWN_DISTANCE
+    : playerY;
+  return {
+    slot,
+    mechId,
+    side,
+    health: getCombatDurability(armorValues, internalValues) + headArmor,
+    armorValues,
+    internalValues,
+    criticalStateBytes: createCriticalStateBytes(mechEntry?.extraCritCount),
+    headArmor,
+    x: spawnX,
+    y: spawnY,
+    z: 0,
+    facing: getBotFacingAccumulatorTowardTarget(
+      spawnX,
+      spawnY,
+      playerX,
+      initialFacingTargetY,
+      FACING_ACCUMULATOR_NEUTRAL,
+    ),
+    speedMag: 0,
+    moveVectorX: 0,
+    moveVectorY: 0,
+    weaponReadyAtBySlot: [],
+    ammoStateValues: getInitialCombatAmmoStateValues(mechEntry?.ammoBinTypeIds),
+    heat: 0,
+    jumpActive: false,
+    jumpFuel: JUMP_JET_FUEL_MAX,
+  };
+}
+
 function sendBotPositionSync(
   session: ClientSession,
+  bot: SoloCombatBotActorState,
   capture: CaptureLogger,
   label: string,
+  target?: SoloCombatBotTargetState,
 ): void {
   if (session.socket.destroyed || !session.socket.writable || session.phase !== 'combat') {
     return;
   }
-  const { throttle, legVel } = getBotCmd65UpperBodyChannels(session);
+  const { throttle, legVel } = getBotCmd65UpperBodyChannels(session, bot, target);
   send(
     session.socket,
     buildCmd65PositionSyncPacket(
       {
-        slot: 1,
-        x: session.combatBotX ?? 0,
-        y: session.combatBotY ?? BOT_AI_SPAWN_DISTANCE,
-        z: session.combatBotZ ?? 0,
-        facing: session.combatBotFacing ?? FACING_ACCUMULATOR_NEUTRAL,
+        slot: bot.slot,
+        x: bot.x,
+        y: bot.y,
+        z: bot.z,
+        facing: bot.facing,
         throttle,
         legVel,
-        speedMag: session.combatBotSpeedMag ?? 0,
+        speedMag: bot.speedMag,
       },
       nextSeq(session),
     ),
@@ -4198,14 +4674,19 @@ function getBotPitchToTarget(
   );
 }
 
-function getBotCmd65UpperBodyChannels(session: ClientSession): { throttle: number; legVel: number } {
-  const botX = session.combatBotX ?? 0;
-  const botY = session.combatBotY ?? BOT_AI_SPAWN_DISTANCE;
-  const botZ = session.combatBotZ ?? 0;
-  const targetX = session.combatX ?? 0;
-  const targetY = session.combatY ?? 0;
-  const targetZ = session.combatJumpAltitude ?? 0;
-  const botFacing = session.combatBotFacing ?? FACING_ACCUMULATOR_NEUTRAL;
+function getBotCmd65UpperBodyChannels(
+  session: ClientSession,
+  bot: SoloCombatBotActorState,
+  preferredTarget?: SoloCombatBotTargetState,
+): { throttle: number; legVel: number } {
+  const botX = bot.x;
+  const botY = bot.y;
+  const botZ = bot.z;
+  const target = preferredTarget ?? getPreferredSoloCombatTarget(session, bot);
+  const targetX = target?.x ?? (session.combatX ?? 0);
+  const targetY = target?.y ?? (session.combatY ?? 0);
+  const targetZ = target?.z ?? (session.combatJumpAltitude ?? 0);
+  const botFacing = bot.facing;
   const torsoYaw = clampNumber(
     getBotAimDeltaToTarget(
       botX,
@@ -4224,7 +4705,7 @@ function getBotCmd65UpperBodyChannels(session: ClientSession): { throttle: numbe
 }
 
 function maybeLogBotAimLimit(
-  session: ClientSession,
+  bot: SoloCombatBotActorState,
   connLog: Logger,
   botX: number,
   botY: number,
@@ -4237,14 +4718,15 @@ function maybeLogBotAimLimit(
 ): void {
   const now = Date.now();
   if (
-    session.combatBotLastAimLimitLogAt !== undefined
-    && now - session.combatBotLastAimLimitLogAt < BOT_AI_AIM_LIMIT_LOG_COOLDOWN_MS
+    bot.lastAimLimitLogAt !== undefined
+    && now - bot.lastAimLimitLogAt < BOT_AI_AIM_LIMIT_LOG_COOLDOWN_MS
   ) {
     return;
   }
-  session.combatBotLastAimLimitLogAt = now;
+  bot.lastAimLimitLogAt = now;
   connLog.debug(
-    '[world/combat] bot fire gated by aim: yaw=%d pitch=%d limit=%d bot=(%d,%d,%d) target=(%d,%d,%d)',
+    '[world/combat] bot fire gated by aim: slot=%d yaw=%d pitch=%d limit=%d bot=(%d,%d,%d) target=(%d,%d,%d)',
+    bot.slot,
     rawYaw,
     rawPitch,
     BOT_TORSO_AIM_LIMIT_UNITS,
@@ -4355,17 +4837,17 @@ function getWeaponRangeProfileForMech(
   };
 }
 
-function isBotWeaponUsableForRangePlanning(session: ClientSession, weaponSlot: number): boolean {
-  return peekBotWeaponAmmo(session, weaponSlot).allowed;
+function isBotWeaponUsableForRangePlanning(bot: SoloCombatBotActorState, weaponSlot: number): boolean {
+  return peekBotWeaponAmmo(bot, weaponSlot).allowed;
 }
 
-function getBotWeaponRangeProfile(session: ClientSession): {
+function getBotWeaponRangeProfile(bot: SoloCombatBotActorState): {
   shortestRangeMeters: number;
   longestRangeMeters: number;
   preferredRangeMeters: number;
   hasUsableWeapon: boolean;
 } {
-  const botMechId = getBotMechId(session);
+  const botMechId = bot.mechId;
   const mechEntry = getMechEntryForId(botMechId);
   if (!mechEntry) {
     return {
@@ -4380,8 +4862,8 @@ function getBotWeaponRangeProfile(session: ClientSession): {
   let longestRangeMeters = 0;
   let hasUsableWeapon = false;
   for (let weaponSlot = 0; weaponSlot < mechEntry.weaponTypeIds.length; weaponSlot += 1) {
-    const mountGate = getWeaponMountGateForMech(botMechId, session.combatBotInternalValues, weaponSlot);
-    if (!mountGate.allowed || !isBotWeaponUsableForRangePlanning(session, weaponSlot)) continue;
+    const mountGate = getWeaponMountGateForMech(botMechId, bot.internalValues, weaponSlot);
+    if (!mountGate.allowed || !isBotWeaponUsableForRangePlanning(bot, weaponSlot)) continue;
     const maxRangeMeters = getWeaponLongRangeMeters(getWeaponSpecForMechSlot(botMechId, weaponSlot)) ?? 0;
     if (maxRangeMeters <= 0) continue;
     hasUsableWeapon = true;
@@ -4410,8 +4892,8 @@ function getBotWeaponRangeProfile(session: ClientSession): {
   };
 }
 
-function getBotPreferredRangeMeters(session: ClientSession): number {
-  return getBotWeaponRangeProfile(session).preferredRangeMeters;
+function getBotPreferredRangeMeters(bot: SoloCombatBotActorState): number {
+  return getBotWeaponRangeProfile(bot).preferredRangeMeters;
 }
 
 function getWeaponFitScoreForMechAtDistance(
@@ -4484,18 +4966,19 @@ function chooseWeakestSurvivingSection(
 }
 
 function chooseBotAttackSection(
-  session: ClientSession,
+  bot: SoloCombatBotActorState,
   weaponSlot: number,
   armorValues: readonly number[],
   internalValues: readonly number[],
   headArmor: number,
   distanceMeters: number,
+  targetHealth: number,
 ): CombatAttachmentHitSection {
-  const botMechId = getBotMechId(session);
+  const botMechId = bot.mechId;
   const weaponSpec = getWeaponSpecForMechSlot(botMechId, weaponSlot);
   const weaponDamage = weaponSpec?.damage ?? BOT_FALLBACK_WEAPON_DAMAGE;
-  const weaponRangeMeters = getWeaponLongRangeMeters(weaponSpec) ?? getBotPreferredRangeMeters(session);
-  const botBehindOnDurability = (session.botHealth ?? BOT_INITIAL_HEALTH) < (session.playerHealth ?? BOT_INITIAL_HEALTH);
+  const weaponRangeMeters = getWeaponLongRangeMeters(weaponSpec) ?? getBotPreferredRangeMeters(bot);
+  const botBehindOnDurability = bot.health < targetHealth;
 
   const headRemaining = getSectionRemainingDurability(
     armorValues,
@@ -4546,7 +5029,7 @@ function chooseBotAttackSection(
     if (
       weakestLegDurability <= weaponDamage * 3
       || botBehindOnDurability
-      || session.combatBotJumpActive
+      || bot.jumpActive
     ) {
       return weakestLeg;
     }
@@ -4572,34 +5055,35 @@ function chooseBotAttackSection(
     return weakestArm;
   }
 
-  return chooseRetaliationHitSection(session, armorValues, internalValues, headArmor);
+  return chooseRetaliationHitSection(bot, armorValues, internalValues, headArmor);
 }
 
-function getBotJumpTravelUnits(session: ClientSession): number {
-  const { apexUnits } = getJumpArcForMechId(getBotMechId(session));
+function getBotJumpTravelUnits(bot: SoloCombatBotActorState): number {
+  const { apexUnits } = getJumpArcForMechId(bot.mechId);
   return Math.max(24 * COMBAT_WORLD_UNITS_PER_METER, apexUnits * 2);
 }
 
 function startBotJump(
   session: ClientSession,
+  bot: SoloCombatBotActorState,
   connLog: Logger,
   capture: CaptureLogger,
   landingX: number,
   landingY: number,
   reason: string,
 ): boolean {
-  const botMechId = getBotMechId(session);
+  const botMechId = bot.mechId;
   const now = Date.now();
-  const fuel = session.combatBotJumpFuel ?? JUMP_JET_FUEL_MAX;
-  const currentBotX = session.combatBotX ?? 0;
-  const currentBotY = session.combatBotY ?? BOT_SPAWN_DISTANCE;
+  const fuel = bot.jumpFuel;
+  const currentBotX = bot.x;
+  const currentBotY = bot.y;
 
   if (!mechSupportsJumpJets(botMechId)) return false;
-  if (session.combatBotJumpActive) return false;
+  if (bot.jumpActive) return false;
   if (fuel <= JUMP_JET_START_FUEL_THRESHOLD) return false;
   if (
-    session.combatBotLastJumpAt !== undefined
-    && now - session.combatBotLastJumpAt < BOT_AI_JUMP_COOLDOWN_MS
+    bot.lastJumpAt !== undefined
+    && now - bot.lastJumpAt < BOT_AI_JUMP_COOLDOWN_MS
   ) {
     return false;
   }
@@ -4608,29 +5092,33 @@ function startBotJump(
   }
 
   const jumpArc = getJumpArcForMechId(botMechId);
-  session.combatBotJumpActive = true;
-  session.combatBotJumpStartedAt = now;
-  session.combatBotJumpDurationMs = getJumpMirrorDurationMsForMechId(botMechId);
-  session.combatBotJumpStartFuel = fuel;
-  session.combatBotJumpFuel = fuel;
-  session.combatBotJumpApexUnits = jumpArc.apexUnits;
-  session.combatBotJumpStartX = currentBotX;
-  session.combatBotJumpStartY = currentBotY;
-  session.combatBotJumpTargetX = landingX;
-  session.combatBotJumpTargetY = landingY;
-  session.combatBotLastJumpAt = now;
-  session.combatBotZ = 0;
-  session.combatBotSpeedMag = 0;
-  setBotMoveVector(session, 0, 0);
-  session.combatBotFacing = getBotFacingAccumulatorTowardTarget(
-    currentBotX,
-    currentBotY,
-    session.combatX ?? 0,
-    session.combatY ?? 0,
-    session.combatBotFacing ?? FACING_ACCUMULATOR_NEUTRAL,
-  );
+  bot.jumpActive = true;
+  bot.jumpStartedAt = now;
+  bot.jumpDurationMs = getJumpMirrorDurationMsForMechId(botMechId);
+  bot.jumpStartFuel = fuel;
+  bot.jumpFuel = fuel;
+  bot.jumpApexUnits = jumpArc.apexUnits;
+  bot.jumpStartX = currentBotX;
+  bot.jumpStartY = currentBotY;
+  bot.jumpTargetX = landingX;
+  bot.jumpTargetY = landingY;
+  bot.lastJumpAt = now;
+  bot.z = 0;
+  bot.speedMag = 0;
+  setBotMoveVector(bot, 0, 0);
+  const combatTarget = getPreferredSoloCombatTarget(session, bot);
+  if (combatTarget) {
+    bot.facing = getBotFacingAccumulatorTowardTarget(
+      currentBotX,
+      currentBotY,
+      combatTarget.x,
+      combatTarget.y,
+      bot.facing,
+    );
+  }
   connLog.info(
-    '[world/combat] bot jump start: mechId=%d fuel=%d from=(%d,%d) to=(%d,%d) apex=%d reason=%s',
+    '[world/combat] bot jump start: slot=%d mechId=%d fuel=%d from=(%d,%d) to=(%d,%d) apex=%d reason=%s',
+    bot.slot,
     botMechId,
     fuel,
     currentBotX,
@@ -4640,73 +5128,78 @@ function startBotJump(
     jumpArc.apexUnits,
     reason,
   );
-  sendBotPositionSync(session, capture, 'CMD65_BOT_JUMP_START');
+  sendBotPositionSync(session, bot, capture, 'CMD65_BOT_JUMP_START', combatTarget);
   return true;
 }
 
 function advanceBotJump(
   session: ClientSession,
+  bot: SoloCombatBotActorState,
   connLog: Logger,
   capture: CaptureLogger,
 ): boolean {
-  if (!session.combatBotJumpActive) {
+  if (!bot.jumpActive) {
     return false;
   }
 
-  const startedAt = session.combatBotJumpStartedAt ?? Date.now();
-  const durationMs = Math.max(1, session.combatBotJumpDurationMs ?? getJumpMirrorDurationMsForMechId(getBotMechId(session)));
-  const startX = session.combatBotJumpStartX ?? (session.combatBotX ?? 0);
-  const startY = session.combatBotJumpStartY ?? (session.combatBotY ?? BOT_AI_SPAWN_DISTANCE);
-  const targetX = session.combatBotJumpTargetX ?? startX;
-  const targetY = session.combatBotJumpTargetY ?? startY;
-  const apexUnits = session.combatBotJumpApexUnits ?? getJumpArcForMechId(getBotMechId(session)).apexUnits;
-  const startedFuel = session.combatBotJumpStartFuel ?? (session.combatBotJumpFuel ?? JUMP_JET_FUEL_MAX);
+  const startedAt = bot.jumpStartedAt ?? Date.now();
+  const durationMs = Math.max(1, bot.jumpDurationMs ?? getJumpMirrorDurationMsForMechId(bot.mechId));
+  const startX = bot.jumpStartX ?? bot.x;
+  const startY = bot.jumpStartY ?? bot.y;
+  const targetX = bot.jumpTargetX ?? startX;
+  const targetY = bot.jumpTargetY ?? startY;
+  const apexUnits = bot.jumpApexUnits ?? getJumpArcForMechId(bot.mechId).apexUnits;
+  const startedFuel = bot.jumpStartFuel ?? bot.jumpFuel;
   const progress = Math.min(1, (Date.now() - startedAt) / durationMs);
-  const previousBotX = session.combatBotX ?? startX;
-  const previousBotY = session.combatBotY ?? startY;
+  const previousBotX = bot.x;
+  const previousBotY = bot.y;
 
-  session.combatBotX = Math.round(startX + ((targetX - startX) * progress));
-  session.combatBotY = Math.round(startY + ((targetY - startY) * progress));
+  bot.x = Math.round(startX + ((targetX - startX) * progress));
+  bot.y = Math.round(startY + ((targetY - startY) * progress));
   setBotMoveVector(
-    session,
-    (session.combatBotX ?? startX) - previousBotX,
-    (session.combatBotY ?? startY) - previousBotY,
+    bot,
+    bot.x - previousBotX,
+    bot.y - previousBotY,
   );
-  session.combatBotZ = progress >= 1
+  bot.z = progress >= 1
     ? 0
     : Math.max(COMBAT_WORLD_UNITS_PER_METER, Math.round(apexUnits * 4 * progress * (1 - progress)));
-  session.combatBotSpeedMag = 0;
-  session.combatBotFacing = getBotFacingAccumulatorTowardTarget(
-    session.combatBotX ?? startX,
-    session.combatBotY ?? startY,
-    session.combatX ?? 0,
-    session.combatY ?? 0,
-    session.combatBotFacing ?? FACING_ACCUMULATOR_NEUTRAL,
-  );
-  session.combatBotJumpFuel = Math.max(0, Math.round(startedFuel * (1 - progress)));
+  bot.speedMag = 0;
+  const combatTarget = getPreferredSoloCombatTarget(session, bot);
+  if (combatTarget) {
+    bot.facing = getBotFacingAccumulatorTowardTarget(
+      bot.x,
+      bot.y,
+      combatTarget.x,
+      combatTarget.y,
+      bot.facing,
+    );
+  }
+  bot.jumpFuel = Math.max(0, Math.round(startedFuel * (1 - progress)));
 
   if (progress >= 1) {
-    session.combatBotJumpActive = false;
-    session.combatBotJumpStartedAt = undefined;
-    session.combatBotJumpDurationMs = undefined;
-    session.combatBotJumpStartFuel = undefined;
-    session.combatBotJumpApexUnits = undefined;
-    session.combatBotJumpStartX = undefined;
-    session.combatBotJumpStartY = undefined;
-    session.combatBotJumpTargetX = undefined;
-    session.combatBotJumpTargetY = undefined;
-    sendBotPositionSync(session, capture, 'CMD65_BOT_JUMP_LAND');
+    bot.jumpActive = false;
+    bot.jumpStartedAt = undefined;
+    bot.jumpDurationMs = undefined;
+    bot.jumpStartFuel = undefined;
+    bot.jumpApexUnits = undefined;
+    bot.jumpStartX = undefined;
+    bot.jumpStartY = undefined;
+    bot.jumpTargetX = undefined;
+    bot.jumpTargetY = undefined;
+    sendBotPositionSync(session, bot, capture, 'CMD65_BOT_JUMP_LAND', combatTarget);
     connLog.info(
-      '[world/combat] bot jump land: mechId=%d fuel=%d at=(%d,%d)',
-      getBotMechId(session),
-      session.combatBotJumpFuel ?? 0,
-      session.combatBotX ?? 0,
-      session.combatBotY ?? 0,
+      '[world/combat] bot jump land: slot=%d mechId=%d fuel=%d at=(%d,%d)',
+      bot.slot,
+      bot.mechId,
+      bot.jumpFuel,
+      bot.x,
+      bot.y,
     );
     return true;
   }
 
-  sendBotPositionSync(session, capture, 'CMD65_BOT_JUMP_MIRROR');
+  sendBotPositionSync(session, bot, capture, 'CMD65_BOT_JUMP_MIRROR', combatTarget);
   return true;
 }
 
@@ -4715,259 +5208,271 @@ function stepBotMovement(
   connLog: Logger,
   capture: CaptureLogger,
 ): void {
-  const now = Date.now();
-  const elapsedMs = clampNumber(
-    now - (session.combatBotLastMoveAt ?? (now - BOT_AI_TICK_MS)),
-    1,
-    BOT_AI_TICK_MS * 4,
-  );
-  session.combatBotLastMoveAt = now;
-  const botMechEntry = getMechEntryForId(getBotMechId(session));
-  coolBotHeat(session, Math.max(1, botMechEntry?.heatSinks ?? 10));
-  const fuelRegenAmount = Math.max(
-    1,
-    Math.round(JUMP_JET_FUEL_REGEN_PER_TICK * elapsedMs / JUMP_JET_FUEL_REGEN_INTERVAL_MS),
-  );
-  regenBotJumpFuelIfGrounded(session, fuelRegenAmount);
-  if (advanceBotJump(session, connLog, capture)) {
+  const activeBots = getActiveSoloCombatBots(session);
+  if (activeBots.length === 0) {
+    syncLegacySoloCombatBotState(session);
     return;
   }
 
-  const playerX = session.combatX ?? 0;
-  const playerY = session.combatY ?? 0;
-  const currentBotX = session.combatBotX ?? 0;
-  const currentBotY = session.combatBotY ?? BOT_AI_SPAWN_DISTANCE;
-  const dx = playerX - currentBotX;
-  const dy = playerY - currentBotY;
-  const distanceUnits = Math.hypot(dx, dy);
-  const distanceMeters = getCombatDisplayDistanceMeters(currentBotX, currentBotY, playerX, playerY);
-  const rangeProfile = getBotWeaponRangeProfile(session);
-  const currentRangeFitScore = getWeaponFitScoreForMechAtDistance(
-    getBotMechId(session),
-    session.combatBotInternalValues,
-    distanceMeters,
-    weaponSlot => isBotWeaponUsableForRangePlanning(session, weaponSlot),
-  );
-  const rangeBufferUnits = BOT_AI_RANGE_BUFFER_METERS * COMBAT_WORLD_UNITS_PER_METER;
-  const playerRangeProfile = getWeaponRangeProfileForMech(
-    session.selectedMechId ?? FALLBACK_MECH_ID,
-    session.combatPlayerInternalValues,
-  );
-  const botHealth = session.botHealth ?? BOT_INITIAL_HEALTH;
-  const playerHealth = session.playerHealth ?? BOT_INITIAL_HEALTH;
-  const durabilityDelta = botHealth - playerHealth;
-  const playerThreatRangeUnits = (playerRangeProfile.hasUsableWeapon ? playerRangeProfile.longestRangeMeters : 0)
-    * COMBAT_WORLD_UNITS_PER_METER;
-  const maxSpeedMag = botMechEntry?.maxSpeedMag ?? 0;
-  const walkSpeedMag = botMechEntry?.walkSpeedMag ?? maxSpeedMag;
-  const botBehindOnDurability = durabilityDelta < -8;
-  const botAheadOnDurability = durabilityDelta > 12;
-  let tacticalPreferredRangeMeters = rangeProfile.preferredRangeMeters;
-  if (playerRangeProfile.hasUsableWeapon) {
-    if (rangeProfile.longestRangeMeters >= playerRangeProfile.longestRangeMeters + 120) {
-      tacticalPreferredRangeMeters += BOT_AI_RANGE_ADVANTAGE_BONUS_METERS;
-    } else if (
-      rangeProfile.shortestRangeMeters <= 270
-      && rangeProfile.longestRangeMeters + 60 < playerRangeProfile.longestRangeMeters
-    ) {
-      tacticalPreferredRangeMeters -= BOT_AI_RANGE_PRESSURE_BONUS_METERS;
+  for (const bot of activeBots) {
+    const difficultyProfile = getConfiguredBotDifficultyProfile(session);
+    const now = Date.now();
+    const elapsedMs = clampNumber(
+      now - (bot.lastMoveAt ?? (now - BOT_AI_TICK_MS)),
+      1,
+      BOT_AI_TICK_MS * 4,
+    );
+    bot.lastMoveAt = now;
+    const botMechEntry = getMechEntryForId(bot.mechId);
+    coolBotHeat(bot, Math.max(1, botMechEntry?.heatSinks ?? 10));
+    const fuelRegenAmount = Math.max(
+      1,
+      Math.round(JUMP_JET_FUEL_REGEN_PER_TICK * elapsedMs / JUMP_JET_FUEL_REGEN_INTERVAL_MS),
+    );
+    regenBotJumpFuelIfGrounded(bot, fuelRegenAmount);
+    if (advanceBotJump(session, bot, connLog, capture)) {
+      continue;
     }
-  }
-  if (playerHealth <= BOT_AI_FINISHER_PUSH_HEALTH_THRESHOLD && rangeProfile.shortestRangeMeters <= 270) {
-    tacticalPreferredRangeMeters -= BOT_AI_RANGE_PRESSURE_BONUS_METERS;
-  } else if (botBehindOnDurability && rangeProfile.longestRangeMeters >= 450) {
-    tacticalPreferredRangeMeters += BOT_AI_RANGE_ADVANTAGE_BONUS_METERS;
-  } else if (botAheadOnDurability && rangeProfile.shortestRangeMeters <= 270) {
-    tacticalPreferredRangeMeters -= BOT_AI_RANGE_PRESSURE_BONUS_METERS;
-  }
-  tacticalPreferredRangeMeters = clampNumber(
-    tacticalPreferredRangeMeters,
-    BOT_AI_MIN_PREFERRED_RANGE_METERS,
-    BOT_AI_MAX_PREFERRED_RANGE_METERS,
-  );
-  const preferredRangeUnits = tacticalPreferredRangeMeters * COMBAT_WORLD_UNITS_PER_METER;
-  const minimumRetreatUnits = Math.max(
-    BOT_AI_MIN_PREFERRED_RANGE_METERS * COMBAT_WORLD_UNITS_PER_METER,
-    preferredRangeUnits - (rangeBufferUnits * 2),
-  );
-  const jumpTravelUnits = getBotJumpTravelUnits(session);
-  const canConsiderJump = mechSupportsJumpJets(getBotMechId(session)) && distanceUnits > 0;
-  const insidePlayerThreatRange = playerThreatRangeUnits > 0
-    && distanceUnits <= playerThreatRangeUnits + (BOT_AI_PLAYER_THREAT_BUFFER_METERS * COMBAT_WORLD_UNITS_PER_METER);
-  const currentFacing = session.combatBotFacing
-    ?? getBotFacingAccumulatorTowardTarget(
+
+    const target = getPreferredSoloCombatTarget(session, bot);
+    if (!target) {
+      bot.speedMag = stepBotGroundedSpeedMagTowardTarget(bot.speedMag, 0, Math.max(1, Math.abs(bot.speedMag)), elapsedMs);
+      setBotMoveVector(bot, 0, 0);
+      sendBotPositionSync(session, bot, capture, 'CMD65_BOT_AI_IDLE');
+      continue;
+    }
+
+    const targetX = target.x;
+    const targetY = target.y;
+    const currentBotX = bot.x;
+    const currentBotY = bot.y;
+    const dx = targetX - currentBotX;
+    const dy = targetY - currentBotY;
+    const distanceUnits = Math.hypot(dx, dy);
+    const distanceMeters = getCombatDisplayDistanceMeters(currentBotX, currentBotY, targetX, targetY);
+    const rangeProfile = getBotWeaponRangeProfile(bot);
+    const currentRangeFitScore = getWeaponFitScoreForMechAtDistance(
+      bot.mechId,
+      bot.internalValues,
+      distanceMeters,
+      weaponSlot => isBotWeaponUsableForRangePlanning(bot, weaponSlot),
+    );
+    const rangeBufferUnits = BOT_AI_RANGE_BUFFER_METERS * COMBAT_WORLD_UNITS_PER_METER;
+    const targetRangeProfile = getWeaponRangeProfileForMech(
+      target.mechId,
+      target.internalValues,
+    );
+    const botHealth = bot.health;
+    const targetHealth = target.health;
+    const durabilityDelta = botHealth - targetHealth;
+    const targetThreatRangeUnits = (targetRangeProfile.hasUsableWeapon ? targetRangeProfile.longestRangeMeters : 0)
+      * COMBAT_WORLD_UNITS_PER_METER;
+    const maxSpeedMag = botMechEntry?.maxSpeedMag ?? 0;
+    const walkSpeedMag = botMechEntry?.walkSpeedMag ?? maxSpeedMag;
+    const botBehindOnDurability = durabilityDelta < -8;
+    const botAheadOnDurability = durabilityDelta > 12;
+    let tacticalPreferredRangeMeters = rangeProfile.preferredRangeMeters;
+    if (targetRangeProfile.hasUsableWeapon) {
+      if (rangeProfile.longestRangeMeters >= targetRangeProfile.longestRangeMeters + 120) {
+        tacticalPreferredRangeMeters += BOT_AI_RANGE_ADVANTAGE_BONUS_METERS;
+      } else if (
+        rangeProfile.shortestRangeMeters <= 270
+        && rangeProfile.longestRangeMeters + 60 < targetRangeProfile.longestRangeMeters
+      ) {
+        tacticalPreferredRangeMeters -= difficultyProfile.rangePressureBonusMeters;
+      }
+    }
+    if (targetHealth <= difficultyProfile.finisherPushHealthThreshold && rangeProfile.shortestRangeMeters <= 270) {
+      tacticalPreferredRangeMeters -= difficultyProfile.rangePressureBonusMeters;
+    } else if (botBehindOnDurability && rangeProfile.longestRangeMeters >= 450) {
+      tacticalPreferredRangeMeters += BOT_AI_RANGE_ADVANTAGE_BONUS_METERS;
+    } else if (botAheadOnDurability && rangeProfile.shortestRangeMeters <= 270) {
+      tacticalPreferredRangeMeters -= difficultyProfile.rangePressureBonusMeters;
+    }
+    tacticalPreferredRangeMeters = clampNumber(
+      tacticalPreferredRangeMeters,
+      BOT_AI_MIN_PREFERRED_RANGE_METERS,
+      BOT_AI_MAX_PREFERRED_RANGE_METERS,
+    );
+    const preferredRangeUnits = tacticalPreferredRangeMeters * COMBAT_WORLD_UNITS_PER_METER;
+    const minimumRetreatUnits = Math.max(
+      BOT_AI_MIN_PREFERRED_RANGE_METERS * COMBAT_WORLD_UNITS_PER_METER,
+      preferredRangeUnits - (rangeBufferUnits * 2),
+    );
+    const jumpTravelUnits = getBotJumpTravelUnits(bot);
+    const canConsiderJump = mechSupportsJumpJets(bot.mechId) && distanceUnits > 0;
+    const insideTargetThreatRange = targetThreatRangeUnits > 0
+      && distanceUnits <= targetThreatRangeUnits + (BOT_AI_PLAYER_THREAT_BUFFER_METERS * COMBAT_WORLD_UNITS_PER_METER);
+    const currentFacing = bot.facing;
+    const desiredFacing = getBotFacingAccumulatorTowardTarget(
       currentBotX,
       currentBotY,
-      playerX,
-      playerY,
-      FACING_ACCUMULATOR_NEUTRAL,
+      targetX,
+      targetY,
+      currentFacing,
     );
-  const desiredFacing = getBotFacingAccumulatorTowardTarget(
-    currentBotX,
-    currentBotY,
-    playerX,
-    playerY,
-    currentFacing,
-  );
 
-  if (
-    canConsiderJump
-    && distanceUnits < minimumRetreatUnits
-    && (botBehindOnDurability || rangeProfile.longestRangeMeters >= 450)
-  ) {
-    const retreatUnits = Math.min(
-      jumpTravelUnits,
-      Math.max(rangeBufferUnits * 2, Math.round(preferredRangeUnits - distanceUnits + rangeBufferUnits)),
-    );
-    const landingX = currentBotX - Math.round((dx / distanceUnits) * retreatUnits);
-    const landingY = currentBotY - Math.round((dy / distanceUnits) * retreatUnits);
-    const landingRangeFitScore = getWeaponFitScoreForMechAtDistance(
-      getBotMechId(session),
-      session.combatBotInternalValues,
-      (distanceUnits + retreatUnits) / COMBAT_WORLD_UNITS_PER_METER,
-      weaponSlot => isBotWeaponUsableForRangePlanning(session, weaponSlot),
-    );
     if (
-      isMeaningfulJumpFitGain(currentRangeFitScore, landingRangeFitScore)
-      && startBotJump(session, connLog, capture, landingX, landingY, 'defensive range reset')
+      canConsiderJump
+      && distanceUnits < minimumRetreatUnits
+      && (botBehindOnDurability || rangeProfile.longestRangeMeters >= 450)
     ) {
-      return;
+      const retreatUnits = Math.min(
+        jumpTravelUnits,
+        Math.max(rangeBufferUnits * 2, Math.round(preferredRangeUnits - distanceUnits + rangeBufferUnits)),
+      );
+      const landingX = currentBotX - Math.round((dx / distanceUnits) * retreatUnits);
+      const landingY = currentBotY - Math.round((dy / distanceUnits) * retreatUnits);
+      const landingRangeFitScore = getWeaponFitScoreForMechAtDistance(
+        bot.mechId,
+        bot.internalValues,
+        (distanceUnits + retreatUnits) / COMBAT_WORLD_UNITS_PER_METER,
+        weaponSlot => isBotWeaponUsableForRangePlanning(bot, weaponSlot),
+      );
+      if (
+        isMeaningfulJumpFitGain(currentRangeFitScore, landingRangeFitScore)
+        && startBotJump(session, bot, connLog, capture, landingX, landingY, 'defensive range reset')
+      ) {
+        continue;
+      }
     }
-  }
 
-  if (
-    canConsiderJump
-    && distanceUnits > preferredRangeUnits + (rangeBufferUnits * 3)
-    && rangeProfile.shortestRangeMeters <= 270
-  ) {
-    const advanceUnits = Math.min(
-      jumpTravelUnits,
-      Math.max(rangeBufferUnits * 2, Math.round(distanceUnits - preferredRangeUnits)),
-    );
-    const landingX = currentBotX + Math.round((dx / distanceUnits) * advanceUnits);
-    const landingY = currentBotY + Math.round((dy / distanceUnits) * advanceUnits);
-    const landingRangeFitScore = getWeaponFitScoreForMechAtDistance(
-      getBotMechId(session),
-      session.combatBotInternalValues,
-      Math.max(0, (distanceUnits - advanceUnits) / COMBAT_WORLD_UNITS_PER_METER),
-      weaponSlot => isBotWeaponUsableForRangePlanning(session, weaponSlot),
-    );
     if (
-      isMeaningfulJumpFitGain(currentRangeFitScore, landingRangeFitScore)
-      && startBotJump(session, connLog, capture, landingX, landingY, 'aggressive range close')
-    ) {
-      return;
-    }
-  }
-
-  let nextBotX = currentBotX;
-  let nextBotY = currentBotY;
-  const currentSpeedMag = session.combatBotSpeedMag ?? 0;
-  let nextSpeedMag = currentSpeedMag;
-  let moveVectorX = 0;
-  let moveVectorY = 0;
-  let desiredMotion: -1 | 0 | 1 = 0;
-  let speedScale = 0;
-
-  if (distanceUnits > preferredRangeUnits + rangeBufferUnits) {
-    desiredMotion = 1;
-    speedScale = 1;
-  } else if (distanceUnits < minimumRetreatUnits) {
-    desiredMotion = -1;
-    speedScale = insidePlayerThreatRange ? 1 : 0.8;
-  } else if (insidePlayerThreatRange) {
-    if (botBehindOnDurability || rangeProfile.longestRangeMeters >= playerRangeProfile.longestRangeMeters + 90) {
-      desiredMotion = -1;
-      speedScale = botBehindOnDurability ? 1 : 0.85;
-    } else if (
-      playerHealth <= BOT_AI_FINISHER_PUSH_HEALTH_THRESHOLD
+      canConsiderJump
+      && distanceUnits > preferredRangeUnits + (rangeBufferUnits * 3)
       && rangeProfile.shortestRangeMeters <= 270
     ) {
+      const advanceUnits = Math.min(
+        jumpTravelUnits,
+        Math.max(rangeBufferUnits * 2, Math.round(distanceUnits - preferredRangeUnits)),
+      );
+      const landingX = currentBotX + Math.round((dx / distanceUnits) * advanceUnits);
+      const landingY = currentBotY + Math.round((dy / distanceUnits) * advanceUnits);
+      const landingRangeFitScore = getWeaponFitScoreForMechAtDistance(
+        bot.mechId,
+        bot.internalValues,
+        Math.max(0, (distanceUnits - advanceUnits) / COMBAT_WORLD_UNITS_PER_METER),
+        weaponSlot => isBotWeaponUsableForRangePlanning(bot, weaponSlot),
+      );
+      if (
+        isMeaningfulJumpFitGain(currentRangeFitScore, landingRangeFitScore)
+        && startBotJump(session, bot, connLog, capture, landingX, landingY, 'aggressive range close')
+      ) {
+        continue;
+      }
+    }
+
+    let nextBotX = currentBotX;
+    let nextBotY = currentBotY;
+    const currentSpeedMag = bot.speedMag;
+    let nextSpeedMag = currentSpeedMag;
+    let moveVectorX = 0;
+    let moveVectorY = 0;
+    let desiredMotion: -1 | 0 | 1 = 0;
+    let speedScale = 0;
+
+    if (distanceUnits > preferredRangeUnits + rangeBufferUnits) {
       desiredMotion = 1;
-      speedScale = 0.8;
-    } else if (rangeProfile.shortestRangeMeters <= 270) {
-      desiredMotion = 1;
-      speedScale = 0.55;
-    } else if (!botAheadOnDurability) {
+      speedScale = 1;
+    } else if (distanceUnits < minimumRetreatUnits) {
       desiredMotion = -1;
+      speedScale = insideTargetThreatRange ? 1 : 0.8;
+    } else if (insideTargetThreatRange) {
+      if (botBehindOnDurability || rangeProfile.longestRangeMeters >= targetRangeProfile.longestRangeMeters + 90) {
+        desiredMotion = -1;
+        speedScale = botBehindOnDurability ? 1 : 0.85;
+      } else if (
+        targetHealth <= difficultyProfile.finisherPushHealthThreshold
+        && rangeProfile.shortestRangeMeters <= 270
+      ) {
+        desiredMotion = 1;
+        speedScale = 0.8;
+      } else if (rangeProfile.shortestRangeMeters <= 270) {
+        desiredMotion = 1;
+        speedScale = 0.55;
+      } else if (!botAheadOnDurability) {
+        desiredMotion = -1;
+        speedScale = 0.45;
+      }
+    } else if (distanceUnits > 0 && rangeProfile.shortestRangeMeters <= 270) {
+      desiredMotion = 1;
       speedScale = 0.45;
     }
-  } else if (distanceUnits > 0 && rangeProfile.shortestRangeMeters <= 270) {
-    desiredMotion = 1;
-    speedScale = 0.45;
-  }
 
-  let nextFacing = stepFacingAccumulatorToward(
-    currentFacing,
-    desiredFacing,
-    getBotTurnStepUnits(elapsedMs),
-  );
-  const remainingAimDelta = getBotAimDeltaToTarget(currentBotX, currentBotY, playerX, playerY, nextFacing);
-  const canAdvanceOnHeading = Math.abs(remainingAimDelta) <= BOT_FORWARD_ALIGNMENT_LIMIT_UNITS;
-  const canReverseOnHeading = Math.abs(remainingAimDelta) <= BOT_TORSO_AIM_LIMIT_UNITS;
-  if (
-    (desiredMotion > 0 && !canAdvanceOnHeading)
-    || (desiredMotion < 0 && !canReverseOnHeading)
-  ) {
-    desiredMotion = 0;
-    speedScale = 0;
-    nextFacing = stepFacingAccumulatorToward(currentFacing, desiredFacing, getBotTurnStepUnits(elapsedMs));
-  }
-
-  let targetSpeedMag = 0;
-  let movementSpeedCap = 0;
-  let desiredRangeDelta = Number.POSITIVE_INFINITY;
-  if (maxSpeedMag > 0 && desiredMotion !== 0 && speedScale > 0) {
-    movementSpeedCap = desiredMotion < 0
-      ? Math.max(1, Math.abs(walkSpeedMag))
-      : Math.max(1, Math.abs(maxSpeedMag));
-    targetSpeedMag = Math.max(
-      COMBAT_WORLD_UNITS_PER_METER / 10,
-      Math.round(movementSpeedCap * speedScale),
-    ) * desiredMotion;
-    desiredRangeDelta = desiredMotion > 0
-      ? distanceUnits > preferredRangeUnits + rangeBufferUnits
-        ? Math.max(COMBAT_WORLD_UNITS_PER_METER, Math.round(distanceUnits - preferredRangeUnits))
-        : Number.POSITIVE_INFINITY
-      : distanceUnits < minimumRetreatUnits
-        ? Math.max(COMBAT_WORLD_UNITS_PER_METER, Math.round(preferredRangeUnits - distanceUnits))
-        : Number.POSITIVE_INFINITY;
-  }
-
-  nextSpeedMag = stepBotGroundedSpeedMagTowardTarget(
-    currentSpeedMag,
-    targetSpeedMag,
-    Math.max(Math.abs(targetSpeedMag), Math.abs(currentSpeedMag), movementSpeedCap),
-    elapsedMs,
-  );
-  const averageSpeedMag = (currentSpeedMag + nextSpeedMag) / 2;
-  if (nextFacing !== currentFacing || averageSpeedMag !== 0) {
-    const requestedStepUnits = Math.abs(Math.round(
-      signedSpeedMagToMetersPerSecond(averageSpeedMag)
-      * (elapsedMs / 1000)
-      * COMBAT_WORLD_UNITS_PER_METER,
-    ));
-    if (requestedStepUnits > 0) {
-      const stepUnits = Math.min(
-        requestedStepUnits,
-        desiredRangeDelta,
-      );
-      const forwardUnit = getBotForwardUnitVector(nextFacing);
-      const motionSign = averageSpeedMag < 0 ? -1 : 1;
-      moveVectorX = Math.round(forwardUnit.x * stepUnits * motionSign);
-      moveVectorY = Math.round(forwardUnit.y * stepUnits * motionSign);
-      nextBotX += moveVectorX;
-      nextBotY += moveVectorY;
+    let nextFacing = stepFacingAccumulatorToward(
+      currentFacing,
+      desiredFacing,
+      getBotTurnStepUnits(elapsedMs),
+    );
+    const remainingAimDelta = getBotAimDeltaToTarget(currentBotX, currentBotY, targetX, targetY, nextFacing);
+    const canAdvanceOnHeading = Math.abs(remainingAimDelta) <= BOT_FORWARD_ALIGNMENT_LIMIT_UNITS;
+    const canReverseOnHeading = Math.abs(remainingAimDelta) <= BOT_TORSO_AIM_LIMIT_UNITS;
+    if (
+      (desiredMotion > 0 && !canAdvanceOnHeading)
+      || (desiredMotion < 0 && !canReverseOnHeading)
+    ) {
+      desiredMotion = 0;
+      speedScale = 0;
+      nextFacing = stepFacingAccumulatorToward(currentFacing, desiredFacing, getBotTurnStepUnits(elapsedMs));
     }
+
+    let targetSpeedMag = 0;
+    let movementSpeedCap = 0;
+    let desiredRangeDelta = Number.POSITIVE_INFINITY;
+    if (maxSpeedMag > 0 && desiredMotion !== 0 && speedScale > 0) {
+      movementSpeedCap = desiredMotion < 0
+        ? Math.max(1, Math.abs(walkSpeedMag))
+        : Math.max(1, Math.abs(maxSpeedMag));
+      targetSpeedMag = Math.max(
+        COMBAT_WORLD_UNITS_PER_METER / 10,
+        Math.round(movementSpeedCap * speedScale),
+      ) * desiredMotion;
+      desiredRangeDelta = desiredMotion > 0
+        ? distanceUnits > preferredRangeUnits + rangeBufferUnits
+          ? Math.max(COMBAT_WORLD_UNITS_PER_METER, Math.round(distanceUnits - preferredRangeUnits))
+          : Number.POSITIVE_INFINITY
+        : distanceUnits < minimumRetreatUnits
+          ? Math.max(COMBAT_WORLD_UNITS_PER_METER, Math.round(preferredRangeUnits - distanceUnits))
+          : Number.POSITIVE_INFINITY;
+    }
+
+    nextSpeedMag = stepBotGroundedSpeedMagTowardTarget(
+      currentSpeedMag,
+      targetSpeedMag,
+      Math.max(Math.abs(targetSpeedMag), Math.abs(currentSpeedMag), movementSpeedCap),
+      elapsedMs,
+    );
+    const averageSpeedMag = (currentSpeedMag + nextSpeedMag) / 2;
+    if (nextFacing !== currentFacing || averageSpeedMag !== 0) {
+      const requestedStepUnits = Math.abs(Math.round(
+        signedSpeedMagToMetersPerSecond(averageSpeedMag)
+        * (elapsedMs / 1000)
+        * COMBAT_WORLD_UNITS_PER_METER,
+      ));
+      if (requestedStepUnits > 0) {
+        const stepUnits = Math.min(
+          requestedStepUnits,
+          desiredRangeDelta,
+        );
+        const forwardUnit = getBotForwardUnitVector(nextFacing);
+        const motionSign = averageSpeedMag < 0 ? -1 : 1;
+        moveVectorX = Math.round(forwardUnit.x * stepUnits * motionSign);
+        moveVectorY = Math.round(forwardUnit.y * stepUnits * motionSign);
+        nextBotX += moveVectorX;
+        nextBotY += moveVectorY;
+      }
+    }
+
+    bot.x = nextBotX;
+    bot.y = nextBotY;
+    setBotMoveVector(bot, moveVectorX, moveVectorY);
+    bot.z = 0;
+    bot.facing = nextFacing;
+    bot.speedMag = nextSpeedMag;
+    sendBotPositionSync(session, bot, capture, 'CMD65_BOT_AI_POSITION', target);
   }
 
-  session.combatBotX = nextBotX;
-  session.combatBotY = nextBotY;
-  setBotMoveVector(session, moveVectorX, moveVectorY);
-  session.combatBotZ = 0;
-  session.combatBotFacing = nextFacing;
-  session.combatBotSpeedMag = nextSpeedMag;
-  sendBotPositionSync(session, capture, 'CMD65_BOT_AI_POSITION');
+  syncLegacySoloCombatBotState(session);
 }
 
 function stepBotWeaponFire(
@@ -4979,21 +5484,17 @@ function stepBotWeaponFire(
   if (session.socket.destroyed || !session.socket.writable || session.phase !== 'combat') {
     return;
   }
-  if (session.combatResultCode !== undefined || (session.botHealth ?? 0) <= 0) {
+  if (session.combatResultCode !== undefined) {
     return;
   }
-
-  const botMechId = getBotMechId(session);
-  const botMechEntry = getMechEntryForId(botMechId);
-  if (!botMechEntry) {
+  const activeBots = getActiveSoloCombatBots(session);
+  if (activeBots.length === 0) {
+    syncLegacySoloCombatBotState(session);
     return;
   }
-
-  const playerArmorValues = [...(session.combatPlayerArmorValues ?? DEFAULT_BOT_ARMOR_VALUES)];
-  const playerInternalValues = [...(session.combatPlayerInternalValues ?? DEFAULT_BOT_INTERNAL_VALUES)];
-  const playerCriticalStateBytes = [...(session.combatPlayerCriticalStateBytes ?? createCriticalStateBytes(getMechEntryForSession(session)?.extraCritCount))];
-  let playerHeadArmor = session.combatPlayerHeadArmor ?? HEAD_ARMOR_VALUE;
-  if (isActorDestroyed(playerInternalValues)) {
+  const playerInternalValuesNow = session.combatPlayerInternalValues ?? DEFAULT_BOT_INTERNAL_VALUES;
+  if (isActorDestroyed(playerInternalValuesNow)) {
+    syncLegacySoloCombatBotState(session);
     queueCombatResultTransition(
       players,
       session,
@@ -5006,300 +5507,367 @@ function stepBotWeaponFire(
     return;
   }
 
-  const botX = session.combatBotX ?? 0;
-  const botY = session.combatBotY ?? BOT_AI_SPAWN_DISTANCE;
-  const botZ = session.combatBotZ ?? 0;
-  const targetX = session.combatX ?? 0;
-  const targetY = session.combatY ?? 0;
-  const targetZ = session.combatJumpAltitude ?? 0;
-  const botFacing = session.combatBotFacing
-    ?? getBotFacingAccumulatorTowardTarget(
-      botX,
-      botY,
-      targetX,
-      targetY,
-      FACING_ACCUMULATOR_NEUTRAL,
-    );
-  const rawYaw = getBotAimDeltaToTarget(botX, botY, targetX, targetY, botFacing);
-  const rawPitch = getBotPitchToTargetRaw(botX, botY, botZ, targetX, targetY, targetZ);
-  if (Math.abs(rawYaw) > BOT_TORSO_AIM_LIMIT_UNITS || Math.abs(rawPitch) > BOT_TORSO_AIM_LIMIT_UNITS) {
-    maybeLogBotAimLimit(session, connLog, botX, botY, botZ, targetX, targetY, targetZ, rawYaw, rawPitch);
-    return;
-  }
-  const distanceMeters = getCombatDisplayDistanceMeters(botX, botY, targetX, targetY);
-  const now = Date.now();
-  const currentHeat = session.combatBotHeat ?? 0;
-  const heatSinks = Math.max(1, botMechEntry.heatSinks ?? getBotHeatSinkCount(session));
-  const availableShots: BotVolleyCandidateShot[] = [];
+  const destroyedBotSlots = new Set<number>();
+  for (const bot of activeBots) {
+    const difficultyProfile = getConfiguredBotDifficultyProfile(session);
+    const botMechId = bot.mechId;
+    const botMechEntry = getMechEntryForId(botMechId);
+    if (!botMechEntry || bot.health <= 0) {
+      continue;
+    }
 
-  for (let weaponSlot = 0; weaponSlot < botMechEntry.weaponTypeIds.length; weaponSlot += 1) {
-    const mountGate = getWeaponMountGateForMech(botMechId, session.combatBotInternalValues, weaponSlot);
-    if (!mountGate.allowed) continue;
+    const target = getPreferredSoloCombatTarget(session, bot);
+    if (!target) {
+      continue;
+    }
 
-    const weaponName = getWeaponNameForMechSlot(botMechId, weaponSlot);
-    const weaponSpec = getWeaponSpecForMechSlot(botMechId, weaponSlot);
-    const cooldownGate = getWeaponCooldownGateForState(
-      session.combatBotWeaponReadyAtBySlot,
-      weaponSlot,
-      weaponName,
-      weaponSpec?.cooldownMs,
-      now,
-    );
-    if (!cooldownGate.allowed) continue;
+    const botX = bot.x;
+    const botY = bot.y;
+    const botZ = bot.z;
+    const targetX = target.x;
+    const targetY = target.y;
+    const targetZ = target.z;
+    const botFacing = bot.facing;
+    const rawYaw = getBotAimDeltaToTarget(botX, botY, targetX, targetY, botFacing);
+    const rawPitch = getBotPitchToTargetRaw(botX, botY, botZ, targetX, targetY, targetZ);
+    if (Math.abs(rawYaw) > BOT_TORSO_AIM_LIMIT_UNITS || Math.abs(rawPitch) > BOT_TORSO_AIM_LIMIT_UNITS) {
+      maybeLogBotAimLimit(bot, connLog, botX, botY, botZ, targetX, targetY, targetZ, rawYaw, rawPitch);
+      continue;
+    }
+    const distanceMeters = getCombatDisplayDistanceMeters(botX, botY, targetX, targetY);
+    const now = Date.now();
+    const currentHeat = bot.heat;
+    const heatSinks = Math.max(1, botMechEntry.heatSinks ?? getBotHeatSinkCount(bot));
+    const availableShots: BotVolleyCandidateShot[] = [];
 
-    const rangeGate = getShotMaxRangeGateForMechSlot(
-      botMechId,
-      weaponSlot,
-      botX,
-      botY,
-      targetX,
-      targetY,
-    );
-    if (!rangeGate.allowed) continue;
+    for (let weaponSlot = 0; weaponSlot < botMechEntry.weaponTypeIds.length; weaponSlot += 1) {
+      const mountGate = getWeaponMountGateForMech(botMechId, bot.internalValues, weaponSlot);
+      if (!mountGate.allowed) continue;
 
-    const ammoGate = peekBotWeaponAmmo(session, weaponSlot);
-    if (!ammoGate.allowed) continue;
+      const weaponName = getWeaponNameForMechSlot(botMechId, weaponSlot);
+      const weaponSpec = getWeaponSpecForMechSlot(botMechId, weaponSlot);
+      const cooldownGate = getWeaponCooldownGateForState(
+        bot.weaponReadyAtBySlot,
+        weaponSlot,
+        weaponName,
+        weaponSpec?.cooldownMs,
+        now,
+      );
+      if (!cooldownGate.allowed) continue;
 
-    const toHitEstimate = estimateCombatToHit({
-      attackerX: botX,
-      attackerY: botY,
-      attackerFacing: botFacing,
-      attackerSpeedMag: session.combatBotSpeedMag,
-      attackerMaxSpeedMag: botMechEntry.maxSpeedMag,
-      attackerAirborne: session.combatBotJumpActive === true,
-      targetX,
-      targetY,
-      targetFacing: getCombatCmd65Facing(session),
-      targetSpeedMag: session.combatSpeedMag,
-      targetMaxSpeedMag: session.combatMaxSpeedMag,
-      targetAirborne: (session.combatJumpAltitude ?? 0) > 0,
-      targetMoveVectorX: session.combatMoveVectorX,
-      targetMoveVectorY: session.combatMoveVectorY,
-      distanceMeters,
-      weaponSpec,
-      maxRangeMeters: rangeGate.maxRangeMeters,
-    });
-    const damage = weaponSpec?.damage ?? BOT_FALLBACK_WEAPON_DAMAGE;
-    const heat = weaponSpec?.heat ?? 0;
-    const expectedDamage = damage * toHitEstimate.chance;
-
-    availableShots.push({
-      weaponSlot,
-      damage,
-      heat,
-      weaponName,
-      weaponSpec,
-      cooldownMs: cooldownGate.cooldownMs,
-      maxRangeMeters: rangeGate.maxRangeMeters,
-      rangeBand: toHitEstimate.rangeBand,
-      efficiency: damage / Math.max(1, heat),
-      hitChance: toHitEstimate.chance,
-      expectedDamage,
-      expectedEfficiency: expectedDamage / Math.max(1, heat),
-    });
-  }
-
-  if (availableShots.length === 0) {
-    return;
-  }
-
-  const presets = buildBotTicPresets(availableShots, currentHeat, heatSinks);
-  const selectedPreset = chooseBotTicPreset(
-    presets,
-    distanceMeters,
-    session.playerHealth ?? BOT_INITIAL_HEALTH,
-    currentHeat,
-    heatSinks,
-  );
-  if (!selectedPreset || selectedPreset.shots.length === 0) {
-    return;
-  }
-
-  const volley: BotVolleyCandidateShot[] = [];
-  let firedHeat = 0;
-  for (const shot of selectedPreset.shots) {
-    const rangeGate = getShotMaxRangeGateForMechSlot(
-      botMechId,
-      shot.weaponSlot,
-      botX,
-      botY,
-      targetX,
-      targetY,
-    );
-    if (!rangeGate.allowed) continue;
-    const ammoGate = consumeBotWeaponAmmo(session, shot.weaponSlot);
-    if (!ammoGate.allowed) continue;
-    markBotWeaponSlotFired(session, shot.weaponSlot, shot.cooldownMs, now);
-    volley.push({
-      ...shot,
-      maxRangeMeters: rangeGate.maxRangeMeters ?? shot.maxRangeMeters,
-    });
-    firedHeat += shot.heat;
-  }
-
-  if (volley.length === 0) {
-    return;
-  }
-  session.combatBotHeat = currentHeat + firedHeat;
-
-  send(session.socket, buildCmd71ResetEffectStatePacket(nextSeq(session)), capture, 'CMD71_BOT_RESET');
-  const shotSummaries: string[] = [];
-  let totalDamageUpdates = 0;
-
-  for (const shot of volley) {
-    const hitRoll = resolveCombatToHitRoll({
-      attackerX: botX,
-      attackerY: botY,
-      attackerFacing: botFacing,
-      attackerSpeedMag: session.combatBotSpeedMag,
-      attackerMaxSpeedMag: botMechEntry.maxSpeedMag,
-      attackerAirborne: session.combatBotJumpActive === true,
-      targetX,
-      targetY,
-      targetFacing: getCombatCmd65Facing(session),
-      targetSpeedMag: session.combatSpeedMag,
-      targetMaxSpeedMag: session.combatMaxSpeedMag,
-      targetAirborne: (session.combatJumpAltitude ?? 0) > 0,
-      targetMoveVectorX: session.combatMoveVectorX,
-      targetMoveVectorY: session.combatMoveVectorY,
-      distanceMeters,
-      weaponSpec: shot.weaponSpec,
-      maxRangeMeters: shot.maxRangeMeters,
-    });
-    if (!hitRoll.hit) {
-      const missImpact = getMissImpactPoint(
+      const rangeGate = getShotMaxRangeGateForMechSlot(
+        botMechId,
+        weaponSlot,
         botX,
         botY,
         targetX,
         targetY,
-        session.combatJumpAltitude ?? 0,
-        distanceMeters,
       );
+      if (!rangeGate.allowed) continue;
+
+      const ammoGate = peekBotWeaponAmmo(bot, weaponSlot);
+      if (!ammoGate.allowed) continue;
+
+      const toHitEstimate = estimateCombatToHit({
+        attackerX: botX,
+        attackerY: botY,
+        attackerFacing: botFacing,
+        attackerSpeedMag: bot.speedMag,
+        attackerMaxSpeedMag: botMechEntry.maxSpeedMag,
+        attackerAirborne: bot.jumpActive === true,
+        targetX,
+        targetY,
+        targetFacing: target.facing,
+        targetSpeedMag: target.speedMag,
+        targetMaxSpeedMag: target.maxSpeedMag,
+        targetAirborne: target.airborne,
+        targetMoveVectorX: target.moveVectorX,
+        targetMoveVectorY: target.moveVectorY,
+        distanceMeters,
+        weaponSpec,
+        maxRangeMeters: rangeGate.maxRangeMeters,
+      }, difficultyProfile);
+      const damage = weaponSpec?.damage ?? BOT_FALLBACK_WEAPON_DAMAGE;
+      const heat = weaponSpec?.heat ?? 0;
+      const expectedDamage = damage * toHitEstimate.chance;
+
+      availableShots.push({
+        weaponSlot,
+        damage,
+        heat,
+        weaponName,
+        weaponSpec,
+        cooldownMs: cooldownGate.cooldownMs,
+        maxRangeMeters: rangeGate.maxRangeMeters,
+        rangeBand: toHitEstimate.rangeBand,
+        efficiency: damage / Math.max(1, heat),
+        hitChance: toHitEstimate.chance,
+        expectedDamage,
+        expectedEfficiency: expectedDamage / Math.max(1, heat),
+      });
+    }
+
+    if (availableShots.length === 0) {
+      continue;
+    }
+
+    const presets = buildBotTicPresets(availableShots, currentHeat, heatSinks);
+    const selectedPreset = chooseBotTicPreset(
+      presets,
+      distanceMeters,
+      target.health,
+      currentHeat,
+      heatSinks,
+      difficultyProfile,
+    );
+    if (!selectedPreset || selectedPreset.shots.length === 0) {
+      continue;
+    }
+
+    const volley: BotVolleyCandidateShot[] = [];
+    let firedHeat = 0;
+    for (const shot of selectedPreset.shots) {
+      const rangeGate = getShotMaxRangeGateForMechSlot(
+        botMechId,
+        shot.weaponSlot,
+        botX,
+        botY,
+        targetX,
+        targetY,
+      );
+      if (!rangeGate.allowed) continue;
+      const ammoGate = consumeBotWeaponAmmo(bot, shot.weaponSlot);
+      if (!ammoGate.allowed) continue;
+      markBotWeaponSlotFired(bot, shot.weaponSlot, shot.cooldownMs, now);
+      volley.push({
+        ...shot,
+        maxRangeMeters: rangeGate.maxRangeMeters ?? shot.maxRangeMeters,
+      });
+      firedHeat += shot.heat;
+    }
+
+    if (volley.length === 0) {
+      continue;
+    }
+    bot.heat = currentHeat + firedHeat;
+
+    let targetArmorValues = target.kind === 'player'
+      ? [...(session.combatPlayerArmorValues ?? DEFAULT_BOT_ARMOR_VALUES)]
+      : target.bot?.armorValues ?? [...DEFAULT_BOT_ARMOR_VALUES];
+    let targetInternalValues = target.kind === 'player'
+      ? [...(session.combatPlayerInternalValues ?? DEFAULT_BOT_INTERNAL_VALUES)]
+      : target.bot?.internalValues ?? [...DEFAULT_BOT_INTERNAL_VALUES];
+    let targetCriticalStateBytes = target.kind === 'player'
+      ? [...(session.combatPlayerCriticalStateBytes ?? createCriticalStateBytes(getMechEntryForSession(session)?.extraCritCount))]
+      : target.bot?.criticalStateBytes ?? createCriticalStateBytes(getMechEntryForId(target.mechId)?.extraCritCount);
+    let targetHeadArmor = target.kind === 'player'
+      ? (session.combatPlayerHeadArmor ?? HEAD_ARMOR_VALUE)
+      : (target.bot?.headArmor ?? HEAD_ARMOR_VALUE);
+    let currentTargetHealth = target.health;
+
+    send(session.socket, buildCmd71ResetEffectStatePacket(nextSeq(session)), capture, 'CMD71_BOT_RESET');
+    const shotSummaries: string[] = [];
+    let totalDamageUpdates = 0;
+
+    for (const shot of volley) {
+      const hitRoll = resolveCombatToHitRoll({
+        attackerX: botX,
+        attackerY: botY,
+        attackerFacing: botFacing,
+        attackerSpeedMag: bot.speedMag,
+        attackerMaxSpeedMag: botMechEntry.maxSpeedMag,
+        attackerAirborne: bot.jumpActive === true,
+        targetX,
+        targetY,
+        targetFacing: target.facing,
+        targetSpeedMag: target.speedMag,
+        targetMaxSpeedMag: target.maxSpeedMag,
+        targetAirborne: target.airborne,
+        targetMoveVectorX: target.moveVectorX,
+        targetMoveVectorY: target.moveVectorY,
+        distanceMeters,
+        weaponSpec: shot.weaponSpec,
+        maxRangeMeters: shot.maxRangeMeters,
+      }, difficultyProfile);
+      if (!hitRoll.hit) {
+        const missImpact = getMissImpactPoint(
+          botX,
+          botY,
+          targetX,
+          targetY,
+          targetZ,
+          distanceMeters,
+        );
+        send(
+          session.socket,
+          buildCmd68ProjectileSpawnPacket(
+            {
+              sourceSlot: bot.slot,
+              weaponSlot: shot.weaponSlot,
+              targetRaw: 0,
+              targetAttach: 0,
+              angleSeedA: 0,
+              angleSeedB: 0,
+              impactX: missImpact.impactX,
+              impactY: missImpact.impactY,
+              impactZ: missImpact.impactZ,
+            },
+            nextSeq(session),
+          ),
+          capture,
+          'CMD68_BOT_PROJECTILE_MISS',
+        );
+        shotSummaries.push(
+          `${shot.weaponSlot}:${shot.weaponName ?? 'unknown'}:miss:target=${target.kind === 'player' ? 'player' : `slot=${target.slot}`}:chance=${Math.round(hitRoll.chance * 100)}:roll=${Math.round(hitRoll.roll * 100)}:band=${hitRoll.rangeBand}:cross=${Math.round(hitRoll.crossingFactor * 100)}:impact=${missImpact.impactX}/${missImpact.impactY}/${missImpact.impactZ}`,
+        );
+        continue;
+      }
+
+      const hitSection = chooseBotAttackSection(
+        bot,
+        shot.weaponSlot,
+        targetArmorValues,
+        targetInternalValues,
+        targetHeadArmor,
+        distanceMeters,
+        currentTargetHealth,
+      );
+      const targetAttach = findRepresentativeCombatAttachmentIdForSection(target.mechId, hitSection);
+      const previousInternalValues = [...targetInternalValues];
       send(
         session.socket,
         buildCmd68ProjectileSpawnPacket(
           {
-            sourceSlot: 1,
+            sourceSlot: bot.slot,
             weaponSlot: shot.weaponSlot,
-            targetRaw: 0,
-            targetAttach: 0,
+            targetRaw: target.kind === 'player' ? 10 : target.slot + 1,
+            targetAttach: targetAttach === undefined ? 0 : targetAttach + 1,
             angleSeedA: 0,
             angleSeedB: 0,
-            impactX: missImpact.impactX,
-            impactY: missImpact.impactY,
-            impactZ: missImpact.impactZ,
+            impactX: targetX,
+            impactY: targetY,
+            impactZ: targetZ,
           },
           nextSeq(session),
         ),
         capture,
-        'CMD68_BOT_PROJECTILE_MISS',
+        'CMD68_BOT_PROJECTILE',
       );
+      const damageResult = applyDamageToSection(
+        targetArmorValues,
+        targetInternalValues,
+        hitSection,
+        shot.damage,
+        targetHeadArmor,
+      );
+      const postDamageUpdates = collectPostDamageStateUpdates(
+        target.mechId,
+        targetCriticalStateBytes,
+        previousInternalValues,
+        targetInternalValues,
+        hitSection.internalIndex === 7 && damageResult.updates.some(update => update.damageCode === 0x27),
+      );
+      targetHeadArmor = damageResult.headArmor;
+      const allUpdates = [...damageResult.updates, ...postDamageUpdates.updates];
+      for (const update of allUpdates) {
+        send(
+          session.socket,
+          target.kind === 'player'
+            ? buildCmd67LocalDamagePacket(update.damageCode, update.damageValue, nextSeq(session))
+            : buildCmd66ActorDamagePacket(target.slot, update.damageCode, update.damageValue, nextSeq(session)),
+          capture,
+          target.kind === 'player' ? 'CMD67_BOT_LOCAL_DAMAGE' : 'CMD66_BOT_REMOTE_DAMAGE',
+        );
+      }
+      if (postDamageUpdates.newlyDestroyedLegs.length > 0 && !isActorDestroyed(targetInternalValues)) {
+        sendCombatLegLossCollapse(
+          session,
+          target.kind === 'player' ? 0 : target.slot,
+          connLog,
+          `${postDamageUpdates.newlyDestroyedLegs.map(leg => leg.label).join('+')} destroyed`,
+          target.kind === 'player' ? 'CMD70_BOT_PLAYER_LEG_COLLAPSE' : 'CMD70_BOT_REMOTE_LEG_COLLAPSE',
+          capture,
+          session.combatLegLossTransitionMode ?? 'collapse-only',
+        );
+      }
+
+      currentTargetHealth = getCombatDurability(targetArmorValues, targetInternalValues) + targetHeadArmor;
+      totalDamageUpdates += allUpdates.length;
       shotSummaries.push(
-        `${shot.weaponSlot}:${shot.weaponName ?? 'unknown'}:miss:chance=${Math.round(hitRoll.chance * 100)}:roll=${Math.round(hitRoll.roll * 100)}:band=${hitRoll.rangeBand}:cross=${Math.round(hitRoll.crossingFactor * 100)}:impact=${missImpact.impactX}/${missImpact.impactY}/${missImpact.impactZ}`,
+        `${shot.weaponSlot}:${shot.weaponName ?? 'unknown'}:${shot.damage}:${hitSection.label}:slot=${bot.slot}:target=${target.kind === 'player' ? 'player' : target.slot}:attach=${targetAttach ?? 'n/a'}:chance=${Math.round(hitRoll.chance * 100)}:roll=${Math.round(hitRoll.roll * 100)}:band=${hitRoll.rangeBand}:cross=${Math.round(hitRoll.crossingFactor * 100)}:health=${currentTargetHealth}:updates=${allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join('/') || 'none'}`,
       );
-      continue;
     }
 
-    const hitSection = chooseBotAttackSection(
-      session,
-      shot.weaponSlot,
-      playerArmorValues,
-      playerInternalValues,
-      playerHeadArmor,
-      distanceMeters,
-    );
-    const targetAttach = findRepresentativeCombatAttachmentIdForSection(session.selectedMechId, hitSection);
-    const previousInternalValues = [...playerInternalValues];
-    send(
-      session.socket,
-      buildCmd68ProjectileSpawnPacket(
-        {
-          sourceSlot: 1,
-          weaponSlot: shot.weaponSlot,
-          targetRaw: 10,
-          targetAttach: targetAttach === undefined ? 0 : targetAttach + 1,
-          angleSeedA: 0,
-          angleSeedB: 0,
-          impactX: targetX,
-          impactY: targetY,
-          impactZ: session.combatJumpAltitude ?? 0,
-        },
-        nextSeq(session),
-      ),
-      capture,
-      'CMD68_BOT_PROJECTILE',
-    );
-    const damageResult = applyDamageToSection(
-      playerArmorValues,
-      playerInternalValues,
-      hitSection,
-      shot.damage,
-      playerHeadArmor,
-    );
-    const postDamageUpdates = collectPostDamageStateUpdates(
-      session.selectedMechId,
-      playerCriticalStateBytes,
-      previousInternalValues,
-      playerInternalValues,
-      hitSection.internalIndex === 7 && damageResult.updates.some(update => update.damageCode === 0x27),
-    );
-    playerHeadArmor = damageResult.headArmor;
-    const allUpdates = [...damageResult.updates, ...postDamageUpdates.updates];
-    for (const update of allUpdates) {
-      send(
-        session.socket,
-        buildCmd67LocalDamagePacket(update.damageCode, update.damageValue, nextSeq(session)),
-        capture,
-        'CMD67_BOT_LOCAL_DAMAGE',
-      );
+    if (target.kind === 'player') {
+      session.combatPlayerArmorValues = targetArmorValues;
+      session.combatPlayerInternalValues = targetInternalValues;
+      session.combatPlayerCriticalStateBytes = targetCriticalStateBytes;
+      session.combatPlayerHeadArmor = targetHeadArmor;
+      session.playerHealth = currentTargetHealth;
+    } else if (target.bot) {
+      target.bot.armorValues = targetArmorValues;
+      target.bot.internalValues = targetInternalValues;
+      target.bot.criticalStateBytes = targetCriticalStateBytes;
+      target.bot.headArmor = targetHeadArmor;
+      target.bot.health = currentTargetHealth;
+      if (isActorDestroyed(targetInternalValues)) {
+        target.bot.health = 0;
+        destroyedBotSlots.add(target.bot.slot);
+      }
     }
-    if (postDamageUpdates.newlyDestroyedLegs.length > 0 && !isActorDestroyed(playerInternalValues)) {
-      sendCombatLegLossCollapse(
+
+    send(session.socket, buildCmd71ResetEffectStatePacket(nextSeq(session)), capture, 'CMD71_BOT_CLOSE');
+    connLog.info(
+      '[world/combat] bot volley: slot=%d side=%d mechId=%d target=%s tic=%s distance=%dm weapons=%s heat=%s expected=%.1f targetHealth=%d updates=%d shots=[%s]',
+      bot.slot,
+      bot.side,
+      botMechId,
+      target.kind === 'player' ? 'player' : `slot=${target.slot}/side=${target.side}`,
+      selectedPreset.name,
+      Math.round(distanceMeters),
+      volley.map(shot => shot.weaponSlot).join('/'),
+      `${Math.round(currentHeat * 10) / 10}->${Math.round(bot.heat * 10) / 10} risk=${Math.round(selectedPreset.overheatRisk * 100)}`,
+      selectedPreset.totalExpectedDamage,
+      currentTargetHealth,
+      totalDamageUpdates,
+      shotSummaries.join(','),
+    );
+
+    if (target.kind === 'player' && isActorDestroyed(targetInternalValues)) {
+      session.playerHealth = 0;
+      syncLegacySoloCombatBotState(session);
+      queueCombatResultTransition(
+        players,
         session,
-        0,
         connLog,
-        `${postDamageUpdates.newlyDestroyedLegs.map(leg => leg.label).join('+')} destroyed`,
-        'CMD70_BOT_PLAYER_LEG_COLLAPSE',
         capture,
-        session.combatLegLossTransitionMode ?? 'collapse-only',
+        COMBAT_RESULT_LOSS,
+        (targetInternalValues[7] ?? 0) <= 0 ? 'head destroyed' : 'center torso destroyed',
+        PLAYER_RESULT_DELAY_MS,
       );
+      return;
     }
-
-    totalDamageUpdates += allUpdates.length;
-    shotSummaries.push(
-      `${shot.weaponSlot}:${shot.weaponName ?? 'unknown'}:${shot.damage}:${hitSection.label}:attach=${targetAttach ?? 'n/a'}:chance=${Math.round(hitRoll.chance * 100)}:roll=${Math.round(hitRoll.roll * 100)}:band=${hitRoll.rangeBand}:cross=${Math.round(hitRoll.crossingFactor * 100)}:health=${getCombatDurability(playerArmorValues, playerInternalValues) + playerHeadArmor}:updates=${allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join('/') || 'none'}`,
-    );
   }
 
-  session.combatPlayerArmorValues = playerArmorValues;
-  session.combatPlayerInternalValues = playerInternalValues;
-  session.combatPlayerCriticalStateBytes = playerCriticalStateBytes;
-  session.combatPlayerHeadArmor = playerHeadArmor;
-  session.playerHealth = getCombatDurability(playerArmorValues, playerInternalValues) + playerHeadArmor;
-  send(session.socket, buildCmd71ResetEffectStatePacket(nextSeq(session)), capture, 'CMD71_BOT_CLOSE');
-  connLog.info(
-    '[world/combat] bot volley: mechId=%d tic=%s distance=%dm weapons=%s heat=%s expected=%.1f playerHealth=%d updates=%d shots=[%s]',
-    botMechId,
-    selectedPreset.name,
-    Math.round(distanceMeters),
-    volley.map(shot => shot.weaponSlot).join('/'),
-    `${Math.round(currentHeat * 10) / 10}->${Math.round((session.combatBotHeat ?? 0) * 10) / 10} risk=${Math.round(selectedPreset.overheatRisk * 100)}`,
-    selectedPreset.totalExpectedDamage,
-    session.playerHealth,
-    totalDamageUpdates,
-    shotSummaries.join(','),
-  );
-
-  if (isActorDestroyed(playerInternalValues)) {
-    session.playerHealth = 0;
+  syncLegacySoloCombatBotState(session);
+  for (const slot of destroyedBotSlots) {
+    const bot = getSoloCombatBotBySlot(session, slot);
+    if (!bot) {
+      continue;
+    }
+    sendBotDeathTransition(session, bot, connLog, capture, 'destroyed by bot fire');
+  }
+  if (getActiveHostileSoloCombatBots(session).length === 0) {
+    session.botHealth = 0;
+    stopBotCombatActions(session);
     queueCombatResultTransition(
       players,
       session,
       connLog,
       capture,
-      COMBAT_RESULT_LOSS,
-      (playerInternalValues[7] ?? 0) <= 0 ? 'head destroyed' : 'center torso destroyed',
-      PLAYER_RESULT_DELAY_MS,
+      COMBAT_RESULT_VICTORY,
+      'all hostile solo-combat bots structurally destroyed',
+      BOT_RESULT_DELAY_MS,
     );
   }
 }
@@ -5349,37 +5917,38 @@ function stopBotCombatActions(session: ClientSession): void {
 
 function sendBotDeathTransition(
   session: ClientSession,
+  bot: SoloCombatBotActorState,
   connLog: Logger,
   capture: CaptureLogger,
   reason: string,
 ): void {
-  if (session.botDeathTimer !== undefined) {
-    clearTimeout(session.botDeathTimer);
-    session.botDeathTimer = undefined;
+  if (bot.deathTimer !== undefined) {
+    clearTimeout(bot.deathTimer);
+    bot.deathTimer = undefined;
   }
 
   // Retail v1.23 death flow uses Cmd70 subcommand 8 to start the collapse and
   // then subcommand 0 to advance the actor through the destruction tail.
-  connLog.info('[world/combat] bot destroyed — sending collapse transition (%s)', reason);
+  connLog.info('[world/combat] bot destroyed — slot=%d mechId=%d sending collapse transition (%s)', bot.slot, bot.mechId, reason);
   send(
     session.socket,
-    buildCmd70ActorTransitionPacket(1, 8, nextSeq(session)),
+    buildCmd70ActorTransitionPacket(bot.slot, 8, nextSeq(session)),
     capture,
     'CMD70_BOT_COLLAPSE',
   );
 
-  session.botDeathTimer = setTimeout(() => {
-    session.botDeathTimer = undefined;
+  bot.deathTimer = setTimeout(() => {
+    bot.deathTimer = undefined;
     if (session.socket.destroyed || !session.socket.writable || session.phase !== 'combat') return;
-    connLog.info('[world/combat] bot death-tail advance after collapse (%s)', reason);
+    connLog.info('[world/combat] bot death-tail advance: slot=%d mechId=%d (%s)', bot.slot, bot.mechId, reason);
     send(
       session.socket,
-      buildCmd70ActorTransitionPacket(1, 0, nextSeq(session)),
+      buildCmd70ActorTransitionPacket(bot.slot, 0, nextSeq(session)),
       capture,
       'CMD70_BOT_DEATH_ADVANCE',
     );
   }, 1200);
-  session.botDeathTimer.unref();
+  bot.deathTimer.unref();
 }
 
 function queueCombatResultTransition(
@@ -5467,6 +6036,7 @@ function queueCombatResultTransition(
  */
 export function stopCombatTimers(session: ClientSession): void {
   stopBotCombatActions(session);
+  clearSoloCombatBotDeathTimers(session);
   if (session.botDeathTimer !== undefined) {
     clearTimeout(session.botDeathTimer);
     session.botDeathTimer = undefined;
@@ -5516,6 +6086,7 @@ export function resetCombatState(session: ClientSession): void {
   stopCombatTimers(session);
   session.combatInitialized = false;
   session.phase = 'world';
+  session.combatBotActors = undefined;
   session.botHealth = undefined;
   session.playerHealth = undefined;
   session.combatX = undefined;
@@ -6788,13 +7359,16 @@ function startArenaCombatSession(
         const remoteMechEntry = WORLD_MECH_BY_ID.get(remoteMechId);
         const remoteSlot = remoteIndex + 1;
         const remoteCallsign = getDisplayName(remote);
+        const remoteIsTeammate =
+          participant.worldArenaSide !== undefined
+          && participant.worldArenaSide === remote.worldArenaSide;
 
         sendToWorldSession(
           participant,
           buildCmd64RemoteActorPacket(
             {
               slot:          remoteSlot,
-              actorTypeByte: 0,
+              actorTypeByte: getCombatRemoteActorTypeByte(remoteIsTeammate),
               identity0:     remoteCallsign.substring(0, 11),
               identity1:     remoteCallsign.substring(0, 31),
               identity2:     remoteMechEntry?.typeString ?? '',
@@ -8195,6 +8769,19 @@ export function sendCombatBootstrapSequence(
   session.combatLastJumpLandAt = undefined;
   session.combatLastJumpLandAltitude = undefined;
   session.botHealth    = BOT_INITIAL_HEALTH;
+  const verificationMode = session.combatVerificationMode;
+  if (!hasConfiguredSoloCombatHostileBots(session, verificationMode)) {
+    send(
+      socket,
+      buildCmd3BroadcastPacket(
+        'Solo bot combat needs at least one bot on an enemy side. Use /botside <slot> <player|enemy|1-8> first.',
+        nextSeq(session),
+      ),
+      capture,
+      'CMD3_BOTSIDE_HOSTILE_REQUIRED',
+    );
+    return;
+  }
 
   notifyRoomDeparture(players, session, connLog);
 
@@ -8213,6 +8800,13 @@ export function sendCombatBootstrapSequence(
   session.combatBootstrapTimer = setTimeout(() => {
     session.combatBootstrapTimer = undefined;
     if (session.socket.destroyed || !session.socket.writable || session.phase !== 'combat') return;
+
+    const botCount = getConfiguredSoloCombatBotCount(session, verificationMode);
+    const playerSide = getConfiguredSoloCombatPlayerSide(session);
+    const botSides = Array.from({ length: botCount }, (_, index) => getConfiguredBotSide(session, index, verificationMode));
+    const soloSpawnLayout = getSoloCombatSpawnLayout(botSides, playerSide);
+    session.combatX = soloSpawnLayout.playerSpawn.x;
+    session.combatY = soloSpawnLayout.playerSpawn.y;
 
     // 2. Cmd72 — local bootstrap (combat CRC seed applied by buildGamePacket).
     const cmd72 = buildCmd72LocalBootstrapPacket(
@@ -8234,10 +8828,10 @@ export function sendCombatBootstrapSequence(
         identity3:          session.allegiance   ?? '',
         identity4:          '',
         statusByte:         0,
-        initialX:           0,
-        initialY:           0,
+        initialX:           session.combatX ?? 0,
+        initialY:           session.combatY ?? 0,
         extraType2Values:   [],
-        remainingActorCount: 1,
+        remainingActorCount: botCount,
         unknownType1Raw:    MOTION_NEUTRAL,
         mech: {
           mechId,
@@ -8262,49 +8856,20 @@ export function sendCombatBootstrapSequence(
     send(socket, cmd72, capture, 'CMD72_COMBAT_BOOTSTRAP');
     session.combatStartAt = Date.now();
 
-    // 3. Cmd64 — add remote bot actor at slot 1.
-    const botMechId   = session.combatBotMechId ?? mechId;
-    const botMechEntry = WORLD_MECH_BY_ID.get(botMechId);
-    const botCriticalStateBytes = createCriticalStateBytes(botMechEntry?.extraCritCount);
-    session.combatBotArmorValues = [...(botMechEntry?.armorLikeMaxValues ?? DEFAULT_BOT_ARMOR_VALUES)];
-    session.combatBotInternalValues = botMechEntry !== undefined
-      ? mechInternalStateBytes(botMechEntry.tonnage)
-      : [...DEFAULT_BOT_INTERNAL_VALUES];
-    session.combatBotCriticalStateBytes = botCriticalStateBytes;
-    session.combatBotHeadArmor = HEAD_ARMOR_VALUE;
-    session.combatBotX = 0;
-    session.combatBotY = BOT_AI_SPAWN_DISTANCE;
-    session.combatBotZ = 0;
-    session.combatBotFacing = getBotFacingAccumulatorTowardTarget(
-      session.combatBotX,
-      session.combatBotY,
-      session.combatX ?? 0,
-      session.combatY ?? 0,
-      FACING_ACCUMULATOR_NEUTRAL,
-    );
-    session.combatBotSpeedMag = 0;
-    session.combatBotLastMoveAt = undefined;
-    session.combatBotLastAimLimitLogAt = undefined;
-    session.combatBotMoveVectorX = 0;
-    session.combatBotMoveVectorY = 0;
-    session.combatBotWeaponReadyAtBySlot = [];
-    session.combatBotAmmoStateValues = getInitialCombatAmmoStateValues(botMechEntry?.ammoBinTypeIds);
-    session.combatBotHeat = 0;
-    session.combatBotJumpActive = false;
-    session.combatBotJumpFuel = JUMP_JET_FUEL_MAX;
-    session.combatBotJumpStartedAt = undefined;
-    session.combatBotJumpDurationMs = undefined;
-    session.combatBotJumpStartFuel = undefined;
-    session.combatBotJumpApexUnits = undefined;
-    session.combatBotJumpStartX = undefined;
-    session.combatBotJumpStartY = undefined;
-    session.combatBotJumpTargetX = undefined;
-    session.combatBotJumpTargetY = undefined;
-    session.combatBotLastJumpAt = undefined;
-    session.botHealth = getCombatDurability(
-      session.combatBotArmorValues,
-      session.combatBotInternalValues,
-    ) + (session.combatBotHeadArmor ?? 0);
+    const botSpawnPoints = soloSpawnLayout.botSpawnPoints;
+    const botActors = Array.from({ length: botCount }, (_, index) => {
+      const spawn = botSpawnPoints[index] ?? { x: 0, y: BOT_AI_SPAWN_DISTANCE };
+      return createSoloCombatBotActor(
+        session,
+        index + 1,
+        getConfiguredBotLoadoutId(session, index),
+        botSides[index] ?? getConfiguredSoloCombatDefaultEnemySide(session),
+        spawn.x,
+        spawn.y,
+      );
+    });
+    session.combatBotActors = botActors;
+    syncLegacySoloCombatBotState(session);
     session.combatPlayerArmorValues = [...(mechEntry?.armorLikeMaxValues ?? DEFAULT_BOT_ARMOR_VALUES)];
     session.combatPlayerInternalValues = mechEntry !== undefined
       ? mechInternalStateBytes(mechEntry.tonnage)
@@ -8316,30 +8881,46 @@ export function sendCombatBootstrapSequence(
       session.combatPlayerInternalValues,
     ) + (session.combatPlayerHeadArmor ?? 0);
     session.combatRetaliationCursor = 0;
-    const cmd64 = buildCmd64RemoteActorPacket(
-      {
-        slot:          1,
-        actorTypeByte: 0,
-        identity0:     'Opponent',
-        identity1:     'Opponent',
-        identity2:     botMechEntry?.typeString ?? '',
-        identity3:     '',
-        identity4:     '',
-        statusByte:    0,
-        mechId:        botMechId,
-      },
-      nextSeq(session),
-    );
-    send(socket, cmd64, capture, 'CMD64_BOT_ACTOR');
-    connLog.info('[world] bot actor: mech_id=%d type=%s', botMechId, botMechEntry?.typeString ?? '?');
+    for (const bot of botActors) {
+      const botMechEntry = WORLD_MECH_BY_ID.get(bot.mechId);
+      const botLabel = getSoloCombatBotSlotLabel(bot.slot, bot.side, playerSide);
+      const botIsTeammate = bot.side === playerSide;
+      const cmd64 = buildCmd64RemoteActorPacket(
+        {
+          slot:          bot.slot,
+          actorTypeByte: getCombatRemoteActorTypeByte(botIsTeammate),
+          identity0:     botLabel.substring(0, 11),
+          identity1:     botLabel.substring(0, 31),
+          identity2:     botMechEntry?.typeString ?? '',
+          identity3:     '',
+          identity4:     '',
+          statusByte:    0,
+          mechId:        bot.mechId,
+        },
+        nextSeq(session),
+      );
+      send(socket, cmd64, capture, 'CMD64_BOT_ACTOR');
+      connLog.info('[world] bot actor: slot=%d side=%d mech_id=%d type=%s x=%d y=%d', bot.slot, bot.side, bot.mechId, botMechEntry?.typeString ?? '?', bot.x, bot.y);
+    }
 
     const cmd65 = buildCmd65PositionSyncPacket(
-      { slot: 0, x: 0, y: 0, z: 0, facing: 0, throttle: 0, legVel: 0, speedMag: 0 },
+      {
+        slot: 0,
+        x: session.combatX ?? 0,
+        y: session.combatY ?? 0,
+        z: session.combatJumpAltitude ?? 0,
+        facing: getCombatCmd65Facing(session),
+        throttle: session.combatUpperBodyPitch ?? 0,
+        legVel: session.combatTorsoYaw ?? 0,
+        speedMag: session.combatSpeedMag ?? 0,
+      },
       nextSeq(session),
     );
     send(socket, cmd65, capture, 'CMD65_INITIAL_POSITION');
 
-    sendBotPositionSync(session, capture, 'CMD65_BOT_POSITION');
+    for (const bot of botActors) {
+      sendBotPositionSync(session, bot, capture, 'CMD65_BOT_POSITION');
+    }
 
     const cmd62 = buildCmd62CombatStartPacket(nextSeq(session));
     send(socket, cmd62, capture, 'CMD62_COMBAT_START');
@@ -8355,7 +8936,6 @@ export function sendCombatBootstrapSequence(
     }, JUMP_JET_FUEL_REGEN_INTERVAL_MS);
     session.combatJumpFuelRegenTimer.unref();
 
-    const verificationMode = session.combatVerificationMode;
     if (verificationMode === 'headtest') {
       // Keep scripted retaliation only for the explicit headtest verifier.
       startForcedRetaliationVerification(
@@ -8414,7 +8994,11 @@ export function sendCombatBootstrapSequence(
       setTimeout(() => {
         if (session.socket.destroyed || !session.socket.writable) return;
         connLog.info('[world/combat] scripted verification: autowin');
-        session.botHealth = 0;
+        const primaryBot = getSoloCombatBotBySlot(session, 1);
+        if (primaryBot) {
+          primaryBot.health = 0;
+        }
+        syncLegacySoloCombatBotState(session);
         send(
           session.socket,
           buildCmd66ActorDamagePacket(1, 1, 999, nextSeq(session)),
@@ -8422,7 +9006,9 @@ export function sendCombatBootstrapSequence(
           'CMD66_VERIFY_AUTOWIN',
         );
         stopBotCombatActions(session);
-        sendBotDeathTransition(session, connLog, capture, 'verify-autowin');
+        if (primaryBot) {
+          sendBotDeathTransition(session, primaryBot, connLog, capture, 'verify-autowin');
+        }
         queueCombatResultTransition(
           players,
           session,
@@ -8914,6 +9500,41 @@ function handleDuelTextCommand(
   return true;
 }
 
+const WORLD_COMMAND_HELP_MAX_LINES = 10;
+
+const WORLD_COMMAND_HELP_LINES = [
+  'Available chat commands:',
+  '/map | /travel - open the Solaris travel map',
+  '/mech | /mechbay | /mechs - open the mech picker',
+  '/bots | /botcount <1-7> | /botdifficulty <1-5> (/botdiff)',
+  '/botside <slot> <player|enemy|1-8> - set bot side/team',
+  '/botpick [slot] | /botmech <mech_id> | /botmech <slot> <mech_id>',
+  '/fight | /fightrestart - start or restart non-duel combat',
+  '/ready | /unready | /notready - arena ready-room status',
+  '/duel <pilot> | /acceptduel | /declineduel',
+  '/duelstatus | /duelterms | /duelcancel - duel status and stakes',
+] as const;
+
+if (WORLD_COMMAND_HELP_LINES.length > WORLD_COMMAND_HELP_MAX_LINES) {
+  throw new Error(
+    `WORLD_COMMAND_HELP_LINES exceeds the ${WORLD_COMMAND_HELP_MAX_LINES}-line client limit.`,
+  );
+}
+
+export function sendWorldCommandHelp(
+  session: ClientSession,
+  capture: CaptureLogger,
+): void {
+  for (const line of WORLD_COMMAND_HELP_LINES) {
+    send(
+      session.socket,
+      buildCmd3BroadcastPacket(line, nextSeq(session)),
+      capture,
+      'CMD3_HELP',
+    );
+  }
+}
+
 export function handleWorldTextCommand(
   players: PlayerRegistry,
   session: ClientSession,
@@ -8925,6 +9546,11 @@ export function handleWorldTextCommand(
   const lower = clean.toLowerCase();
   if (clean.length === 0) {
     connLog.debug('[world] cmd-4 text ignored (empty)');
+    return;
+  }
+
+  if (lower === '/help') {
+    sendWorldCommandHelp(session, capture);
     return;
   }
 
@@ -9052,42 +9678,160 @@ export function handleBotMechTextCommand(
   } = {},
 ): boolean {
   const clean = text.replace(/\x1b/g, '?').trim();
-  const botmechMatch = clean.match(/^\/botmech\s+(\d+)$/i);
-  if (!botmechMatch) {
-    return false;
-  }
-
-  const requestedId = parseInt(botmechMatch[1], 10);
-  const mechEntry   = WORLD_MECH_BY_ID.get(requestedId);
-  if (!mechEntry) {
-    connLog.warn('[world] /botmech: unknown mech_id=%d', requestedId);
+  const sendLocalNotice = (message: string, label: string): void => {
     if (!options.suppressBroadcast) {
       send(
         session.socket,
         buildCmd3BroadcastPacket(
-          `Unknown mech_id ${requestedId}. Use /mechs to browse available mechs.`,
+          message,
           nextSeq(session),
         ),
         capture,
-        'CMD3_BOTMECH_UNKNOWN',
+        label,
       );
     }
+  };
+
+  if (/^\/bots$/i.test(clean)) {
+    sendLocalNotice(buildBotConfigurationSummary(session), 'CMD3_BOT_CONFIG_SUMMARY');
     return true;
   }
 
-  session.combatBotMechId = requestedId;
-  connLog.info('[world] /botmech: bot mech set to %s (id=%d)', mechEntry.typeString, requestedId);
-  if (!options.suppressBroadcast) {
-    send(
-      session.socket,
-      buildCmd3BroadcastPacket(
-        `Bot mech set to ${mechEntry.typeString} (id=${requestedId}). Use /fight or /fightrestart.`,
-        nextSeq(session),
-      ),
-      capture,
-      'CMD3_BOTMECH_ACK',
+  const botCountMatch = clean.match(/^\/botcount\s+(\d+)$/i);
+  if (botCountMatch) {
+    const requestedCount = parseInt(botCountMatch[1], 10);
+    if (!Number.isFinite(requestedCount) || requestedCount < 1 || requestedCount > MAX_SINGLE_PLAYER_BOT_OPPONENTS) {
+      sendLocalNotice(
+        `Bot count must be between 1 and ${MAX_SINGLE_PLAYER_BOT_OPPONENTS}.`,
+        'CMD3_BOTCOUNT_INVALID',
+      );
+      return true;
+    }
+    session.combatBotOpponentCount = requestedCount;
+    worldResumeRegistry.save(session);
+    connLog.info('[world] /botcount: configured %d bot opponents', requestedCount);
+    sendLocalNotice(
+      `${buildBotConfigurationSummary(session)} Use /botside <slot> <player|enemy|1-8>, /botpick <slot>, /botmech <slot> <mech_id>, or /botdifficulty <1-5> to change bot setup.`,
+      'CMD3_BOTCOUNT_ACK',
     );
+    return true;
   }
+
+  const botDifficultyMatch = clean.match(/^\/bot(?:difficulty|diff)\s+(\d+)$/i);
+  if (botDifficultyMatch) {
+    const requestedDifficulty = parseInt(botDifficultyMatch[1], 10);
+    if (!Number.isFinite(requestedDifficulty) || requestedDifficulty < 1 || requestedDifficulty > 5) {
+      sendLocalNotice('Bot difficulty must be between 1 and 5.', 'CMD3_BOTDIFFICULTY_INVALID');
+      return true;
+    }
+    session.combatBotDifficultyLevel = clampBotDifficultyLevel(requestedDifficulty);
+    worldResumeRegistry.save(session);
+    connLog.info('[world] /botdifficulty: configured bot difficulty=%d', session.combatBotDifficultyLevel);
+    sendLocalNotice(
+      `Bot difficulty set to ${getConfiguredBotDifficultyLevel(session)}/5. ${buildBotConfigurationSummary(session)}`,
+      'CMD3_BOTDIFFICULTY_ACK',
+    );
+    return true;
+  }
+
+  const botSideMatch = clean.match(/^\/bot(?:side|team)\s+(\d+)\s+([^\s]+)$/i);
+  if (botSideMatch) {
+    const requestedSlot = parseInt(botSideMatch[1], 10);
+    if (!Number.isFinite(requestedSlot) || requestedSlot < 1 || requestedSlot > MAX_SINGLE_PLAYER_BOT_OPPONENTS) {
+      sendLocalNotice(
+        `Bot slot must be between 1 and ${MAX_SINGLE_PLAYER_BOT_OPPONENTS}.`,
+        'CMD3_BOTSIDE_INVALID_SLOT',
+      );
+      return true;
+    }
+
+    const requestedSideToken = botSideMatch[2].toLowerCase();
+    let requestedSide: number | undefined;
+    if (requestedSideToken === 'player' || requestedSideToken === 'ally' || requestedSideToken === 'friendly') {
+      requestedSide = getConfiguredSoloCombatPlayerSide(session);
+    } else if (requestedSideToken === 'enemy' || requestedSideToken === 'opponent' || requestedSideToken === 'hostile') {
+      requestedSide = getConfiguredSoloCombatDefaultEnemySide(session);
+    } else if (/^\d+$/.test(requestedSideToken)) {
+      requestedSide = parseInt(requestedSideToken, 10);
+    }
+
+    if (!Number.isFinite(requestedSide) || requestedSide === undefined || requestedSide < MIN_SOLO_COMBAT_SIDE || requestedSide > MAX_SOLO_COMBAT_SIDE) {
+      sendLocalNotice(
+        `Bot side must be player, enemy, or a side between ${MIN_SOLO_COMBAT_SIDE} and ${MAX_SOLO_COMBAT_SIDE}.`,
+        'CMD3_BOTSIDE_INVALID_SIDE',
+      );
+      return true;
+    }
+
+    setConfiguredBotSide(session, requestedSlot - 1, requestedSide);
+    worldResumeRegistry.save(session);
+    connLog.info('[world] /botside: slot=%d configured side=%d', requestedSlot, requestedSide);
+    sendLocalNotice(
+      `Bot ${requestedSlot} side set to ${getConfiguredBotSideSummaryLabel(session, requestedSlot - 1)}. ${buildBotConfigurationSummary(session)}`,
+      'CMD3_BOTSIDE_ACK',
+    );
+    return true;
+  }
+
+  const botPickMatch = clean.match(/^\/botpick(?:\s+(\d+))?$/i);
+  if (botPickMatch) {
+    if (session.phase !== 'world') {
+      sendLocalNotice('Bot mech picker is only available in world mode.', 'CMD3_BOTPICK_INVALID_PHASE');
+      return true;
+    }
+    const requestedSlot = parseInt(botPickMatch[1] ?? '1', 10);
+    if (!Number.isFinite(requestedSlot) || requestedSlot < 1 || requestedSlot > MAX_SINGLE_PLAYER_BOT_OPPONENTS) {
+      sendLocalNotice(
+        `Bot slot must be between 1 and ${MAX_SINGLE_PLAYER_BOT_OPPONENTS}.`,
+        'CMD3_BOTPICK_INVALID_SLOT',
+      );
+      return true;
+    }
+    session.combatBotOpponentCount = Math.max(getConfiguredBotOpponentCount(session), requestedSlot);
+    worldResumeRegistry.save(session);
+    connLog.info('[world] /botpick: opening mech picker for bot slot=%d', requestedSlot);
+    sendMechClassPicker(session, connLog, capture, { target: 'bot', botIndex: requestedSlot - 1 });
+    return true;
+  }
+
+  const botMechSlotMatch = clean.match(/^\/botmech\s+(\d+)\s+(\d+)$/i);
+  const botMechSingleMatch = clean.match(/^\/botmech\s+(\d+)$/i);
+  if (!botMechSlotMatch && !botMechSingleMatch) {
+    return false;
+  }
+
+  const requestedSlot = botMechSlotMatch ? parseInt(botMechSlotMatch[1], 10) : 1;
+  const requestedId = parseInt((botMechSlotMatch ? botMechSlotMatch[2] : botMechSingleMatch?.[1]) ?? '0', 10);
+  if (!Number.isFinite(requestedSlot) || requestedSlot < 1 || requestedSlot > MAX_SINGLE_PLAYER_BOT_OPPONENTS) {
+    sendLocalNotice(
+      `Bot slot must be between 1 and ${MAX_SINGLE_PLAYER_BOT_OPPONENTS}.`,
+      'CMD3_BOTMECH_INVALID_SLOT',
+    );
+    return true;
+  }
+
+  const mechEntry = WORLD_MECH_BY_ID.get(requestedId);
+  if (!mechEntry) {
+    connLog.warn('[world] /botmech: unknown mech_id=%d slot=%d', requestedId, requestedSlot);
+    sendLocalNotice(
+      `Unknown mech_id ${requestedId}. Use /mechs to browse available mechs.`,
+      'CMD3_BOTMECH_UNKNOWN',
+    );
+    return true;
+  }
+
+  setConfiguredBotLoadoutId(session, requestedSlot - 1, requestedId);
+  worldResumeRegistry.save(session);
+  connLog.info(
+    '[world] /botmech: slot=%d bot mech set to %s (id=%d)',
+    requestedSlot,
+    mechEntry.typeString,
+    requestedId,
+  );
+  sendLocalNotice(
+    `Bot ${requestedSlot} mech set to ${mechEntry.typeString} (id=${requestedId}). ${buildBotConfigurationSummary(session)}`,
+    'CMD3_BOTMECH_ACK',
+  );
   return true;
 }
 
@@ -9557,6 +10301,8 @@ export function handleCombatWeaponFireFrame(
     return;
   }
 
+  const combatSession = players.getCombatSession(session.combatSessionId);
+  const blockedFriendlyShotSummaries: string[] = [];
   const fireableShots = [];
   for (const shot of shots) {
     const mountGate = getWeaponMountGate(session, shot.weaponSlot);
@@ -9577,8 +10323,39 @@ export function handleCombatWeaponFireFrame(
         cooldownGate.weaponName ?? 'unknown',
         cooldownGate.remainingMs ?? 0,
         cooldownGate.cooldownMs ?? 0,
-      );
+        );
       continue;
+    }
+
+    if (combatSession?.mode === 'arena' && combatSession.state === 'active') {
+      const target = getCombatTargetParticipantForViewerSlot(players, combatSession, session, shot.targetSlot);
+      const friendlyTarget = !!target
+        && !target.socket.destroyed
+        && target.phase === 'combat'
+        && target.combatSessionId === combatSession.id
+        && target.combatResultCode === undefined
+        && (target.playerHealth ?? 1) > 0
+        && session.worldArenaSide !== undefined
+        && session.worldArenaSide === target.worldArenaSide;
+      if (friendlyTarget) {
+        const { damage: shotDamage, weaponName } = getShotDamage(session, shot.weaponSlot);
+        blockedFriendlyShotSummaries.push(
+          `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:friendly-fire-blocked:${getDisplayName(target)}`,
+        );
+        continue;
+      }
+    } else {
+      const targetBot = shot.targetSlot <= 0 ? undefined : getSoloCombatBotBySlot(session, shot.targetSlot);
+      const friendlyTarget = !!targetBot
+        && targetBot.health > 0
+        && targetBot.side === getConfiguredSoloCombatPlayerSide(session);
+      if (friendlyTarget) {
+        const { damage: shotDamage, weaponName } = getShotDamage(session, shot.weaponSlot);
+        blockedFriendlyShotSummaries.push(
+          `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:friendly-fire-blocked:slot=${targetBot.slot}`,
+        );
+        continue;
+      }
     }
 
     const ammoGate = consumeWeaponAmmo(session, shot.weaponSlot);
@@ -9616,9 +10393,18 @@ export function handleCombatWeaponFireFrame(
       fireableShots.length,
     );
   }
-  if (fireableShots.length === 0) return;
+  if (fireableShots.length === 0) {
+    if (blockedFriendlyShotSummaries.length > 0) {
+      connLog.info(
+        '[world/combat] cmd10 friendly fire blocked: firePath=%s records=%d shots=[%s]',
+        firePath,
+        blockedFriendlyShotSummaries.length,
+        blockedFriendlyShotSummaries.join(','),
+      );
+    }
+    return;
+  }
 
-  const combatSession = players.getCombatSession(session.combatSessionId);
   if (combatSession?.mode === 'duel') {
     const duelPeer = getActiveDuelPeer(players, session);
     if (!duelPeer) {
@@ -9638,7 +10424,7 @@ export function handleCombatWeaponFireFrame(
     let duelPeerHeadArmor = duelPeer.combatPlayerHeadArmor ?? HEAD_ARMOR_VALUE;
     send(session.socket, buildCmd71ResetEffectStatePacket(nextSeq(session)), capture, 'CMD71_RESET');
     sendToWorldSession(duelPeer, buildCmd71ResetEffectStatePacket(nextSeq(duelPeer)), 'CMD71_DUEL_REMOTE_RESET');
-    const shotSummaries: string[] = [];
+    const shotSummaries = [...blockedFriendlyShotSummaries];
     let totalDamageUpdates = 0;
 
     for (const shot of fireableShots) {
@@ -9805,7 +10591,7 @@ export function handleCombatWeaponFireFrame(
       sendToWorldSession(viewer, buildCmd71ResetEffectStatePacket(nextSeq(viewer)), 'CMD71_ARENA_RESET');
     }
 
-    const shotSummaries: string[] = [];
+    const shotSummaries = [...blockedFriendlyShotSummaries];
     let totalDamageUpdates = 0;
     const eliminatedParticipants = new Map<string, ClientSession>();
 
@@ -9989,35 +10775,35 @@ export function handleCombatWeaponFireFrame(
     return;
   }
 
-  if (session.botHealth === undefined) {
-    session.botHealth = getCombatDurability(
-      session.combatBotArmorValues ?? DEFAULT_BOT_ARMOR_VALUES,
-      session.combatBotInternalValues ?? DEFAULT_BOT_INTERNAL_VALUES,
-    ) + (session.combatBotHeadArmor ?? HEAD_ARMOR_VALUE);
-  }
-  if (session.botHealth <= 0) {
-    connLog.debug('[world/combat] cmd-10 shot ignored — bot already destroyed');
+  const activeBots = getActiveSoloCombatBots(session);
+  if (activeBots.length === 0) {
+    connLog.debug('[world/combat] cmd-10 shot ignored — all solo-combat bots already destroyed');
     return;
   }
+  const difficultyProfile = getConfiguredBotDifficultyProfile(session);
+  const playerSide = getConfiguredSoloCombatPlayerSide(session);
 
-  const botArmorValues = [...(session.combatBotArmorValues ?? DEFAULT_BOT_ARMOR_VALUES)];
-  const botInternalValues = [...(session.combatBotInternalValues ?? DEFAULT_BOT_INTERNAL_VALUES)];
-  const botCriticalStateBytes = [...(session.combatBotCriticalStateBytes ?? createCriticalStateBytes(WORLD_MECH_BY_ID.get(session.combatBotMechId ?? session.selectedMechId ?? FALLBACK_MECH_ID)?.extraCritCount))];
-  let botHeadArmor = session.combatBotHeadArmor ?? HEAD_ARMOR_VALUE;
-  const botMechId = session.combatBotMechId ?? session.selectedMechId;
-  const botMechEntry = getMechEntryForId(botMechId);
-  const botModelId = getCombatModelIdForMechId(botMechId);
-  const botX = session.combatBotX ?? 0;
-  const botY = session.combatBotY ?? BOT_AI_SPAWN_DISTANCE;
-  const botZ = session.combatBotZ ?? 0;
-  const botFacing = session.combatBotFacing ?? 0;
   send(session.socket, buildCmd71ResetEffectStatePacket(nextSeq(session)), capture, 'CMD71_RESET');
   const shotSummaries: string[] = [];
   let totalDamageUpdates = 0;
+  const eliminatedBotSlots = new Set<number>();
 
   for (const shot of fireableShots) {
     const { damage: shotDamage, weaponName, weaponSpec } = getShotDamage(session, shot.weaponSlot);
-    const rangeGate = getShotMaxRangeGate(session, shot.weaponSlot, botX, botY);
+    const targetBot = shot.targetSlot <= 0 ? undefined : getSoloCombatBotBySlot(session, shot.targetSlot);
+    const targetActive = !!targetBot && targetBot.health > 0 && !eliminatedBotSlots.has(targetBot.slot);
+    const friendlyTarget = targetActive && targetBot.side === playerSide;
+    const targetX = targetBot?.x ?? 0;
+    const targetY = targetBot?.y ?? 0;
+    const targetZ = targetBot?.z ?? 0;
+
+    if (friendlyTarget) {
+      shotSummaries.push(
+        `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:friendly-fire-blocked:slot=${targetBot.slot}`,
+      );
+      continue;
+    }
+
     send(
       session.socket,
       buildCmd68ProjectileSpawnPacket(
@@ -10037,12 +10823,25 @@ export function handleCombatWeaponFireFrame(
       capture,
       'CMD68_PROJECTILE',
     );
-    if (!rangeGate.allowed) {
+
+    if (!targetActive || !targetBot) {
       shotSummaries.push(
-        `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:out-of-range:${Math.round(rangeGate.distanceMeters ?? -1)}/${rangeGate.maxRangeMeters ?? 'n/a'}m`,
+        `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:no-active-target:${shot.targetSlot}/${shot.targetAttach}`,
       );
       continue;
     }
+
+    const rangeGate = getShotMaxRangeGate(session, shot.weaponSlot, targetX, targetY);
+    if (!rangeGate.allowed) {
+      shotSummaries.push(
+        `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:slot=${targetBot.slot}:out-of-range:${Math.round(rangeGate.distanceMeters ?? -1)}/${rangeGate.maxRangeMeters ?? 'n/a'}m`,
+      );
+      continue;
+    }
+
+    const botMechId = targetBot.mechId;
+    const botMechEntry = getMechEntryForId(botMechId);
+    const botModelId = getCombatModelIdForMechId(botMechId);
     const hitRoll = resolveCombatToHitRoll({
       attackerX: session.combatX ?? 0,
       attackerY: session.combatY ?? 0,
@@ -10050,42 +10849,43 @@ export function handleCombatWeaponFireFrame(
       attackerSpeedMag: session.combatSpeedMag,
       attackerMaxSpeedMag: session.combatMaxSpeedMag,
       attackerAirborne: (session.combatJumpAltitude ?? 0) > 0,
-      targetX: botX,
-      targetY: botY,
-      targetFacing: botFacing,
-      targetSpeedMag: session.combatBotSpeedMag,
+      targetX,
+      targetY,
+      targetFacing: targetBot.facing,
+      targetSpeedMag: targetBot.speedMag,
       targetMaxSpeedMag: botMechEntry?.maxSpeedMag,
-      targetAirborne: session.combatBotJumpActive === true || botZ > 0,
-      targetMoveVectorX: session.combatBotMoveVectorX,
-      targetMoveVectorY: session.combatBotMoveVectorY,
-      distanceMeters: rangeGate.distanceMeters ?? getCombatDisplayDistanceMeters(session.combatX ?? 0, session.combatY ?? 0, botX, botY),
+      targetAirborne: targetBot.jumpActive === true || targetZ > 0,
+      targetMoveVectorX: targetBot.moveVectorX,
+      targetMoveVectorY: targetBot.moveVectorY,
+      distanceMeters: rangeGate.distanceMeters ?? getCombatDisplayDistanceMeters(session.combatX ?? 0, session.combatY ?? 0, targetX, targetY),
       weaponSpec,
       maxRangeMeters: rangeGate.maxRangeMeters,
-    });
+    }, difficultyProfile);
     if (!hitRoll.hit) {
       shotSummaries.push(
-        `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:miss:${shot.targetSlot}/${shot.targetAttach}:chance=${Math.round(hitRoll.chance * 100)}:roll=${Math.round(hitRoll.roll * 100)}:band=${hitRoll.rangeBand}:cross=${Math.round(hitRoll.crossingFactor * 100)}:bot=${botX}/${botY}`,
+        `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:slot=${targetBot.slot}:miss:${shot.targetSlot}/${shot.targetAttach}:chance=${Math.round(hitRoll.chance * 100)}:roll=${Math.round(hitRoll.roll * 100)}:band=${hitRoll.rangeBand}:cross=${Math.round(hitRoll.crossingFactor * 100)}:bot=${targetX}/${targetY}`,
       );
       continue;
     }
+
     const impactContext = buildTargetImpactContext(
       shot.impactXRaw - COORD_BIAS,
       shot.impactYRaw - COORD_BIAS,
       shot.impactZ,
-      botX,
-      botY,
-      botZ,
-      botFacing,
+      targetX,
+      targetY,
+      targetZ,
+      targetBot.facing,
     );
     const hitSection = resolveEffectiveHitSection(
       botMechId,
       shot.targetAttach,
       shot.impactZ,
-      botArmorValues,
-      botInternalValues,
+      targetBot.armorValues,
+      targetBot.internalValues,
       impactContext,
     );
-    const previousInternalValues = [...botInternalValues];
+    const previousInternalValues = [...targetBot.internalValues];
     const damageResult = applyWeaponDamage(
       weaponSpec,
       shotDamage,
@@ -10094,31 +10894,31 @@ export function handleCombatWeaponFireFrame(
       shot.targetAttach,
       shot.angleSeedA,
       shot.angleSeedB,
-      botArmorValues,
-      botInternalValues,
-      botHeadArmor,
+      targetBot.armorValues,
+      targetBot.internalValues,
+      targetBot.headArmor,
     );
     const postDamageUpdates = collectPostDamageStateUpdates(
       botMechId,
-      botCriticalStateBytes,
+      targetBot.criticalStateBytes,
       previousInternalValues,
-      botInternalValues,
+      targetBot.internalValues,
       damageResult.headInternalDamaged,
     );
-    botHeadArmor = damageResult.headArmor;
+    targetBot.headArmor = damageResult.headArmor;
     const allUpdates = [...damageResult.updates, ...postDamageUpdates.updates];
     for (const update of allUpdates) {
       send(
         session.socket,
-        buildCmd66ActorDamagePacket(1, update.damageCode, update.damageValue, nextSeq(session)),
+        buildCmd66ActorDamagePacket(targetBot.slot, update.damageCode, update.damageValue, nextSeq(session)),
         capture,
         'CMD66_BOT_DAMAGE',
       );
     }
-    if (postDamageUpdates.newlyDestroyedLegs.length > 0 && !isActorDestroyed(botInternalValues)) {
+    if (postDamageUpdates.newlyDestroyedLegs.length > 0 && !isActorDestroyed(targetBot.internalValues)) {
       sendCombatLegLossCollapse(
         session,
-        1,
+        targetBot.slot,
         connLog,
         `${postDamageUpdates.newlyDestroyedLegs.map(leg => leg.label).join('+')} destroyed`,
         'CMD70_BOT_LEG_COLLAPSE',
@@ -10127,42 +10927,48 @@ export function handleCombatWeaponFireFrame(
       );
     }
 
+    targetBot.health = getCombatDurability(targetBot.armorValues, targetBot.internalValues) + targetBot.headArmor;
     totalDamageUpdates += allUpdates.length;
     shotSummaries.push(
-      `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${summarizeHitSections(damageResult.hitSections)}:${shot.targetSlot}/${shot.targetAttach}:chance=${Math.round(hitRoll.chance * 100)}:roll=${Math.round(hitRoll.roll * 100)}:cross=${Math.round(hitRoll.crossingFactor * 100)}:bot=${botX}/${botY}:headArmor=${botHeadArmor}:updates=${allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join('/') || 'none'}${getModel13AttachProbeSuffix(botMechId, shot.targetAttach, impactContext)}`,
+      `${shot.weaponSlot}:${weaponName ?? 'unknown'}:${shotDamage}:${summarizeHitSections(damageResult.hitSections)}:slot=${targetBot.slot}:mech=${botMechId}:model=${botModelId ?? 'n/a'}:${shot.targetSlot}/${shot.targetAttach}:chance=${Math.round(hitRoll.chance * 100)}:roll=${Math.round(hitRoll.roll * 100)}:cross=${Math.round(hitRoll.crossingFactor * 100)}:bot=${targetX}/${targetY}:headArmor=${targetBot.headArmor}:updates=${allUpdates.map(update => `0x${update.damageCode.toString(16)}=${update.damageValue}`).join('/') || 'none'}${getModel13AttachProbeSuffix(botMechId, shot.targetAttach, impactContext)}`,
     );
+
+    if (isActorDestroyed(targetBot.internalValues)) {
+      targetBot.health = 0;
+      eliminatedBotSlots.add(targetBot.slot);
+    }
   }
 
-  session.combatBotArmorValues = botArmorValues;
-  session.combatBotInternalValues = botInternalValues;
-  session.combatBotCriticalStateBytes = botCriticalStateBytes;
-  session.combatBotHeadArmor = botHeadArmor;
-  session.botHealth = getCombatDurability(botArmorValues, botInternalValues);
-  session.botHealth += botHeadArmor;
+  syncLegacySoloCombatBotState(session);
   connLog.info(
-    '[world/combat] cmd10 weapon fire accepted: firePath=%s records=%d weaponSlots=%s botMechId=%s botModelId=%s botHealth=%d updates=%d shots=[%s]',
+    '[world/combat] cmd10 weapon fire accepted: firePath=%s records=%d weaponSlots=%s botHealth=%d updates=%d shots=[%s]',
     firePath,
     fireableShots.length,
     fireableShots.map(shot => shot.weaponSlot).join('/'),
-    botMechId ?? 'n/a',
-    botModelId ?? 'n/a',
-    session.botHealth,
+    session.botHealth ?? 0,
     totalDamageUpdates,
     shotSummaries.join(','),
   );
   send(session.socket, buildCmd71ResetEffectStatePacket(nextSeq(session)), capture, 'CMD71_CLOSE');
 
-  if (isActorDestroyed(botInternalValues)) {
+  for (const slot of eliminatedBotSlots) {
+    const bot = getSoloCombatBotBySlot(session, slot);
+    if (!bot) {
+      continue;
+    }
+    sendBotDeathTransition(session, bot, connLog, capture, 'fatal-damage');
+  }
+
+  if (getActiveHostileSoloCombatBots(session).length === 0) {
     session.botHealth = 0;
     stopBotCombatActions(session);
-    sendBotDeathTransition(session, connLog, capture, 'fatal-damage');
     queueCombatResultTransition(
       players,
       session,
       connLog,
       capture,
       COMBAT_RESULT_VICTORY,
-      'bot structurally destroyed',
+      'all hostile solo-combat bots structurally destroyed',
       BOT_RESULT_DELAY_MS,
     );
   }
@@ -10363,16 +11169,33 @@ export function handleMechPickerCmd7(
 ): boolean {
   const clearMechPickerState = () => {
     session.mechPickerStep = undefined;
+    session.mechPickerTarget = undefined;
+    session.mechPickerTargetBotIndex = undefined;
     session.mechPickerClass = undefined;
     session.mechPickerChassis = undefined;
     session.mechPickerChassisPage = undefined;
   };
   const step = session.mechPickerStep;
+  const pickerTarget = session.mechPickerTarget ?? 'player';
+  const pickerBotIndex = Math.max(0, Math.min(
+    MAX_SINGLE_PLAYER_BOT_OPPONENTS - 1,
+    session.mechPickerTargetBotIndex ?? 0,
+  ));
 
   if (step === 'class' && listId === MECH_CLASS_LIST_ID) {
     if (selection <= 0) {
       clearMechPickerState();
-      sendSceneRefresh(players, session, connLog, capture, 'Mech selection cancelled.');
+      if (pickerTarget === 'bot') {
+        sendSceneRefresh(
+          players,
+          session,
+          connLog,
+          capture,
+          `Bot ${pickerBotIndex + 1} mech selection cancelled.`,
+        );
+      } else {
+        sendSceneRefresh(players, session, connLog, capture, 'Mech selection cancelled.');
+      }
       return true;
     }
     const classIndex = selection - 1;
@@ -10383,7 +11206,12 @@ export function handleMechPickerCmd7(
 
   if (step === 'chassis' && listId === MECH_CHASSIS_LIST_ID) {
     if (selection <= 0) {
-      sendMechClassPicker(session, connLog, capture);
+      sendMechClassPicker(
+        session,
+        connLog,
+        capture,
+        pickerTarget === 'bot' ? { target: 'bot', botIndex: pickerBotIndex } : undefined,
+      );
       return true;
     }
     const classIndex  = session.mechPickerClass ?? 0;
@@ -10391,7 +11219,12 @@ export function handleMechPickerCmd7(
     const visible     = chassisList.slice(0, 20);
     const chassis = visible[selection - 1];
     if (!chassis) {
-      sendMechClassPicker(session, connLog, capture);
+      sendMechClassPicker(
+        session,
+        connLog,
+        capture,
+        pickerTarget === 'bot' ? { target: 'bot', botIndex: pickerBotIndex } : undefined,
+      );
       return true;
     }
     sendMechVariantPicker(session, chassis, connLog, capture);
@@ -10413,7 +11246,36 @@ export function handleMechPickerCmd7(
         capture,
         'CMD3_MECH_SELECT_ERR',
       );
-      sendMechClassPicker(session, connLog, capture);
+      sendMechClassPicker(
+        session,
+        connLog,
+        capture,
+        pickerTarget === 'bot' ? { target: 'bot', botIndex: pickerBotIndex } : undefined,
+      );
+      return true;
+    }
+
+    if (pickerTarget === 'bot') {
+      setConfiguredBotLoadoutId(session, pickerBotIndex, chosen.id);
+      clearMechPickerState();
+      worldResumeRegistry.save(session);
+      connLog.info(
+        '[world] bot mech selected: callsign="%s" slot=%d mech_id=%d typeString=%s',
+        getDisplayName(session),
+        pickerBotIndex + 1,
+        chosen.id,
+        chosen.typeString,
+      );
+      send(
+        session.socket,
+        buildCmd3BroadcastPacket(
+          `Bot ${pickerBotIndex + 1} mech selected: ${chosen.typeString}. ${buildBotConfigurationSummary(session)}`,
+          nextSeq(session),
+        ),
+        capture,
+        'CMD3_BOTMECH_SELECTED',
+      );
+      send(session.socket, buildCmd5CursorNormalPacket(nextSeq(session)), capture, 'CMD5_NORMAL');
       return true;
     }
 

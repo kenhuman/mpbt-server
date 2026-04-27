@@ -7,6 +7,7 @@
  */
 
 import type { ClientSession } from './players.js';
+import type { BotDifficultyLevel } from '../world/combat-config.js';
 
 export interface PendingWorldResume {
   accountId?: number;
@@ -19,6 +20,10 @@ export interface PendingWorldResume {
   worldArenaReadyRoomId?: number;
   selectedMechId?: number;
   selectedMechSlot?: number;
+  combatBotOpponentCount?: number;
+  combatBotLoadoutIds?: number[];
+  combatBotSides?: number[];
+  combatBotDifficultyLevel?: BotDifficultyLevel;
   pendingDuelSettlementNotice?: string;
 }
 
@@ -34,6 +39,10 @@ type ResumeSnapshotSource = Pick<
   | 'worldArenaReadyRoomId'
   | 'selectedMechId'
   | 'selectedMechSlot'
+  | 'combatBotOpponentCount'
+  | 'combatBotLoadoutIds'
+  | 'combatBotSides'
+  | 'combatBotDifficultyLevel'
   | 'pendingDuelSettlementNotice'
 >;
 
@@ -66,6 +75,10 @@ class WorldResumeRegistry {
       worldArenaReadyRoomId: source.worldArenaReadyRoomId,
       selectedMechId: source.selectedMechId,
       selectedMechSlot: source.selectedMechSlot,
+      combatBotOpponentCount: source.combatBotOpponentCount,
+      combatBotLoadoutIds: source.combatBotLoadoutIds ? [...source.combatBotLoadoutIds] : undefined,
+      combatBotSides: source.combatBotSides ? [...source.combatBotSides] : undefined,
+      combatBotDifficultyLevel: source.combatBotDifficultyLevel,
       pendingDuelSettlementNotice: source.pendingDuelSettlementNotice,
     };
 

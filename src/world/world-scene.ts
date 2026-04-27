@@ -1012,8 +1012,16 @@ export function sendMechClassPicker(
   session: ClientSession,
   connLog: Logger,
   capture: CaptureLogger,
+  options: {
+    target?: 'player' | 'bot';
+    botIndex?: number;
+  } = {},
 ): void {
   session.mechPickerStep        = 'class';
+  session.mechPickerTarget      = options.target ?? 'player';
+  session.mechPickerTargetBotIndex = session.mechPickerTarget === 'bot'
+    ? Math.max(0, Math.min(6, options.botIndex ?? 0))
+    : undefined;
   session.mechPickerClass       = undefined;
   session.mechPickerChassis     = undefined;
   session.mechPickerChassisPage = undefined;
@@ -1039,7 +1047,13 @@ export function sendMechClassPicker(
       ammoBinTypeIds: [],
     };
   });
-  connLog.info('[world] sending mech class picker');
+  connLog.info(
+    '[world] sending mech class picker: target=%s%s',
+    session.mechPickerTarget,
+    session.mechPickerTarget === 'bot'
+      ? ` index=${(session.mechPickerTargetBotIndex ?? 0) + 1}`
+      : '',
+  );
   send(
     session.socket,
     buildMechListPacket(entries, MECH_CLASS_LIST_ID, MECH_CLASS_FOOTER, nextSeq(session)),

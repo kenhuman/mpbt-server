@@ -145,8 +145,9 @@ export function buildCmd63ArenaSceneInitPacket(seq = 0): Buffer {
 // Wire layout (confirmed by Ghidra decompile):
 //   slot          byte   — external slot ID; client assigns internal slot and
 //                          stores reverse-mapping in DAT_00478d98/DAT_00478dc0
-//   actorTypeByte byte   — stored at DAT_004f2036 + internalSlot*0x49c; purpose
-//                          semantically unconfirmed; use 0 for prototype
+//   actorTypeByte byte   — stored at DAT_004f2036 + internalSlot*0x49c; v1.29 RE
+//                          shows 0 keeps normal LOS-gated visibility while non-zero
+//                          forces actor flag 0x20 each tick (use 1 for teammates)
 //   identity0     str11  — max 11 bytes; trailing digits → actor display index
 //   identity1     str31  — max 31 bytes
 //   identity2     str39  — max 39 bytes
@@ -162,7 +163,8 @@ export interface Cmd64RemoteActor {
   slot: number;
   /**
    * Second byte after slot; stored at DAT_004f2036 + internalSlot*0x49c.
-   * Semantics unconfirmed — send 0 for prototype.
+   * v1.29 RE: 0 keeps normal LOS gating; non-zero forces actor flag 0x20.
+   * Use 1 for teammate remotes that should stay rendered/radar-visible.
    */
   actorTypeByte: number;
   /** max 11 bytes — identity string 0; trailing digits → actor display index */

@@ -4,6 +4,7 @@
 
 import { randomUUID } from 'crypto';
 import type { Socket } from 'net';
+import type { BotDifficultyLevel } from '../world/combat-config.js';
 
 export type SessionPhase =
   | 'connected'     // TCP accepted, waiting for first bytes
@@ -70,6 +71,44 @@ export interface WorldScrollListState {
   tierKey?: 'UNRANKED' | 'NOVICE' | 'AMATEUR' | 'PROFESSIONAL' | 'VETERAN' | 'MASTER' | 'BATTLEMASTER' | 'CHAMPION';
   /** Weight-class filter for class-ranking shells. */
   classKey?: 'LIGHT' | 'MEDIUM' | 'HEAVY' | 'ASSAULT';
+}
+
+export type MechPickerTarget = 'player' | 'bot';
+
+export interface SoloCombatBotActorState {
+  slot: number;
+  mechId: number;
+  side: number;
+  combatRetaliationCursor?: number;
+  health: number;
+  armorValues: number[];
+  internalValues: number[];
+  criticalStateBytes: number[];
+  headArmor: number;
+  x: number;
+  y: number;
+  z: number;
+  facing: number;
+  speedMag: number;
+  moveVectorX: number;
+  moveVectorY: number;
+  weaponReadyAtBySlot: number[];
+  ammoStateValues: number[];
+  heat: number;
+  jumpActive: boolean;
+  jumpFuel: number;
+  lastMoveAt?: number;
+  lastAimLimitLogAt?: number;
+  jumpStartedAt?: number;
+  jumpDurationMs?: number;
+  jumpStartFuel?: number;
+  jumpApexUnits?: number;
+  jumpStartX?: number;
+  jumpStartY?: number;
+  jumpTargetX?: number;
+  jumpTargetY?: number;
+  lastJumpAt?: number;
+  deathTimer?: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -154,7 +193,7 @@ export interface ClientSession {
   combatJumpActive?: boolean;
   /** Repeating setInterval that regenerates jump-jet fuel while grounded. */
   combatJumpFuelRegenTimer?: ReturnType<typeof setInterval>;
-  /** Aggregate scripted bot durability for logging and simple win gating. */
+  /** Aggregate scripted bot durability across all active solo-combat bot actors. */
   botHealth?: number;
   /**
    * Server-side approximation of the player's remaining IS health.
@@ -353,6 +392,25 @@ export interface ClientSession {
    * used instead of the player's own mech when bootstrapping combat.
    */
   combatBotMechId?: number;
+  /**
+   * Configured bot roster count for single-player bot/droid fights.
+   * Valid range is 1..7 (8 total combatants including the local player).
+   */
+  combatBotOpponentCount?: number;
+  /**
+   * Configured per-bot mech overrides for single-player bot/droid fights.
+   * Index 0 corresponds to the first remote bot slot, index 6 to the seventh.
+   */
+  combatBotLoadoutIds?: number[];
+  /**
+   * Configured per-bot team/side assignments for single-player bot/droid fights.
+   * Index 0 corresponds to the first remote bot slot, index 6 to the seventh.
+   */
+  combatBotSides?: number[];
+  /** Configured solo-bot difficulty preset (1 easiest .. 5 hardest). Defaults to 4 when unset. */
+  combatBotDifficultyLevel?: BotDifficultyLevel;
+  /** Runtime solo-combat bot actors keyed by remote slot order (1..7). */
+  combatBotActors?: SoloCombatBotActorState[];
   /** Wall-clock timestamp (Date.now()) when the current combat bootstrap was sent. */
   combatStartAt?: number;
   /** Per-mech run/max speedMag cap (round(mec_speed * 1.5) * 300), set at combat bootstrap. */
@@ -464,6 +522,10 @@ export interface ClientSession {
 
   /** Which step of the mech-picker dialog the player is on. */
   mechPickerStep?: 'class' | 'chassis' | 'variant';
+  /** Target the active mech picker is editing. */
+  mechPickerTarget?: MechPickerTarget;
+  /** 0-based bot index targeted by the active mech picker when `mechPickerTarget === "bot"`. */
+  mechPickerTargetBotIndex?: number;
   /** Weight-class index (0=Light, 1=Medium, 2=Heavy, 3=Assault) chosen in step 1. */
   mechPickerClass?: number;
   /** Chassis name (e.g. "Jenner") chosen in step 2. */

@@ -25,6 +25,9 @@ export const BOT_SPAWN_DISTANCE = 3_000 * COMBAT_WORLD_UNITS_PER_METER;
 /** Initial single-player AI-bot stand-off distance in combat world units (3000m north). */
 export const BOT_AI_SPAWN_DISTANCE = BOT_SPAWN_DISTANCE;
 
+/** Same-team combat spawn spacing in combat world units (20m apart). */
+export const COMBAT_TEAMMATE_SPAWN_SPACING = 20 * COMBAT_WORLD_UNITS_PER_METER;
+
 /**
  * Fallback per-weapon damage used when the firing mech's weapon loadout is not
  * documented in BT-MAN yet. Chosen to approximate a medium weapon hit.
@@ -169,6 +172,81 @@ export const BOT_TO_HIT_TARGET_CROSSING_MAX_PENALTY = 0.22;
 /** Jumping is intentionally harder for both the attacker and defender. */
 export const BOT_TO_HIT_ATTACKER_JUMP_PENALTY = 0.08;
 export const BOT_TO_HIT_TARGET_JUMP_PENALTY = 0.12;
+
+export type BotDifficultyLevel = 1 | 2 | 3 | 4 | 5;
+
+export interface BotDifficultyProfile {
+  level: BotDifficultyLevel;
+  rangePressureBonusMeters: number;
+  finisherPushHealthThreshold: number;
+  toHitBaseChance: number;
+  toHitMaxChance: number;
+  toHitShortRangeBonus: number;
+}
+
+/** Default live-bot difficulty. Level 4 matches the current tuned AI. */
+export const DEFAULT_BOT_DIFFICULTY_LEVEL: BotDifficultyLevel = 4;
+
+/**
+ * Solo-bot difficulty presets.
+ *
+ * Level 4 is the current tuned live behavior.
+ * Level 5 restores the pre-tuning values from before bots were softened.
+ * Levels 1-3 are progressively easier extrapolations below the current level 4.
+ */
+export const BOT_DIFFICULTY_PROFILES: Record<BotDifficultyLevel, BotDifficultyProfile> = {
+  1: {
+    level: 1,
+    rangePressureBonusMeters: 10,
+    finisherPushHealthThreshold: 12,
+    toHitBaseChance: 0.54,
+    toHitMaxChance: 0.76,
+    toHitShortRangeBonus: 0.06,
+  },
+  2: {
+    level: 2,
+    rangePressureBonusMeters: 15,
+    finisherPushHealthThreshold: 16,
+    toHitBaseChance: 0.59,
+    toHitMaxChance: 0.80,
+    toHitShortRangeBonus: 0.08,
+  },
+  3: {
+    level: 3,
+    rangePressureBonusMeters: 20,
+    finisherPushHealthThreshold: 20,
+    toHitBaseChance: 0.64,
+    toHitMaxChance: 0.84,
+    toHitShortRangeBonus: 0.10,
+  },
+  4: {
+    level: 4,
+    rangePressureBonusMeters: BOT_AI_RANGE_PRESSURE_BONUS_METERS,
+    finisherPushHealthThreshold: BOT_AI_FINISHER_PUSH_HEALTH_THRESHOLD,
+    toHitBaseChance: BOT_TO_HIT_BASE_CHANCE,
+    toHitMaxChance: BOT_TO_HIT_MAX_CHANCE,
+    toHitShortRangeBonus: BOT_TO_HIT_SHORT_RANGE_BONUS,
+  },
+  5: {
+    level: 5,
+    rangePressureBonusMeters: 35,
+    finisherPushHealthThreshold: 32,
+    toHitBaseChance: 0.74,
+    toHitMaxChance: 0.92,
+    toHitShortRangeBonus: 0.15,
+  },
+};
+
+export function clampBotDifficultyLevel(level: number | undefined): BotDifficultyLevel {
+  const normalized = Math.trunc(level ?? DEFAULT_BOT_DIFFICULTY_LEVEL);
+  if (normalized <= 1) return 1;
+  if (normalized >= 5) return 5;
+  return normalized as BotDifficultyLevel;
+}
+
+export function getBotDifficultyProfile(level: number | undefined): BotDifficultyProfile {
+  return BOT_DIFFICULTY_PROFILES[clampBotDifficultyLevel(level)];
+}
 
 /** Miss visuals land beside the target instead of always "hitting" center mass. */
 export const BOT_MISS_OFFSET_MIN_METERS = 10;
