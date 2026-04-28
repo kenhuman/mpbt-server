@@ -11,7 +11,11 @@
  *                             Body: { roomId: number }
  *                             Header: X-Username (authenticated display name)
  *   GET  /world/presence  →  { ok: true, rooms: Array<{ roomId, occupants: string[] }> }
- *   WS   /ws              →  real-time presence push (presence_update events)
+ *   POST /world/chat      →  { ok: true }
+ *                             Body: { roomId: number, text: string (max 200 chars) }
+ *                             Header: X-Username
+ *                             Broadcasts room_chat WebSocket event to all clients
+ *   WS   /ws              →  real-time push: presence_update, room_chat events
  */
 
 import * as http from 'http';
@@ -126,6 +130,53 @@ export function startApiServer(log: Logger, host: string, port: number): http.Se
 
     if (req.method === 'GET' && pathname === '/world/presence') {
       jsonOk(res, { ok: true, rooms: presenceStore.getAll() });
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/world/chat') {
+      const username = (req.headers['x-username'] ?? '') as string;
+      if (!username) {
+        jsonError(res, 400, 'X-Username header required');
+        return;
+      }
+      let body: string;
+      try {
+        body = await readBody(req);
+      } catch {
+        jsonError(res, 400, 'failed to read request body');
+        return;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        jsonError(res, 400, 'invalid JSON body');
+        return;
+      }
+      const p = parsed as Record<string, unknown>;
+      const roomId =
+        parsed !== null && typeof parsed === 'object' && typeof p.roomId === 'number'
+          ? (p.roomId as number)
+          : NaN;
+      const rawText =
+        parsed !== null && typeof parsed === 'object' && typeof p.text === 'string'
+          ? (p.text as string).trim()
+          : '';
+      if (!Number.isFinite(roomId)) {
+        jsonError(res, 400, 'roomId must be a number');
+        return;
+      }
+      if (!rawText) {
+        jsonError(res, 400, 'text must be a non-empty string');
+        return;
+      }
+      if (rawText.length > 200) {
+        jsonError(res, 400, 'text must be 200 characters or fewer');
+        return;
+      }
+      apiLog.info('chat room %d [%s]: %s', roomId, username, rawText.slice(0, 40));
+      wsBroadcaster.broadcast('room_chat', { roomId, username, text: rawText });
+      jsonOk(res, { ok: true });
       return;
     }
 
