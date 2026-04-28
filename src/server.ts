@@ -42,6 +42,7 @@ import { PlayerRegistry, ClientSession } from './state/players.js';
 import { launchRegistry } from './state/launch.js';
 import { replaceSessionForReconnect } from './state/session-replacement.js';
 import { startWorldServer } from './server-world.js';
+import { startApiServer } from './api.js';
 import { Logger } from './util/logger.js';
 import { CaptureLogger } from './util/capture.js';
 import { verifyOrRegister } from './db/accounts.js';
@@ -51,6 +52,8 @@ import {
   SOCKET_IDLE_TIMEOUT_MS,
   MPBT_LOG_LEVEL,
   MPBT_CAPTURE_ENABLED,
+  API_PORT,
+  API_HOST,
 } from './config.js';
 
 // ── Global state ──────────────────────────────────────────────────────────────
@@ -715,6 +718,9 @@ server.on('error', (err: Error) => {
 // Shares the same player registry and logger as the lobby server.
 startWorldServer(log, players);
 
+// Start the REST API server for the modern Godot client.
+startApiServer(log, API_HOST, API_PORT);
+
 server.listen(ARIES_PORT, '0.0.0.0', () => {
   const addr = server.address() as net.AddressInfo;
   log.info('═══════════════════════════════════════════════════════');
@@ -728,6 +734,7 @@ server.listen(ARIES_PORT, '0.0.0.0', () => {
     '  Packet captures: %s',
     MPBT_CAPTURE_ENABLED ? 'enabled → captures/' : 'disabled (set MPBT_CAPTURE=1 to enable)',
   );
+  log.info('  REST API: http://%s:%d/health', API_HOST, API_PORT);
   log.info('═══════════════════════════════════════════════════════');
 });
 
