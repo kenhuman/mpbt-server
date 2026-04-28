@@ -11,6 +11,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import * as http from 'http';
 import { presenceStore } from './presence.js';
+import { arenaQueue } from './arena-queue.js';
 
 export class WsBroadcaster {
   private readonly _wss = new WebSocketServer({ noServer: true });
@@ -32,10 +33,25 @@ export class WsBroadcaster {
     });
 
     this._wss.on('connection', (ws) => {
-      // Send immediate presence snapshot so the client has current state.
+      // Send immediate snapshots so late-joiners/re-connectors get current state.
       ws.send(
         JSON.stringify({ type: 'presence_update', rooms: presenceStore.getAll() }),
       );
+      ws.send(
+        JSON.stringify({ type: 'arena_queue_update', slots: arenaQueue.getAll() }),
+      );
+      const pm = arenaQueue.pendingMatch;
+      if (pm) {
+        ws.send(
+          JSON.stringify({
+            type: 'arena_match_launch',
+            arenaId: pm.arenaId,
+            slots: pm.slots,
+            launchedAt: pm.launchedAt,
+            mode: pm.slots.length === 1 ? 'solo' : 'pvp',
+          }),
+        );
+      }
     });
   }
 
