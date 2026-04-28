@@ -11,6 +11,7 @@
  *                             Body: { roomId: number }
  *                             Header: X-Username (authenticated display name)
  *   GET  /world/presence  →  { ok: true, rooms: Array<{ roomId, occupants: string[] }> }
+ *   WS   /ws              →  real-time presence push (presence_update events)
  */
 
 import * as http from 'http';
@@ -18,6 +19,7 @@ import { readFileSync } from 'fs';
 import { Logger } from './util/logger.js';
 import { loadSolarisRooms } from './data/maps.js';
 import { presenceStore } from './world/presence.js';
+import { wsBroadcaster } from './world/ws_broadcaster.js';
 
 const _pkg = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
@@ -115,6 +117,7 @@ export function startApiServer(log: Logger, host: string, port: number): http.Se
       }
       presenceStore.travel(username, roomId);
       apiLog.info('%s traveled to room %d', username, roomId);
+      wsBroadcaster.broadcast('presence_update', { rooms: presenceStore.getAll() });
       const rooms = loadSolarisRooms() ?? [];
       const room = rooms.find((r) => r.roomId === roomId) ?? null;
       jsonOk(res, { ok: true, room });
@@ -129,6 +132,8 @@ export function startApiServer(log: Logger, host: string, port: number): http.Se
     res.writeHead(404);
     res.end();
   });
+
+  wsBroadcaster.attach(server);
 
   server.on('error', (err: Error) => {
     apiLog.error('HTTP server error: %s', err.message);
