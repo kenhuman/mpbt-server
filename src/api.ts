@@ -35,8 +35,21 @@
  *                                    Header: X-Username
  *                                    Broadcasts arena_queue_update; if all ready:
  *                                      broadcasts arena_match_launch + records pendingMatch
+ *   GET    /comstar              →  { ok: true, messages: ComstarApiMessage[], unreadCount }
+ *                                    Header: X-Username
+ *   GET    /comstar/unread       →  { ok: true, count: number }
+ *                                    Header: X-Username
+ *   POST   /comstar              →  { ok: true }
+ *                                    Body: { to, subject (max 100), body (max 1000) }
+ *                                    Header: X-Username
+ *                                    Broadcasts comstar_new_message { to } to all WS clients
+ *   PATCH  /comstar/:id/read     →  { ok: true } or 404
+ *                                    Header: X-Username
+ *   DELETE /comstar/:id          →  { ok: true } or 404
+ *                                    Header: X-Username
  *   WS     /ws                   →  real-time push: presence_update, room_chat,
- *                                    arena_queue_update, arena_match_launch events
+ *                                    arena_queue_update, arena_match_launch,
+ *                                    comstar_new_message events
  */
 
 import * as http from 'http';
@@ -53,6 +66,13 @@ import { wsBroadcaster } from './world/ws_broadcaster.js';
 import { arenaQueue } from './world/arena-queue.js';
 import { combatWsManager } from './world/combat-ws.js';
 import { randomUUID } from 'crypto';
+import {
+  listInbox,
+  countUnread,
+  sendComstarModern,
+  markReadById,
+  softDelete,
+} from './db/comstar_modern.js';
 
 const _pkg = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
@@ -427,6 +447,96 @@ export function startApiServer(log: Logger, host: string, port: number): http.Se
 
       jsonOk(res, { ok: true, launched: false });
       return;
+    }
+
+    // ── ComStar ──────────────────────────────────────────────────────────────
+
+    if (req.method === 'GET' && pathname === '/comstar/unread') {
+      const username = (req.headers['x-username'] ?? '') as string;
+      if (!username) { jsonError(res, 400, 'X-Username header required'); return; }
+      const character = await findCharacterByDisplayName(username);
+      if (!character) { jsonError(res, 404, 'character not found'); return; }
+      const count = await countUnread(character.account_id);
+      jsonOk(res, { ok: true, count });
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/comstar') {
+      const username = (req.headers['x-username'] ?? '') as string;
+      if (!username) { jsonError(res, 400, 'X-Username header required'); return; }
+      const character = await findCharacterByDisplayName(username);
+      if (!character) { jsonError(res, 404, 'character not found'); return; }
+      const rows = await listInbox(character.account_id);
+      const unreadCount = rows.filter((r) => r.read_at === null).length;
+      jsonOk(res, {
+        ok: true,
+        unreadCount,
+        messages: rows.map((r) => ({
+          id:      r.id,
+          from:    r.from_name,
+          subject: r.subject,
+          body:    r.body,
+          sentAt:  r.sent_at.toISOString(),
+          readAt:  r.read_at?.toISOString() ?? null,
+        })),
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/comstar') {
+      const username = (req.headers['x-username'] ?? '') as string;
+      if (!username) { jsonError(res, 400, 'X-Username header required'); return; }
+      let rawBody: string;
+      try { rawBody = await readBody(req); } catch { jsonError(res, 400, 'failed to read body'); return; }
+      let parsed: unknown;
+      try { parsed = JSON.parse(rawBody); } catch { jsonError(res, 400, 'invalid JSON body'); return; }
+      const p = parsed as Record<string, unknown>;
+      const to      = typeof p?.to === 'string'      ? (p.to as string).trim()      : '';
+      const subject = typeof p?.subject === 'string' ? (p.subject as string).trim() : '';
+      const body    = typeof p?.body === 'string'    ? (p.body as string).trim()    : '';
+      if (!to)                        { jsonError(res, 400, 'to is required'); return; }
+      if (subject.length > 100)       { jsonError(res, 400, 'subject must be 100 characters or fewer'); return; }
+      if (!body)                      { jsonError(res, 400, 'body is required'); return; }
+      if (body.length > 1000)         { jsonError(res, 400, 'body must be 1000 characters or fewer'); return; }
+      if (to.toLowerCase() === username.toLowerCase()) { jsonError(res, 400, 'cannot send to yourself'); return; }
+      const sender = await findCharacterByDisplayName(username);
+      if (!sender) { jsonError(res, 404, 'sender character not found'); return; }
+      const recipient = await findCharacterByDisplayName(to);
+      if (!recipient) { jsonError(res, 404, 'recipient not found'); return; }
+      const msg = await sendComstarModern(sender.account_id, recipient.account_id, username, subject, body);
+      if (!msg) { jsonError(res, 500, 'failed to send message'); return; }
+      wsBroadcaster.broadcast('comstar_new_message', { to: recipient.display_name });
+      apiLog.info('comstar: %s → %s subject=%s', username, to, subject.slice(0, 40));
+      jsonOk(res, { ok: true });
+      return;
+    }
+
+    {
+      const comstarReadMatch = /^\/comstar\/(\d+)\/read$/.exec(pathname);
+      if (req.method === 'PATCH' && comstarReadMatch) {
+        const username = (req.headers['x-username'] ?? '') as string;
+        if (!username) { jsonError(res, 400, 'X-Username header required'); return; }
+        const character = await findCharacterByDisplayName(username);
+        if (!character) { jsonError(res, 404, 'character not found'); return; }
+        const updated = await markReadById(Number(comstarReadMatch[1]), character.account_id);
+        if (!updated) { jsonError(res, 404, 'message not found'); return; }
+        jsonOk(res, { ok: true });
+        return;
+      }
+    }
+
+    {
+      const comstarDeleteMatch = /^\/comstar\/(\d+)$/.exec(pathname);
+      if (req.method === 'DELETE' && comstarDeleteMatch) {
+        const username = (req.headers['x-username'] ?? '') as string;
+        if (!username) { jsonError(res, 400, 'X-Username header required'); return; }
+        const character = await findCharacterByDisplayName(username);
+        if (!character) { jsonError(res, 404, 'character not found'); return; }
+        const deleted = await softDelete(Number(comstarDeleteMatch[1]), character.account_id);
+        if (!deleted) { jsonError(res, 404, 'message not found'); return; }
+        jsonOk(res, { ok: true });
+        return;
+      }
     }
 
     res.writeHead(404);
