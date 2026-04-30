@@ -1,4 +1,7 @@
 {
+  "_exitNotes": [
+    "Any room whose exits.north, exits.south, exits.east, and exits.west are all null is effectively an island; sending a player there will leave them stuck unless some other non-exit travel path moves them out."
+  ],
   "rooms": [
     {
       "roomId": 161,

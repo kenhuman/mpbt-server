@@ -73,3 +73,9 @@ export const MPBT_LOG_LEVEL = readLogLevelEnv('MPBT_LOG_LEVEL', 'info');
 // Packet hex captures are useful during protocol work, but they add sustained disk
 // I/O on every send/receive. Keep them opt-in for regular local playtesting.
 export const MPBT_CAPTURE_ENABLED = readBooleanEnv('MPBT_CAPTURE', false);
+
+// REST API server for the modern Godot client. Listens on a separate port from
+// the ARIES TCP server. Set API_HOST=0.0.0.0 to expose to LAN clients.
+// Port 3002 keeps this separate from mpbt-web (3000) and mpbt-web/api (3001).
+export const API_PORT = readNonNegativeIntEnv('API_PORT', 3002);
+export const API_HOST = process.env['API_HOST'] ?? '127.0.0.1';

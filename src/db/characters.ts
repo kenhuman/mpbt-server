@@ -165,6 +165,18 @@ export async function settleDuelStakeTransfer(
   }
 }
 
+/** Find the character for a given display name (case-insensitive), or null if none exists. */
+export async function findCharacterByDisplayName(displayName: string): Promise<CharacterRow | null> {
+  const res = await pool.query<CharacterRow>(
+    `SELECT id, account_id, display_name, allegiance, cbills, mech_id, mech_slot, created_at
+     FROM characters
+     WHERE lower(display_name) = lower($1)
+     LIMIT 1`,
+    [displayName],
+  );
+  return res.rows[0] ?? null;
+}
+
 /**
  * Check whether a display name is already taken by another character.
  * Used to re-prompt when a chosen name is unavailable.

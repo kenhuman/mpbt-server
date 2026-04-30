@@ -142,3 +142,23 @@ CREATE INDEX IF NOT EXISTS duel_results_winner_account_idx
 
 CREATE INDEX IF NOT EXISTS duel_results_loser_account_idx
     ON duel_results (loser_account_id, completed_at DESC);
+
+-- comstar_modern: private messages sent between players via the modern REST API.
+-- Separate from the legacy `messages` table (ARIES/retail client) to avoid any
+-- interference with ARIES delivery semantics.
+CREATE TABLE IF NOT EXISTS comstar_modern (
+    id              SERIAL PRIMARY KEY,
+    from_account_id INTEGER      NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    to_account_id   INTEGER      NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    from_name       VARCHAR(64)  NOT NULL,   -- display_name snapshot at send time
+    subject         VARCHAR(100) NOT NULL DEFAULT '',
+    body            TEXT         NOT NULL,
+    sent_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    read_at         TIMESTAMPTZ,
+    deleted_at      TIMESTAMPTZ
+);
+
+-- Fast inbox lookup (all non-deleted messages for a recipient, newest first).
+CREATE INDEX IF NOT EXISTS comstar_modern_inbox_idx
+    ON comstar_modern (to_account_id, sent_at DESC)
+    WHERE deleted_at IS NULL;
