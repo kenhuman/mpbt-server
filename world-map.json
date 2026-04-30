@@ -1,5 +1,8 @@
 {
   "_comment": "Reconstructed from SOLARIS.MAP binary and retail in-room screenshots. Synthetic IDs 10001-10027 = sub-rooms; 10028-10062 = stub/terminal nodes. Do not edit manually.",
+  "_exitNotes": [
+    "Any room whose exits.north, exits.south, exits.east, and exits.west are all null is effectively an island; sending a player there will leave them stuck unless some other non-exit travel path moves them out."
+  ],
   "_sources": [
     "SOLARIS.MAP",
     "Solaris_Bitmap screenshots"

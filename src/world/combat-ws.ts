@@ -31,6 +31,11 @@ import { WebSocket } from 'ws';
 import { Logger } from '../util/logger.js';
 import type { WsBroadcaster } from './ws_broadcaster.js';
 import type { ArenaSlot } from './arena-queue.js';
+import {
+  findCharacterByDisplayName,
+  settleDuelStakeTransfer,
+} from '../db/characters.js';
+import { createDuelResult } from '../db/duel-results.js';
 
 const log = new Logger('combat-ws');
 
@@ -66,6 +71,7 @@ interface CombatActor {
   heat: number;          // 0–100
   maxSpeedKph: number;
   typeString: string;
+  mechId: number;        // 0 for BOT
   lastFireTime: number;
   claimed: boolean;      // true once a WS has joined for this slot
 }
@@ -116,6 +122,7 @@ export class CombatWsManager {
         heat: 0,
         maxSpeedKph: 64.8,                // TODO: derive from mech stats
         typeString: slot.typeString,
+        mechId: slot.mechId,
         lastFireTime: 0,
         claimed: false,
       });
@@ -133,6 +140,7 @@ export class CombatWsManager {
         heat: 0,
         maxSpeedKph: BOT_MAX_SPEED_KPH,
         typeString: 'Locust',
+        mechId: 0,
         lastFireTime: 0,
         claimed: true,
       });
@@ -389,6 +397,8 @@ export class CombatWsManager {
     loser: string | null,
   ): void {
     if (session.state === 'ended') return;
+
+    const wasActive = session.state === 'active';
     session.state = 'ended';
 
     if (session.tickTimer) {
@@ -409,7 +419,75 @@ export class CombatWsManager {
       mode: session.mode,
     });
 
+    // Only persist ranked results for PvP matches that reached active state.
+    if (wasActive && session.mode === 'pvp' && winner && loser && winner !== 'BOT' && loser !== 'BOT') {
+      this._persistResult(session, winner, loser).catch(err =>
+        log.error('failed to persist combat result arenaId=%s: %s', session.arenaId, err),
+      );
+    }
+
     setTimeout(() => this._sessions.delete(session.arenaId), SESSION_GC_DELAY_MS);
+  }
+
+  private async _persistResult(
+    session: CombatSession,
+    winner: string,
+    loser: string,
+  ): Promise<void> {
+    const [winnerChar, loserChar] = await Promise.all([
+      findCharacterByDisplayName(winner),
+      findCharacterByDisplayName(loser),
+    ]);
+    if (!winnerChar || !loserChar) {
+      log.warn('_persistResult: character not found for arenaId=%s winner=%s loser=%s', session.arenaId, winner, loser);
+      return;
+    }
+
+    const winnerActor = session.actors.get(winner);
+    const loserActor  = session.actors.get(loser);
+    if (!winnerActor || !loserActor) return;
+
+    const STAKE_CB = 250;
+    const safeStake = Math.min(STAKE_CB, loserChar.cbills);
+
+    // ON CONFLICT DO NOTHING makes the insert idempotent; only settle cbills
+    // when the row is freshly inserted to avoid double-transfers on replay.
+    const inserted = await createDuelResult({
+      combatSessionId:       session.arenaId,
+      worldMapRoomId:        0,
+      roomName:              'Arena',
+      winnerAccountId:       winnerChar.account_id,
+      loserAccountId:        loserChar.account_id,
+      winnerDisplayName:     winner,
+      loserDisplayName:      loser,
+      winnerComstarId:       100000 + winnerChar.account_id,
+      loserComstarId:        100000 + loserChar.account_id,
+      winnerMechId:          winnerActor.mechId,
+      loserMechId:           loserActor.mechId,
+      winnerStakeCb:         safeStake,
+      loserStakeCb:          safeStake,
+      winnerRemainingHealth: winnerActor.health,
+      winnerMaxHealth:       100,
+      loserRemainingHealth:  0,
+      loserMaxHealth:        100,
+      resultReason:          'combat_ws_defeat',
+    });
+
+    if (!inserted) {
+      // Row already existed — skip settlement to prevent double transfer.
+      log.warn('_persistResult: duplicate insert skipped for arenaId=%s', session.arenaId);
+      return;
+    }
+
+    if (safeStake > 0) {
+      try {
+        await settleDuelStakeTransfer(winnerChar.account_id, loserChar.account_id, safeStake);
+        log.info('cbills settled: arenaId=%s winner=%s +%d loser=%s -%d',
+          session.arenaId, winner, safeStake, loser, safeStake);
+      } catch (err) {
+        log.error('cbills settlement failed arenaId=%s: %s', session.arenaId, err);
+      }
+    }
   }
 
   private _broadcastToSession(session: CombatSession, type: string, data: object): void {
