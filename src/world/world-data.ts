@@ -289,6 +289,9 @@ function isCompatibleSceneAnchor(
       return anchorRoom.type === 'bar';
     case 'arena':
       return anchorRoom.type === 'arena';
+    case 'ready_room':
+    case 'drop_room':
+      return anchorRoom.type === 'arena';
     case 'terminal':
       return anchorRoom.type === 'terminal'
           || anchorRoom.type === 'street'
@@ -300,6 +303,11 @@ function isCompatibleSceneAnchor(
           || anchorRoom.type === 'hub';
     case 'sector':
       return anchorRoom.type === 'sector' || anchorRoom.type === 'hub';
+    case 'headquarters':
+      return anchorRoom.type === 'hub'
+          || anchorRoom.type === 'sector'
+          || anchorRoom.type === 'street'
+          || anchorRoom.type === 'terminal';
     case 'hub':
       return anchorRoom.type === 'hub' || anchorRoom.type === 'sector';
     case 'tram':

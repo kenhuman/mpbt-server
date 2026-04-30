@@ -203,6 +203,7 @@
     <option value="30" selected>30×30</option>
     <option value="40">40×40</option>
     <option value="50">50×50</option>
+    <option value="80">80×80</option>
   </select>
 
   <div class="sep"></div>
@@ -250,10 +251,14 @@
           <option value="street">street</option>
           <option value="path">path</option>
           <option value="arena">arena</option>
+          <option value="ready_room">ready_room</option>
+          <option value="drop_room">drop_room</option>
+          <option value="headquarters">headquarters</option>
           <option value="hub">hub</option>
           <option value="terminal">terminal</option>
           <option value="bar">bar</option>
           <option value="sector">sector</option>
+          <option value="tram">tram</option>
           <option value="bank">bank</option>
         </select>
       </div>
@@ -267,6 +272,10 @@
           <option value="cathay">cathay</option>
           <option value="blackhills">blackhills</option>
         </select>
+      </div>
+      <div class="field">
+        <label>Area</label>
+        <input type="text" id="eArea" placeholder="(none)">
       </div>
       <div class="field">
         <label>Description</label>
@@ -310,8 +319,8 @@ const iconCache = new Map();
 function getIconImg(iconId) {
   if (iconCache.has(iconId)) return iconCache.get(iconId);
   const img = new Image();
-  img.src = `${ASSETS}/icons/I${iconId + 101}.png`;
   img.onload = () => render();
+  img.src = `${ASSETS}/icons/I${iconId + 101}.png`;
   iconCache.set(iconId, img);
   return img;
 }
@@ -351,19 +360,22 @@ const ANCHOR_POS = {
 const TYPE_COLOR = {
   arena:    '#c44', hub:      '#e90', terminal: '#38c',
   bar:      '#4a4', sector:   '#d70', bank:     '#a4a',
-  street:   '#557', path:     '#557',
+  ready_room: '#b65', drop_room: '#966', headquarters: '#c84',
+  tram:     '#0aa', street:   '#557', path:     '#557',
 };
 const TYPE_LETTER = {
   arena: 'A', hub: 'H', terminal: 'T', bar: 'B',
-  sector: 'S', bank: '$', street: '+', path: '+',
+  ready_room: 'R', drop_room: 'D', headquarters: 'Q',
+  sector: 'S', bank: '$', tram: 'M', street: '+', path: '+',
 };
 
 // Icon ID → short label (named locations only; everything else shows type letter)
 const ICON_LABEL = {
-  4: 'STAR', 6: 'SEC', 12: 'FACT', 17: 'LYR',
-  18: 'PRK', 25: 'WST', 26: 'WL', 28: 'ISH',
+  0: 'TRAM', 2: 'BAR', 4: 'STAR', 6: 'SEC',
+  12: 'FACT', 17: 'LYR', 18: 'PRK', 21: 'TERM',
+  25: 'WST', 26: 'PUB', 27: 'PUB', 28: 'ISH',
   29: 'STE', 31: 'JNG', 32: 'DAV', 34: 'SIL',
-  35: 'MON', 36: 'CTH', 37: 'BLK', 43: 'VWP',
+  35: 'HQ', 36: 'CTH', 37: 'BLK', 38: 'KOB', 39: 'SIL', 40: 'MON', 43: 'VWP',
   44: 'BLT', 45: 'GOV', 46: 'WRF', 50: 'MZE', 51: 'SLM',
 };
 
@@ -373,6 +385,8 @@ const ICON_LABEL = {
 let GRID_SIZE = 30;   // cols & rows
 let grid = [];        // GRID_SIZE × GRID_SIZE, row-major
 let selectedCell = null;  // { col, row }
+let validationIssues = [];
+let validationRoomIds = new Set();
 
 let VIEW = { scale: 1, tx: 20, ty: 20 };
 let bgImage = null;
@@ -397,6 +411,29 @@ function makeGrid(size) {
   posById.clear();
 }
 makeGrid(GRID_SIZE);
+
+function setGridSize(size) {
+  const safeSize = Math.max(20, Math.ceil(size));
+  const sel = document.getElementById('gridSize');
+  let option = [...sel.options].find(opt => parseInt(opt.value) >= safeSize);
+  if (!option) {
+    option = document.createElement('option');
+    option.value = String(safeSize);
+    option.textContent = `${safeSize}×${safeSize}`;
+    sel.appendChild(option);
+  }
+  sel.value = option.value;
+  makeGrid(parseInt(option.value));
+}
+
+function ensureGridFitsSavedLayout(rooms) {
+  let maxCoord = GRID_SIZE - 1;
+  for (const room of rooms) {
+    if (typeof room._gridCol === 'number') maxCoord = Math.max(maxCoord, room._gridCol);
+    if (typeof room._gridRow === 'number') maxCoord = Math.max(maxCoord, room._gridRow);
+  }
+  if (maxCoord >= GRID_SIZE) setGridSize(maxCoord + 1);
+}
 
 // ── Canvas ────────────────────────────────────────────────────────────────────
 const wrap   = document.getElementById('canvas-wrap');
@@ -456,13 +493,16 @@ function render() {
       const room = grid[row][col];
       const isSel = selectedCell && selectedCell.col === col && selectedCell.row === row;
       const isNeighbour = isSelectedNeighbour(col, row);
+      const isInvalid = room && validationRoomIds.has(room.roomId);
 
       // Cell fill
       if (room) {
         const baseColor = TYPE_COLOR[room.type] ?? '#557';
-        ctx.fillStyle = isSel
-          ? '#1a2a4a'
-          : isNeighbour ? '#1a1a38' : hexWithAlpha(baseColor, 0.70);
+        ctx.fillStyle = isInvalid
+          ? (isSel ? '#5a2228' : '#5a1518')
+          : (isSel
+              ? '#1a2a4a'
+              : isNeighbour ? '#1a1a38' : hexWithAlpha(baseColor, 0.70));
         ctx.fillRect(x, y, cs, cs);
       } else {
         ctx.fillStyle = isSel ? '#111830' : (isNeighbour ? '#0e0e1e' : 'transparent');
@@ -470,12 +510,14 @@ function render() {
       }
 
       // Border
-      ctx.strokeStyle = isSel
+      ctx.strokeStyle = isInvalid
+        ? '#ff6060'
+        : isSel
         ? '#7ab0e8'
         : (room
             ? (isNeighbour ? '#5580b0' : lighten(TYPE_COLOR[room.type] ?? '#557', 0.5))
             : '#181828');
-      ctx.lineWidth = isSel ? 2 : (room ? 1 : 0.5);
+      ctx.lineWidth = isInvalid ? 2.5 : (isSel ? 2 : (room ? 1 : 0.5));
       ctx.strokeRect(x + 0.5, y + 0.5, cs - 1, cs - 1);
 
       if (!room) continue;
@@ -539,6 +581,14 @@ function render() {
           ctx.fillStyle = '#558';
           ctx.fillText(String(room.roomId), x + cs - 3, y + cs - 3);
         }
+      }
+
+      if (isInvalid && cs >= 18) {
+        const fs = Math.max(10, cs * 0.26);
+        ctx.font = `bold ${fs}px monospace`;
+        ctx.textAlign = 'left';
+        ctx.fillStyle = '#ffb0b0';
+        ctx.fillText('!', x + 3, y + fs);
       }
     }
   }
@@ -629,6 +679,7 @@ function selectCell(col, row) {
   document.getElementById('eDesc').value    = room?.description ?? '';
   document.getElementById('eType').value    = room?.type ?? 'street';
   document.getElementById('eSector').value  = room?.sector ?? 'international';
+  document.getElementById('eArea').value    = room?._area ?? room?.area ?? '';
   document.getElementById('eIcon').value    = room?.icon != null ? room.icon : '';
   document.getElementById('eInferred').checked = !!(room?._inferred);
   updateIconPreview(room?.icon ?? null);
@@ -745,6 +796,7 @@ function applyChanges() {
   const desc  = document.getElementById('eDesc').value.trim();
   const type  = document.getElementById('eType').value;
   const sector = document.getElementById('eSector').value;
+  const area  = document.getElementById('eArea').value.trim();
   const iconRaw = document.getElementById('eIcon').value.trim();
   const icon  = iconRaw !== '' ? parseInt(iconRaw) : null;
   const inferred = document.getElementById('eInferred').checked;
@@ -756,6 +808,7 @@ function applyChanges() {
       roomId: useId,
       _name: name || 'New Room',
       description: desc || undefined,
+      _area: area || undefined,
       type, sector, icon: icon ?? 1, _inferred: inferred || undefined,
       exits: deriveExits(col, row),
     };
@@ -780,6 +833,8 @@ function applyChanges() {
     room.roomId      = newRoomId;
     room._name       = name || undefined;
     room.description = desc || undefined;
+    room._area       = area || undefined;
+    if ('area' in room) room.area = area || undefined;
     room.type        = type;
     room.sector      = sector;
     room.icon        = icon;
@@ -937,42 +992,13 @@ function importPositions() {
     }
   }
 
-  // ── Prune non-adjacent exits ──────────────────────────────────────────────
-  // Any exit whose target isn't exactly 1 cell away is a cycle back-edge that
-  // can't be honoured in a 2D grid.  Remove both directions so the player must
-  // take the longer road path instead of a phantom shortcut.
-  // Rebuild posById first so it reflects the newly placed rooms.
-  rebuildPosById();
-  let pruned = 0;
-  const OPP = { north:'south', south:'north', east:'west', west:'east' };
-  for (let row = 0; row < GRID_SIZE; row++) {
-    for (let col = 0; col < GRID_SIZE; col++) {
-      const room = grid[row][col];
-      if (!room?.exits) continue;
-      for (const dir of Object.keys(room.exits)) {
-        const targetId = room.exits[dir];
-        if (!targetId) continue;
-        const tp = posById.get(targetId);
-        if (!tp) { delete room.exits[dir]; pruned++; continue; }
-        const dist = Math.abs(tp.col - col) + Math.abs(tp.row - row);
-        if (dist > 1) {
-          // Remove forward exit
-          delete room.exits[dir];
-          // Remove reciprocal exit from target
-          const target = grid[tp.row][tp.col];
-          if (target?.exits?.[OPP[dir]] === room.roomId)
-            delete target.exits[OPP[dir]];
-          pruned++;
-        }
-      }
-    }
-  }
-
+  // Rebuild posById so the editor panel can resolve explicit exits. Do not
+  // prune exits here: saved topology is authoritative, even when the visual
+  // overlay is sparse.
   rebuildPosById();
   fitView();
   render();
-  setStatus(`Imported ${placedAt.size} of ${jsonRooms.length} rooms` +
-    (pruned ? ` · ${pruned} non-grid exit(s) removed` : ' · all exits grid-adjacent ✓'));
+  setStatus(`Imported ${placedAt.size} of ${jsonRooms.length} rooms · explicit exits preserved`);
 }
 
 // ── File I/O ──────────────────────────────────────────────────────────────────
@@ -983,11 +1009,13 @@ function loadJson(file) {
       const data = JSON.parse(e.target.result);
       if (!Array.isArray(data.rooms)) throw new Error('"rooms" array not found');
       jsonRooms = data.rooms;
+      clearValidationState();
 
       // Check for saved _gridCol/_gridRow fields
       let hasGrid = jsonRooms.some(r => typeof r._gridCol === 'number');
       if (hasGrid) {
         // Restore saved grid layout
+        ensureGridFitsSavedLayout(jsonRooms);
         makeGrid(GRID_SIZE);
         for (const room of jsonRooms) {
           const col = room._gridCol, row = room._gridRow;
@@ -996,10 +1024,11 @@ function loadJson(file) {
             grid[row][col] = { ...room };
           }
         }
-        // Recompute exits from grid adjacency after restore
+        // Preserve stored exits from JSON. Only infer exits for rooms that do not
+        // already have explicit topology.
         for (let r = 0; r < GRID_SIZE; r++) {
           for (let c = 0; c < GRID_SIZE; c++) {
-            if (grid[r][c]) grid[r][c].exits = deriveExits(c, r);
+            if (grid[r][c] && !grid[r][c].exits) grid[r][c].exits = deriveExits(c, r);
           }
         }
         rebuildPosById();
@@ -1024,6 +1053,223 @@ function loadJson(file) {
     }
   };
   reader.readAsText(file);
+}
+
+const VALIDATION_DIRECTIONS = {
+  north: { dc: 0, dr: -1, opp: 'south' },
+  south: { dc: 0, dr:  1, opp: 'north' },
+  west:  { dc: -1, dr: 0, opp: 'east' },
+  east:  { dc:  1, dr: 0, opp: 'west' },
+};
+
+function clearValidationState() {
+  validationIssues = [];
+  validationRoomIds = new Set();
+}
+
+function validationAreaName(room) {
+  return room?._area ?? room?.area ?? '';
+}
+
+function isGameplayArea(area) {
+  return !!area && area !== 'Sector Overview' && !/ Roads$/.test(area);
+}
+
+function roomRef(room) {
+  if (!room) return 'unknown room';
+  const name = room._name || room.name || room.type || 'Room';
+  return `#${room.roomId} ${name}`;
+}
+
+function exitTargetRooms(room, byId) {
+  return Object.values(room?.exits ?? {})
+    .filter(id => id != null)
+    .map(id => byId.get(id))
+    .filter(Boolean);
+}
+
+function validateMapRooms(rooms) {
+  const issues = [];
+  const issueRoomIds = new Set();
+  const byId = new Map();
+  const roomsBySector = new Map();
+  const roomsByArea = new Map();
+  const placedCells = new Map();
+
+  function addIssue(message, roomIds = []) {
+    issues.push(message);
+    for (const id of roomIds) {
+      if (Number.isFinite(id)) issueRoomIds.add(id);
+    }
+  }
+
+  for (const room of rooms) {
+    const id = room.roomId;
+    if (!Number.isFinite(id) || id <= 0) {
+      addIssue(`${room._name || 'A room'} needs a valid positive room id.`, Number.isFinite(id) ? [id] : []);
+    } else if (byId.has(id)) {
+      addIssue(`Duplicate room id ${id} appears more than once.`, [id]);
+    } else {
+      byId.set(id, room);
+    }
+
+    if (!room.sector) {
+      addIssue(`${roomRef(room)} is missing a sector.`, [id]);
+    } else {
+      if (!roomsBySector.has(room.sector)) roomsBySector.set(room.sector, []);
+      roomsBySector.get(room.sector).push(room);
+    }
+
+    const col = room._gridCol;
+    const row = room._gridRow;
+    if (!Number.isFinite(col) || !Number.isFinite(row)) {
+      addIssue(`${roomRef(room)} is not placed on the editor grid.`, [id]);
+    } else {
+      const key = `${col},${row}`;
+      const existing = placedCells.get(key);
+      if (existing) {
+        addIssue(`${roomRef(room)} shares grid cell (${col}, ${row}) with ${roomRef(existing)}.`, [id, existing.roomId]);
+      } else {
+        placedCells.set(key, room);
+      }
+    }
+
+    const area = validationAreaName(room);
+    if (room.sector && isGameplayArea(area)) {
+      const key = `${room.sector}\u0000${area}`;
+      if (!roomsByArea.has(key)) roomsByArea.set(key, { sector: room.sector, area, rooms: [] });
+      roomsByArea.get(key).rooms.push(room);
+    }
+  }
+
+  for (const room of rooms) {
+    if (!Number.isFinite(room.roomId)) continue;
+    const exits = room.exits ?? {};
+    for (const [dir, spec] of Object.entries(VALIDATION_DIRECTIONS)) {
+      const targetId = exits[dir];
+      if (targetId == null) continue;
+      const target = byId.get(targetId);
+      if (!target) {
+        addIssue(`${roomRef(room)} has a ${dir} exit to missing room #${targetId}.`, [room.roomId]);
+        continue;
+      }
+
+      if (target.exits?.[spec.opp] !== room.roomId) {
+        addIssue(`${roomRef(room)} ${dir} exit to ${roomRef(target)} is not reciprocal.`, [room.roomId, target.roomId]);
+      }
+
+      if (room.sector && target.sector && room.sector !== target.sector) {
+        addIssue(`${roomRef(room)} connects ${room.sector} to ${target.sector}; sectors must not have direct exits.`, [room.roomId, target.roomId]);
+      }
+
+      if (Number.isFinite(room._gridCol) && Number.isFinite(room._gridRow)
+          && Number.isFinite(target._gridCol) && Number.isFinite(target._gridRow)
+          && (target._gridCol !== room._gridCol + spec.dc || target._gridRow !== room._gridRow + spec.dr)) {
+        addIssue(`${roomRef(room)} ${dir} exit points to ${roomRef(target)}, but those rooms are not adjacent on the grid.`, [room.roomId, target.roomId]);
+      }
+    }
+  }
+
+  for (const [sector, sectorRooms] of roomsBySector.entries()) {
+    const sectorIds = new Set(sectorRooms.map(room => room.roomId).filter(Number.isFinite));
+    const seen = new Set();
+    const components = [];
+
+    for (const room of sectorRooms) {
+      if (!Number.isFinite(room.roomId) || seen.has(room.roomId)) continue;
+      const component = [];
+      const stack = [room.roomId];
+      seen.add(room.roomId);
+      while (stack.length) {
+        const id = stack.pop();
+        component.push(id);
+        const cur = byId.get(id);
+        for (const targetId of Object.values(cur?.exits ?? {})) {
+          if (targetId == null || !sectorIds.has(targetId) || seen.has(targetId)) continue;
+          seen.add(targetId);
+          stack.push(targetId);
+        }
+      }
+      components.push(component);
+    }
+
+    if (components.length > 1) {
+      const sizes = components.map(component => component.length).sort((a, b) => b - a).join(', ');
+      addIssue(`Sector "${sector}" is split into ${components.length} disconnected groups (${sizes}).`, sectorRooms.map(room => room.roomId));
+    }
+
+    const tramIds = sectorRooms
+      .filter(room => room.type === 'tram' && Number.isFinite(room.roomId))
+      .map(room => room.roomId);
+    if (!tramIds.length) {
+      addIssue(`Sector "${sector}" has no tram reachable by its rooms.`, sectorRooms.map(room => room.roomId));
+      continue;
+    }
+
+    const tramReachable = new Set(tramIds);
+    const stack = [...tramIds];
+    while (stack.length) {
+      const id = stack.pop();
+      const cur = byId.get(id);
+      for (const targetId of Object.values(cur?.exits ?? {})) {
+        if (targetId == null || !sectorIds.has(targetId) || tramReachable.has(targetId)) continue;
+        tramReachable.add(targetId);
+        stack.push(targetId);
+      }
+    }
+
+    const withoutTramPath = sectorRooms.filter(room => !tramReachable.has(room.roomId));
+    if (withoutTramPath.length) {
+      addIssue(`${withoutTramPath.length} room(s) in sector "${sector}" have no path to a tram.`, withoutTramPath.map(room => room.roomId));
+    }
+  }
+
+  for (const { sector, area, rooms: areaRooms } of roomsByArea.values()) {
+    if (!areaRooms.some(room => room.type === 'tram')) {
+      addIssue(`Area "${area}" in sector "${sector}" has no tram.`, areaRooms.map(room => room.roomId));
+    }
+  }
+
+  const roomsByType = type => rooms.filter(room => room.type === type);
+  const hasExitToType = (room, type) => exitTargetRooms(room, byId).some(target => target.type === type);
+
+  for (const arena of roomsByType('arena')) {
+    const readyRooms = exitTargetRooms(arena, byId).filter(room => room.type === 'ready_room');
+    if (!readyRooms.length) {
+      addIssue(`${roomRef(arena)} is an arena without a connected ready room.`, [arena.roomId]);
+    } else if (!readyRooms.some(ready => hasExitToType(ready, 'drop_room'))) {
+      addIssue(`${roomRef(arena)} has a ready room, but that ready room is not connected to a drop room.`, [arena.roomId, ...readyRooms.map(room => room.roomId)]);
+    }
+  }
+
+  for (const ready of roomsByType('ready_room')) {
+    if (!hasExitToType(ready, 'arena')) {
+      addIssue(`${roomRef(ready)} is a ready room not connected to an arena.`, [ready.roomId]);
+    }
+    if (!hasExitToType(ready, 'drop_room')) {
+      addIssue(`${roomRef(ready)} is a ready room not connected to a drop room.`, [ready.roomId]);
+    }
+  }
+
+  for (const drop of roomsByType('drop_room')) {
+    const linkedToArena = exitTargetRooms(drop, byId)
+      .some(ready => ready.type === 'ready_room' && hasExitToType(ready, 'arena'));
+    if (!linkedToArena) {
+      addIssue(`${roomRef(drop)} is a drop room not connected through a ready room to an arena.`, [drop.roomId]);
+    }
+  }
+
+  return { ok: issues.length === 0, issues, roomIds: issueRoomIds };
+}
+
+function showValidationFailure(result) {
+  validationIssues = result.issues;
+  validationRoomIds = result.roomIds;
+  render();
+  const preview = result.issues.slice(0, 12).map((issue, index) => `${index + 1}. ${issue}`).join('\n');
+  const more = result.issues.length > 12 ? `\n\n...and ${result.issues.length - 12} more.` : '';
+  alert(`Cannot save: map validation failed with ${result.issues.length} issue(s).\n\n${preview}${more}`);
+  setStatus(`Save blocked: ${result.issues.length} validation issue(s)`);
 }
 
 function saveJson() {
@@ -1052,6 +1298,14 @@ function saveJson() {
   for (const room of jsonRooms) {
     if (!seen.has(room.roomId)) out.push({ ...room });
   }
+
+  const validation = validateMapRooms(out);
+  if (!validation.ok) {
+    showValidationFailure(validation);
+    return;
+  }
+  clearValidationState();
+  render();
 
   const json = JSON.stringify({ rooms: out }, null, 2);
   const blob = new Blob([json], { type: 'application/json' });
@@ -1284,8 +1538,8 @@ document.getElementById('chkIcons').addEventListener('change', render);
         cell.className = 'ip-cell';
         cell.dataset.id = i;
         const img = document.createElement('img');
-        img.src = `${ASSETS}/icons/I${i + 101}.png`;
         img.onerror = () => { cell.style.display = 'none'; };
+        img.src = `${ASSETS}/icons/I${i + 101}.png`;
         const lbl = document.createElement('span');
         lbl.textContent = `#${i}`;
         cell.appendChild(img); cell.appendChild(lbl);
@@ -1345,7 +1599,7 @@ document.getElementById('chkIcons').addEventListener('change', render);
 
 // ── Road Icon Tools ──────────────────────────────────────────────────────────
 (function() {
-  const ROAD_ICON_RANGE = Array.from({ length: 13 }, (_, i) => 45 + i); // 45..57
+  const ROAD_ICON_RANGE = [23, 24, 25, ...Array.from({ length: 13 }, (_, i) => 45 + i)];
   const ROAD_TYPES = new Set(['street', 'path']);
   const SECTORS = ['international','kobe','silesia','montenegro','cathay','blackhills'];
 
@@ -1367,7 +1621,7 @@ document.getElementById('chkIcons').addEventListener('change', render);
         </div>
         <div>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-            <span style="color:#668;font-size:11px">Icons to use &mdash; click to toggle (${ROAD_ICON_RANGE[0]}&ndash;${ROAD_ICON_RANGE[ROAD_ICON_RANGE.length-1]}):</span>
+            <span style="color:#668;font-size:11px">Road-capable icons &mdash; click to toggle (${ROAD_ICON_RANGE.length} options):</span>
             <span style="display:flex;gap:6px">
               <button id="ri-all" style="font-size:11px;padding:2px 6px">All</button>
               <button id="ri-none" style="font-size:11px;padding:2px 6px">None</button>
@@ -1394,8 +1648,8 @@ document.getElementById('chkIcons').addEventListener('change', render);
         const cell = document.createElement('div');
         cell.className = 'ri-cell' + (selectedIconIds.has(id) ? ' selected' : '');
         const img = document.createElement('img');
-        img.src = `${ASSETS}/icons/I${id + 101}.png`;
         img.onerror = () => { img.style.opacity = '0.2'; };
+        img.src = `${ASSETS}/icons/I${id + 101}.png`;
         const lbl = document.createElement('span');
         lbl.textContent = `#${id}`;
         cell.appendChild(img);

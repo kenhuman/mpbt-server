@@ -238,9 +238,21 @@ export function loadSolarisRooms(filePath?: string): WorldRoom[] | null {
 
 /**
  * Room type tags used in world-map.json.
- * bar | arena | hub | terminal | bank | street | sector | path
+ * bar | arena | ready_room | drop_room | headquarters | hub | terminal | bank | street | sector | path | tram
  */
-export type RoomType = 'bar' | 'arena' | 'hub' | 'terminal' | 'bank' | 'street' | 'sector' | 'path' | 'tram';
+export type RoomType =
+  | 'bar'
+  | 'arena'
+  | 'ready_room'
+  | 'drop_room'
+  | 'headquarters'
+  | 'hub'
+  | 'terminal'
+  | 'bank'
+  | 'street'
+  | 'sector'
+  | 'path'
+  | 'tram';
 
 /** One entry from world-map.json, representing navigation data for a single room. */
 export interface WorldMapRoom {
