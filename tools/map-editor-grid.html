@@ -415,12 +415,15 @@ makeGrid(GRID_SIZE);
 function setGridSize(size) {
   const safeSize = Math.max(20, Math.ceil(size));
   const sel = document.getElementById('gridSize');
-  let option = [...sel.options].find(opt => parseInt(opt.value) >= safeSize);
+  let option = [...sel.options].find(opt => parseInt(opt.value) === safeSize);
   if (!option) {
     option = document.createElement('option');
     option.value = String(safeSize);
     option.textContent = `${safeSize}×${safeSize}`;
-    sel.appendChild(option);
+    const nextOption = [...sel.options]
+      .map(opt => ({ opt, value: parseInt(opt.value) }))
+      .find(({ value }) => Number.isFinite(value) && value > safeSize)?.opt;
+    sel.insertBefore(option, nextOption ?? null);
   }
   sel.value = option.value;
   makeGrid(parseInt(option.value));
@@ -1122,9 +1125,7 @@ function validateMapRooms(rooms) {
 
     const col = room._gridCol;
     const row = room._gridRow;
-    if (!Number.isFinite(col) || !Number.isFinite(row)) {
-      addIssue(`${roomRef(room)} is not placed on the editor grid.`, [id]);
-    } else {
+    if (Number.isFinite(col) && Number.isFinite(row)) {
       const key = `${col},${row}`;
       const existing = placedCells.get(key);
       if (existing) {
