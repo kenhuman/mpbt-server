@@ -7733,6 +7733,25 @@
       "clientMapDescription": true
     },
     {
+      "roomId": 1,
+      "_name": "International Sector",
+      "description": "This area, composed primarily of public-works installations and tourist areas, is under the direct control of the Solaris central authority. There are no arenas in this sector.",
+      "type": "sector",
+      "sector": "international",
+      "_area": "Sector Overview",
+      "icon": 6,
+      "exits": {
+        "north": null,
+        "south": 9000,
+        "west": null,
+        "east": null
+      },
+      "_gridCol": 21,
+      "_gridRow": 68,
+      "_sourceBitmap": "Solaris - Bitmap\\International Zone\\main.bmp",
+      "clientMapDescription": true
+    },
+    {
       "roomId": 9000,
       "_name": "Solaris Transit Map",
       "description": "A subway map of Solaris City, reached from the training-area tram station.",
@@ -7741,7 +7760,7 @@
       "_area": "Training Area",
       "icon": 0,
       "exits": {
-        "north": null,
+        "north": 1,
         "south": null,
         "west": 2009,
         "east": null
