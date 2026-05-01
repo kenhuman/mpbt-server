@@ -429,13 +429,35 @@ function setGridSize(size) {
   makeGrid(parseInt(option.value));
 }
 
-function ensureGridFitsSavedLayout(rooms) {
+function setGridSizeAtLeast(size) {
+  const safeSize = Math.max(20, Math.ceil(size));
+  const sel = document.getElementById('gridSize');
+  const option = [...sel.options]
+    .map(opt => ({ opt, value: parseInt(opt.value) }))
+    .filter(({ value }) => Number.isFinite(value))
+    .sort((a, b) => a.value - b.value)
+    .find(({ value }) => value >= safeSize)?.opt;
+
+  if (option) {
+    sel.value = option.value;
+    makeGrid(parseInt(option.value));
+  } else {
+    setGridSize(safeSize);
+  }
+}
+
+function ensureGridFitsSavedLayout(rooms, savedGridSize) {
   let maxCoord = GRID_SIZE - 1;
   for (const room of rooms) {
     if (typeof room._gridCol === 'number') maxCoord = Math.max(maxCoord, room._gridCol);
     if (typeof room._gridRow === 'number') maxCoord = Math.max(maxCoord, room._gridRow);
   }
-  if (maxCoord >= GRID_SIZE) setGridSize(maxCoord + 1);
+  const requiredSize = maxCoord + 1;
+  if (Number.isFinite(savedGridSize) && savedGridSize >= requiredSize) {
+    setGridSize(savedGridSize);
+  } else if (requiredSize > GRID_SIZE) {
+    setGridSizeAtLeast(requiredSize);
+  }
 }
 
 // ── Canvas ────────────────────────────────────────────────────────────────────
@@ -1018,7 +1040,10 @@ function loadJson(file) {
       let hasGrid = jsonRooms.some(r => typeof r._gridCol === 'number');
       if (hasGrid) {
         // Restore saved grid layout
-        ensureGridFitsSavedLayout(jsonRooms);
+        const savedGridSize = typeof data._gridSize === 'number'
+          ? data._gridSize
+          : typeof data.gridSize === 'number' ? data.gridSize : undefined;
+        ensureGridFitsSavedLayout(jsonRooms, savedGridSize);
         makeGrid(GRID_SIZE);
         for (const room of jsonRooms) {
           const col = room._gridCol, row = room._gridRow;
@@ -1035,7 +1060,7 @@ function loadJson(file) {
           }
         }
         rebuildPosById();
-        setStatus(`Restored ${jsonRooms.length} rooms from saved layout`);
+        setStatus(`Restored ${jsonRooms.length} rooms from saved layout (${GRID_SIZE}×${GRID_SIZE})`);
       } else {
         // No saved layout — auto-import from graph positions immediately
         importPositions();
@@ -1308,7 +1333,7 @@ function saveJson() {
   clearValidationState();
   render();
 
-  const json = JSON.stringify({ rooms: out }, null, 2);
+  const json = JSON.stringify({ _gridSize: GRID_SIZE, rooms: out }, null, 2);
   const blob = new Blob([json], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
